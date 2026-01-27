@@ -1,0 +1,34 @@
+{
+  "timestamp": 1769497977.931894,
+  "git_commit": "unknown",
+  "benchmarks": [
+    {
+      "name": "pattern_matching/sequence_02_children",
+      "mean_ns": 94809.58450629267
+    },
+    {
+      "name": "pattern_matching/simple_pattern",
+      "mean_ns": 98911.76614988061
+    },
+    {
+      "name": "pattern_matching/nested_seq_02_children",
+      "mean_ns": 130980.46509661835
+    },
+    {
+      "name": "pattern_matching/sequence_10_children",
+      "mean_ns": 331740.5020319303
+    },
+    {
+      "name": "pattern_matching/sequence_05_children",
+      "mean_ns": 182412.89619732785
+    },
+    {
+      "name": "pattern_matching/nested_seq_05_children",
+      "mean_ns": 242124.59647744207
+    },
+    {
+      "name": "pattern_matching/nested_seq_10_children",
+      "mean_ns": 430345.475097729
+    }
+  ]
+}

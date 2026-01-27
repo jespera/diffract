@@ -1,0 +1,9 @@
+(library
+ (name diffract)
+ (public_name diffract)
+ (libraries ctypes ctypes.foreign)
+ (foreign_stubs
+  (language c)
+  (names ts_helper)
+  (flags (:standard)))
+ (c_library_flags (-ltree-sitter)))

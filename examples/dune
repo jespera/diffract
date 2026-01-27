@@ -1,0 +1,3 @@
+(executables
+ (names traverse pattern_example diff_example abstract_example antiunify_example)
+ (libraries diffract))

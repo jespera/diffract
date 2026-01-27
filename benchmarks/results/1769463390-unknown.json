@@ -1,0 +1,18 @@
+{
+  "timestamp": 1769463390.483935,
+  "git_commit": "unknown",
+  "benchmarks": [
+    {
+      "name": "pattern_matching/sequence_02_children",
+      "mean_ns": 97542.9964479569
+    },
+    {
+      "name": "pattern_matching/simple_pattern",
+      "mean_ns": 107938.13168714743
+    },
+    {
+      "name": "pattern_matching/sequence_05_children",
+      "mean_ns": 197991.29590562114
+    }
+  ]
+}
