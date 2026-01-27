@@ -1,0 +1,4 @@
+(tests
+ (names test_runner)
+ (libraries diffract alcotest)
+ (deps (glob_files ../grammars/lib/*.so)))

@@ -1,0 +1,14 @@
+# Benchmark history data for gnuplot
+# Column 1: timestamp
+# Column 2: pattern_matching/nested_seq_02_children
+# Column 3: pattern_matching/nested_seq_05_children
+# Column 4: pattern_matching/nested_seq_10_children
+# Column 5: pattern_matching/sequence_02_children
+# Column 6: pattern_matching/sequence_05_children
+# Column 7: pattern_matching/sequence_10_children
+# Column 8: pattern_matching/simple_pattern
+
+1769463390 0 0 0 97.54 197.99 0 107.94
+1769463413 0 0 0 105.90 206.57 0 113.67
+1769497438 135.18 257.72 452.94 107.05 191.61 353.51 117.53
+1769497978 130.98 242.12 430.35 94.81 182.41 331.74 98.91

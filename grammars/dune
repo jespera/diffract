@@ -1,0 +1,4 @@
+; Grammar files are installed via npm in this directory
+; The parser.c files are referenced by lib/dune
+
+(data_only_dirs node_modules)

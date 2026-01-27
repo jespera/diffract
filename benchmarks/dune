@@ -1,0 +1,11 @@
+(executable
+ (name bench_match)
+ (libraries diffract bechamel bechamel-notty notty.unix yojson unix))
+
+(executable
+ (name bench_compare)
+ (libraries unix yojson))
+
+(executable
+ (name bench_scaling)
+ (libraries diffract unix))
