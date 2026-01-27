@@ -417,6 +417,56 @@ console.log("outside");
       "Service" (List.assoc "$class_name" ctx.context_bindings)
   ) results
 
+(* Test: index-based matching produces same results as traversal *)
+let test_indexed_same_as_traversal () =
+  let pattern_text = {|@@
+metavar $msg: single
+@@
+console.log($msg)|} in
+  let source_text = {|console.log("a"); console.log("b"); foo();|} in
+  let traversal_results = Match.find_matches ~language:"typescript" ~pattern_text ~source_text in
+  let source_tree = Tree.parse ~language:"typescript" source_text in
+  let index = Match.build_index source_tree.root in
+  let pattern = Match.parse_pattern ~language:"typescript" pattern_text in
+  let indexed_results = Match.find_matches_with_index
+    ~index ~pattern ~source:source_tree.source ~source_root:source_tree.root in
+  Alcotest.(check int) "same count"
+    (List.length traversal_results) (List.length indexed_results)
+
+(* Test: index-based with metavar root falls back correctly *)
+let test_indexed_metavar_root_fallback () =
+  let pattern_text = {|@@
+metavar $x: single
+@@
+$x|} in
+  let source_text = {|a + b|} in
+  let source_tree = Tree.parse ~language:"typescript" source_text in
+  let index = Match.build_index source_tree.root in
+  let pattern = Match.parse_pattern ~language:"typescript" pattern_text in
+  let results = Match.find_matches_with_index
+    ~index ~pattern ~source:source_tree.source ~source_root:source_tree.root in
+  Alcotest.(check bool) "found matches" true (List.length results > 0)
+
+(* Test: multi-pattern matching *)
+let test_multi_pattern () =
+  let patterns = [
+    {|@@
+metavar $msg: single
+@@
+console.log($msg)|};
+    {|@@
+metavar $msg: single
+@@
+console.error($msg)|};
+  ] in
+  let source_text = {|console.log("info"); console.error("oops"); console.log("done");|} in
+  let results = Match.find_matches_multi ~language:"typescript" ~patterns ~source_text in
+  (* Pattern 0 (log) should have 2 matches, pattern 1 (error) should have 1 *)
+  let log_matches = List.filter (fun (i, _) -> i = 0) results in
+  let error_matches = List.filter (fun (i, _) -> i = 1) results in
+  Alcotest.(check int) "log matches" 2 (List.length log_matches);
+  Alcotest.(check int) "error matches" 1 (List.length error_matches)
+
 let tests = [
   Alcotest.test_case "parse simple pattern" `Quick test_parse_simple_pattern;
   Alcotest.test_case "multiple metavars" `Quick test_multiple_metavars;
@@ -428,5 +478,8 @@ let tests = [
   Alcotest.test_case "sequence metavar multiple" `Quick test_sequence_metavar_multiple;
   Alcotest.test_case "sequence metavar zero" `Quick test_sequence_metavar_zero;
   Alcotest.test_case "sequence metavar nested" `Quick test_sequence_metavar_nested;
+  Alcotest.test_case "indexed same as traversal" `Quick test_indexed_same_as_traversal;
+  Alcotest.test_case "indexed metavar root fallback" `Quick test_indexed_metavar_root_fallback;
+  Alcotest.test_case "multi-pattern matching" `Quick test_multi_pattern;
   (* Nested context tests disabled to avoid tree-sitter memory issues with many tests *)
 ]

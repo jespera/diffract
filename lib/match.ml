@@ -1,5 +1,10 @@
 (** Pattern matching using concrete syntax with metavariables *)
 
+(** Index for fast node lookup by type *)
+type ast_index = {
+  by_type: (string, Tree.t list) Hashtbl.t;
+}
+
 (** A parsed pattern with metavariable information *)
 type pattern = {
   metavars: string list;  (** Original metavar names (e.g., ["$msg"; "$fn"]) *)
@@ -559,3 +564,56 @@ let format_nested_match source_text result =
   Buffer.add_string buf (Printf.sprintf "=> line %d: %s\n" line preview);
   format_bindings (inner_indent + 3) result.inner_bindings;
   Buffer.contents buf
+
+(** Build an index from a tree root. O(n) where n is node count. *)
+let build_index root =
+  let by_type = Hashtbl.create 64 in
+  Tree.traverse (fun node ->
+    let typ = Tree.node_type node in
+    let existing = Hashtbl.find_opt by_type typ |> Option.value ~default:[] in
+    Hashtbl.replace by_type typ (node :: existing)
+  ) root;
+  { by_type }
+
+(** Find matches using a pre-built index.
+    Falls back to full traversal if pattern root is a metavar. *)
+let find_matches_with_index ~index ~pattern ~source ~source_root =
+  let pattern_node = get_pattern_content pattern in
+  (* Check if pattern root is a metavar placeholder *)
+  match is_placeholder pattern.substitutions pattern.source pattern_node with
+  | Some _ ->
+    (* Pattern root is a metavar - can't filter by type, fall back to traversal *)
+    find_matches_in_subtree ~pattern ~inherited_bindings:[] ~source ~root_node:source_root
+  | None ->
+    (* Query index for candidate nodes *)
+    let pattern_type = Tree.node_type pattern_node in
+    let candidates = Hashtbl.find_opt index.by_type pattern_type
+                     |> Option.value ~default:[] in
+    List.filter_map (fun source_node ->
+      match match_node
+              ~pattern
+              ~pattern_source:pattern.source
+              ~source
+              ~substitutions:pattern.substitutions
+              pattern_node source_node with
+      | Some bindings ->
+        Some {
+          node = source_node;
+          bindings;
+          start_point = Tree.start_point source_node;
+          end_point = Tree.end_point source_node;
+        }
+      | None -> None
+    ) candidates
+
+(** Match multiple patterns against source, building index once.
+    Returns list of (pattern_index, match_result) pairs. *)
+let find_matches_multi ~language ~patterns ~source_text =
+  let source_tree = Tree.parse ~language source_text in
+  let source = source_tree.source in
+  let index = build_index source_tree.root in
+  List.concat (List.mapi (fun i pattern_text ->
+    let pattern = parse_pattern ~language pattern_text in
+    let matches = find_matches_with_index ~index ~pattern ~source ~source_root:source_tree.root in
+    List.map (fun m -> (i, m)) matches
+  ) patterns)

@@ -1,5 +1,8 @@
 (** Pattern matching using concrete syntax with metavariables *)
 
+(** Index for efficient multi-pattern matching *)
+type ast_index
+
 (** A parsed pattern with metavariable information *)
 type pattern
 
@@ -126,3 +129,30 @@ val format_nested_match : string -> nested_match_result -> string
         => line K: <inner match>
            $inner_var = value
     v} *)
+
+(** {1 Index-based matching} *)
+
+val build_index : Tree.t -> ast_index
+(** [build_index root] builds an index from a parsed tree.
+    O(n) where n is the number of nodes.
+    Use this when matching multiple patterns against the same source. *)
+
+val find_matches_with_index :
+  index:ast_index ->
+  pattern:pattern ->
+  source:string ->
+  source_root:Tree.t ->
+  match_result list
+(** [find_matches_with_index ~index ~pattern ~source ~source_root] finds matches
+    using a pre-built index. Queries the index for candidate nodes by type,
+    then matches only against those candidates.
+    Falls back to full traversal if pattern root is a metavar. *)
+
+val find_matches_multi :
+  language:string ->
+  patterns:string list ->
+  source_text:string ->
+  (int * match_result) list
+(** [find_matches_multi ~language ~patterns ~source_text] matches multiple
+    patterns against source, building the index once.
+    Returns list of (pattern_index, match_result) pairs. *)

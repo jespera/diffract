@@ -9,3 +9,7 @@
 (executable
  (name bench_scaling)
  (libraries diffract unix))
+
+(executable
+ (name bench_index)
+ (libraries diffract unix))

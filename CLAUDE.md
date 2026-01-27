@@ -24,6 +24,7 @@ dune build @runtest --force
 dune exec benchmarks/bench_match.exe
 dune exec benchmarks/bench_compare.exe -- --history   # benchmark history
 dune exec benchmarks/bench_scaling.exe               # scaling analysis
+dune exec benchmarks/bench_index.exe                 # index-based matching
 ```
 
 ## Project Overview

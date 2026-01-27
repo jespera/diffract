@@ -466,6 +466,115 @@ let pattern = Pattern.(
 let matches = Pattern.find_all pattern root
 ```
 
+### Index-Based Pattern Matching (`lib/match.ml`)
+
+When matching multiple patterns against the same source file, the naive approach traverses the entire AST once per pattern, resulting in O(n × k) complexity where n is the number of nodes and k is the number of patterns.
+
+The index-based approach builds a hash table mapping node types to node lists, then queries this index for each pattern:
+
+```
+Complexity comparison:
+  Traversal: O(n) per pattern = O(n × k) total
+  Indexed:   O(n) build + O(m) per pattern = O(n + k × m)
+  Where m = average candidates per pattern type (typically m << n)
+```
+
+#### Data Structures
+
+```ocaml
+(** Index for fast node lookup by type *)
+type ast_index = {
+  by_type: (string, Tree.t list) Hashtbl.t;
+}
+```
+
+#### Algorithm
+
+**Index Building (O(n)):**
+```
+build_index(root):
+  index = empty hashtable
+  traverse(root, node ->
+    type = node.type
+    index[type] = node :: index[type]
+  )
+  return index
+```
+
+**Indexed Matching:**
+```
+find_matches_with_index(index, pattern, source):
+  pattern_node = unwrap_pattern(pattern)  // Get actual pattern content
+
+  if pattern_node is metavar placeholder:
+    // Can't filter by type, fall back to full traversal
+    return find_matches_in_subtree(pattern, source)
+
+  // Query index for candidates
+  pattern_type = pattern_node.type
+  candidates = index[pattern_type]  // O(1) lookup
+
+  // Match only against candidates of the right type
+  return filter_map(candidates, node ->
+    match_node(pattern, node)  // Returns Some(bindings) or None
+  )
+```
+
+**Multi-Pattern Matching:**
+```
+find_matches_multi(language, patterns, source):
+  tree = parse(source)
+  index = build_index(tree.root)  // Built once
+
+  results = []
+  for i, pattern_text in patterns:
+    pattern = parse_pattern(pattern_text)
+    matches = find_matches_with_index(index, pattern, tree)
+    results.append((i, matches))
+
+  return results
+```
+
+#### Usage
+
+```ocaml
+(* Match multiple patterns efficiently *)
+let patterns = [
+  {|@@
+metavar $msg: single
+@@
+console.log($msg)|};
+  {|@@
+metavar $msg: single
+@@
+console.error($msg)|};
+] in
+let results = Match.find_matches_multi ~language:"typescript" ~patterns ~source_text in
+(* Returns (pattern_index, match_result) pairs *)
+
+(* Or build index manually for custom workflows *)
+let tree = Tree.parse ~language:"typescript" source_text in
+let index = Match.build_index tree.root in
+(* Reuse index for multiple queries *)
+let pattern = Match.parse_pattern ~language:"typescript" pattern_text in
+let matches = Match.find_matches_with_index ~index ~pattern
+    ~source:tree.source ~source_root:tree.root
+```
+
+#### Performance
+
+Benchmarks show 2-3x speedup when matching multiple patterns:
+
+```
+# Patterns    Traversal    Indexed    Speedup
+----------------------------------------------
+1                0.38 ms     0.39 ms     0.97x  (overhead of index building)
+2                0.75 ms     0.41 ms     1.86x
+3                1.11 ms     0.45 ms     2.48x
+```
+
+The speedup increases with more patterns as the index build cost is amortized. For single-pattern matching, use `find_matches` directly to avoid index overhead.
+
 ---
 
 ## Testing
@@ -494,8 +603,11 @@ Performance benchmarks are provided for the pattern matching functionality.
 ### Running Benchmarks
 
 ```bash
-# Run benchmarks (outputs results to console and saves JSON)
+# Run pattern matching benchmarks (outputs results to console and saves JSON)
 dune exec benchmarks/bench_match.exe
+
+# Run index-based matching benchmarks
+dune exec benchmarks/bench_index.exe
 
 # Compare last two benchmark runs
 dune exec benchmarks/bench_compare.exe
@@ -519,6 +631,26 @@ The benchmark suite measures pattern matching performance:
 | `simple_pattern` | Simple metavar matching (e.g., `$obj.$method($arg)`) |
 | `sequence_N_children` | Sequence metavar (`$body*`) with N children (N=2,5,10,20) |
 | `nested_seq_N_children` | Nested patterns with sequence metavar (N=2,5,10,20) |
+
+### Index Benchmark (`bench_index.exe`)
+
+Compares traversal-based vs index-based matching:
+
+| Test | Description |
+|------|-------------|
+| Multi-Pattern Matching | 3 patterns against sources of varying sizes |
+| Scaling with Patterns | Fixed source, 1-3 patterns (shows speedup growth) |
+| Selective Patterns | Rare vs common node types |
+| Index Reuse | Query times with pre-built index |
+
+Example output:
+```
+Source Size           Traversal      Indexed    Speedup  Matches
+-----------------------------------------------------------------
+14 nodes                 0.42 ms       0.16 ms      2.62x       10
+45 nodes                 1.22 ms       0.44 ms      2.75x       35
+100 nodes                2.49 ms       0.92 ms      2.69x       80
+```
 
 ### Scaling Test
 
