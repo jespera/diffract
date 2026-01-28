@@ -1,0 +1,23 @@
+# OCaml / Dune
+_build/
+_opam/
+*.install
+*.merlin
+.merlin
+
+# Node.js (for grammar builds)
+node_modules/
+
+# Compiled grammars
+grammars/*.so
+
+# Editor
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
