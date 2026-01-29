@@ -159,6 +159,8 @@ console.log("outside class");
   Alcotest.(check string) "$msg" {|"inside class"|}
     (List.assoc "$msg" result.inner_bindings)
 
+(* Test: single context level - matching sequence *)
+
 (* Test: multiple context levels (arbitrary nesting) *)
 let test_multiple_context_levels () =
   (* Use nested if statements to test multiple context levels *)
@@ -467,6 +469,90 @@ console.error($msg)|};
   Alcotest.(check int) "log matches" 2 (List.length log_matches);
   Alcotest.(check int) "error matches" 1 (List.length error_matches)
 
+(* Test: partial object matching using match: partial directive.
+   Tests that { someField: $X } with partial mode matches objects with extra properties. *)
+let test_partial_object_matching () =
+  let pattern_text = {|@@
+match: partial
+metavar $X: single
+@@
+{ someField: $X }|} in
+  let source_text = {|({ someField: 1, other: 2 })|} in
+  let results = Match.find_matches
+    ~language:"typescript"
+    ~pattern_text
+    ~source_text in
+  Printf.printf "Partial object matches: %d\n" (List.length results);
+  Alcotest.(check int) "found partial match" 1 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check string) "$X value" "1" (List.assoc "$X" result.bindings)
+
+(* Test: partial matching with 'on $VAR' directive.
+   Section 1 matches foo($OBJ), section 2 uses 'on $OBJ' with partial matching. *)
+let test_partial_with_on_var () =
+  let pattern_text = {|@@
+metavar $OBJ: single
+@@
+foo($OBJ)
+
+@@
+match: partial
+on $OBJ
+metavar $X: single
+@@
+{ someField: $X }|} in
+  let source_text = {|foo({ someField: 1, other: 2 })|} in
+  let results = Match.find_nested_matches
+    ~language:"typescript"
+    ~pattern_text
+    ~source_text in
+  Printf.printf "Nested partial with on: %d\n" (List.length results);
+  Alcotest.(check int) "found nested match" 1 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check string) "$X value" "1" (List.assoc "$X" result.all_bindings);
+  Alcotest.(check int) "has one context" 1 (List.length result.contexts)
+
+(* Test: nested partial matching for deeply nested objects.
+   { f1: { f2: $X } } should match objects with extra props at any level. *)
+let test_nested_partial_objects () =
+  let pattern_text = {|@@
+match: partial
+metavar $X: single
+@@
+{ f1: { f2: $X } }|} in
+  let source_text = {|({ f1: { f2: 42, f3: "extra" }, other: true })|} in
+  let results = Match.find_matches
+    ~language:"typescript"
+    ~pattern_text
+    ~source_text in
+  Printf.printf "Nested partial matches: %d\n" (List.length results);
+  Alcotest.(check int) "found deeply nested partial match" 1 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check string) "$X value" "42" (List.assoc "$X" result.bindings)
+
+(* Test: exact object pattern only matches objects with exact same properties *)
+let test_exact_object_match () =
+  let pattern_text = {|@@
+metavar $X: single
+@@
+{ someField: $X }|} in
+  let source_text = {|({ someField: 1, other: 2 })|} in
+  let results = Match.find_matches
+    ~language:"typescript"
+    ~pattern_text
+    ~source_text in
+  Printf.printf "Exact object matches against multi-prop: %d\n" (List.length results);
+  let source_text_single = {|({ someField: 1 })|} in
+  let results_single = Match.find_matches
+    ~language:"typescript"
+    ~pattern_text
+    ~source_text:source_text_single in
+  Printf.printf "Exact object matches against single-prop: %d\n" (List.length results_single);
+  (* Pattern with 1 property should match object with 1 property *)
+  Alcotest.(check int) "matches single-prop object" 1 (List.length results_single);
+  (* But should NOT match object with 2 properties (strict matching) *)
+  Alcotest.(check int) "no match for multi-prop object" 0 (List.length results)
+
 let tests = [
   Alcotest.test_case "parse simple pattern" `Quick test_parse_simple_pattern;
   Alcotest.test_case "multiple metavars" `Quick test_multiple_metavars;
@@ -481,5 +567,447 @@ let tests = [
   Alcotest.test_case "indexed same as traversal" `Quick test_indexed_same_as_traversal;
   Alcotest.test_case "indexed metavar root fallback" `Quick test_indexed_metavar_root_fallback;
   Alcotest.test_case "multi-pattern matching" `Quick test_multi_pattern;
-  (* Nested context tests disabled to avoid tree-sitter memory issues with many tests *)
+  Alcotest.test_case "exact object match" `Quick test_exact_object_match;
+  Alcotest.test_case "partial object matching" `Quick test_partial_object_matching;
+  Alcotest.test_case "partial with on var" `Quick test_partial_with_on_var;
+  Alcotest.test_case "nested partial objects" `Quick test_nested_partial_objects;
+  Alcotest.test_case "single context" `Quick test_single_context;
+]
+
+(* === Kotlin-specific tests === *)
+
+(* Test: basic Kotlin println pattern *)
+let test_kotlin_println () =
+  let pattern_text = {|@@
+metavar $NAME: single
+@@
+println($NAME)|} in
+  let source_text = {|
+fun main() {
+    val result = greet("World")
+    println(result)
+}
+|} in
+  let results = Match.find_matches
+    ~language:"kotlin"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found one println match" 1 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check string) "$NAME value" "result"
+    (List.assoc "$NAME" result.bindings)
+
+(* Test: Kotlin val declaration pattern *)
+let test_kotlin_val_declaration () =
+  let pattern_text = {|@@
+metavar $VAR: single
+metavar $EXPR: single
+@@
+val $VAR = $EXPR|} in
+  let source_text = {|
+fun main() {
+    val result = greet("World")
+    val count = 42
+    println(result)
+}
+|} in
+  let results = Match.find_matches
+    ~language:"kotlin"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found two val declarations" 2 (List.length results);
+  (* Check bindings of first match *)
+  let first = List.hd results in
+  Alcotest.(check string) "$VAR" "result" (List.assoc "$VAR" first.bindings);
+  Alcotest.(check string) "$EXPR" {|greet("World")|} (List.assoc "$EXPR" first.bindings)
+
+(* Test: Kotlin function call with sequence metavar *)
+let test_kotlin_function_call_sequence () =
+  let pattern_text = {|@@
+metavar $FUNC: single
+metavar $ARGS: sequence
+@@
+$FUNC($ARGS)|} in
+  let source_text = {|
+fun main() {
+    val user = User("Alice", 25)
+    processUser(user)
+    println(result)
+}
+|} in
+  let results = Match.find_matches
+    ~language:"kotlin"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found three function calls" 3 (List.length results);
+  (* Verify User call has multiple args *)
+  let user_call = List.find (fun (r : Match.match_result) ->
+    List.assoc "$FUNC" r.bindings = "User"
+  ) results in
+  let args = List.assoc "$ARGS" user_call.bindings in
+  Alcotest.(check bool) "args contains Alice" true (string_contains ~needle:"Alice" args);
+  Alcotest.(check bool) "args contains 25" true (string_contains ~needle:"25" args)
+
+(* Test: Kotlin property access pattern *)
+let test_kotlin_property_access () =
+  let pattern_text = {|@@
+metavar $OBJ: single
+metavar $PROP: single
+@@
+$OBJ.$PROP|} in
+  let source_text = {|
+fun processUser(user: User) {
+    if (user.age >= 18) {
+        println(user.name)
+    }
+}
+|} in
+  let results = Match.find_matches
+    ~language:"kotlin"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found two property accesses" 2 (List.length results);
+  (* Verify we found user.age and user.name *)
+  let props = List.map (fun (r : Match.match_result) ->
+    List.assoc "$PROP" r.bindings
+  ) results in
+  Alcotest.(check bool) "found age prop" true (List.mem "age" props);
+  Alcotest.(check bool) "found name prop" true (List.mem "name" props)
+
+(* Test: Kotlin class with methods *)
+let test_kotlin_class_pattern () =
+  let pattern_text = {|@@
+metavar $CLASS: single
+metavar $BODY: sequence
+@@
+class $CLASS { $BODY }|} in
+  let source_text = {|
+class User {
+    fun getName(): String {
+        return name
+    }
+    fun getAge(): Int {
+        return age
+    }
+}
+|} in
+  let results = Match.find_matches
+    ~language:"kotlin"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found one class" 1 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check string) "$CLASS" "User" (List.assoc "$CLASS" result.bindings);
+  let body = List.assoc "$BODY" result.bindings in
+  Alcotest.(check bool) "body contains getName" true (string_contains ~needle:"getName" body);
+  Alcotest.(check bool) "body contains getAge" true (string_contains ~needle:"getAge" body)
+
+(* Test: Kotlin when expression *)
+let test_kotlin_when_expression () =
+  let pattern_text = {|@@
+metavar $SUBJECT: single
+metavar $BRANCHES: sequence
+@@
+when ($SUBJECT) { $BRANCHES }|} in
+  let source_text = {|
+fun describe(x: Int): String {
+    return when (x) {
+        1 -> "one"
+        2 -> "two"
+        else -> "other"
+    }
+}
+|} in
+  let results = Match.find_matches
+    ~language:"kotlin"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found when expression" 1 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check string) "$SUBJECT" "x" (List.assoc "$SUBJECT" result.bindings);
+  let branches = List.assoc "$BRANCHES" result.bindings in
+  Alcotest.(check bool) "branches contains one" true (string_contains ~needle:"one" branches);
+  Alcotest.(check bool) "branches contains else" true (string_contains ~needle:"else" branches)
+
+(* Test: Kotlin lambda expression with explicit parameter
+   Note: lambdas with implicit 'it' have no lambda_parameters node,
+   so { $PARAMS -> $BODY } only matches explicit param lambdas *)
+let test_kotlin_lambda () =
+  let pattern_text = {|@@
+metavar $PARAM: single
+metavar $BODY: single
+@@
+{ $PARAM -> $BODY }|} in
+  let source_text = {|
+fun main() {
+    val doubled = listOf(1, 2, 3).map { x -> x * 2 }
+    val squared = listOf(1, 2, 3).map { n -> n * n }
+}
+|} in
+  let results = Match.find_matches
+    ~language:"kotlin"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found lambdas with explicit params" 2 (List.length results);
+  (* Check that we captured the parameters *)
+  let params = List.map (fun (r : Match.match_result) ->
+    List.assoc "$PARAM" r.bindings
+  ) results in
+  Alcotest.(check bool) "found x param" true (List.mem "x" params);
+  Alcotest.(check bool) "found n param" true (List.mem "n" params)
+
+(* Test: Kotlin safe call operator *)
+let test_kotlin_safe_call () =
+  let pattern_text = {|@@
+metavar $OBJ: single
+metavar $MEMBER: single
+@@
+$OBJ?.$MEMBER|} in
+  let source_text = {|
+fun getName(user: User?): String {
+    return user?.name ?: "unknown"
+}
+|} in
+  let results = Match.find_matches
+    ~language:"kotlin"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found safe call" 1 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check string) "$OBJ" "user" (List.assoc "$OBJ" result.bindings);
+  Alcotest.(check string) "$MEMBER" "name" (List.assoc "$MEMBER" result.bindings)
+
+(* Test: Kotlin elvis operator *)
+let test_kotlin_elvis () =
+  let pattern_text = {|@@
+metavar $NULLABLE: single
+metavar $DEFAULT: single
+@@
+$NULLABLE ?: $DEFAULT|} in
+  let source_text = {|
+fun getName(user: User?): String {
+    return user?.name ?: "unknown"
+}
+|} in
+  let results = Match.find_matches
+    ~language:"kotlin"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found elvis expression" 1 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check string) "$NULLABLE" "user?.name" (List.assoc "$NULLABLE" result.bindings);
+  Alcotest.(check string) "$DEFAULT" {|"unknown"|} (List.assoc "$DEFAULT" result.bindings)
+
+(* Test: Kotlin let scope function - a common Kotlin idiom *)
+let test_kotlin_let_scope () =
+  let pattern_text = {|@@
+metavar $OBJ: single
+metavar $BODY: single
+@@
+$OBJ.let { $BODY }|} in
+  let source_text = {|
+fun process(name: String?) {
+    name?.let { println(it) }
+    name?.let { doSomething(it) }
+}
+|} in
+  let results = Match.find_matches
+    ~language:"kotlin"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found let calls" 2 (List.length results);
+  let bodies = List.map (fun (r : Match.match_result) ->
+    List.assoc "$BODY" r.bindings
+  ) results in
+  Alcotest.(check bool) "found println" true (List.exists (string_contains ~needle:"println") bodies);
+  Alcotest.(check bool) "found doSomething" true (List.exists (string_contains ~needle:"doSomething") bodies)
+
+(* Test: Kotlin if expression *)
+let test_kotlin_if_expression () =
+  let pattern_text = {|@@
+metavar $COND: single
+metavar $THEN: single
+metavar $ELSE: single
+@@
+if ($COND) $THEN else $ELSE|} in
+  let source_text = {|
+fun max(a: Int, b: Int): Int {
+    return if (a > b) a else b
+}
+|} in
+  let results = Match.find_matches
+    ~language:"kotlin"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found if expression" 1 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check string) "$COND" "a > b" (List.assoc "$COND" result.bindings);
+  Alcotest.(check string) "$THEN" "a" (List.assoc "$THEN" result.bindings);
+  Alcotest.(check string) "$ELSE" "b" (List.assoc "$ELSE" result.bindings)
+
+(* Test: Kotlin for loop pattern *)
+let test_kotlin_for_loop () =
+  let pattern_text = {|@@
+metavar $VAR: single
+metavar $ITER: single
+metavar $BODY: single
+@@
+for ($VAR in $ITER) $BODY|} in
+  let source_text = {|
+fun sumList(items: List<Int>): Int {
+    var sum = 0
+    for (item in items) {
+        sum += item
+    }
+    return sum
+}
+|} in
+  let results = Match.find_matches
+    ~language:"kotlin"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found for loop" 1 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check string) "$VAR" "item" (List.assoc "$VAR" result.bindings);
+  Alcotest.(check string) "$ITER" "items" (List.assoc "$ITER" result.bindings)
+
+(* Test: Kotlin nested pattern - find println calls inside classes *)
+let test_kotlin_nested_in_class () =
+  let pattern_text = {|@@
+metavar $CLASS: single
+metavar $BODY: sequence
+@@
+class $CLASS { $BODY }
+
+@@
+metavar $MSG: single
+@@
+println($MSG)|} in
+  let source_text = {|
+class Logger {
+    fun log(msg: String) {
+        println("Logging: " + msg)
+    }
+}
+
+fun standalone() {
+    println("Outside class")
+}
+|} in
+  let results = Match.find_nested_matches
+    ~language:"kotlin"
+    ~pattern_text
+    ~source_text in
+  (* Should only find println inside the class, not the standalone one *)
+  Alcotest.(check int) "found one nested match" 1 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check string) "$CLASS" "Logger"
+    (List.assoc "$CLASS" (List.hd result.contexts).context_bindings);
+  let msg = List.assoc "$MSG" result.inner_bindings in
+  Alcotest.(check bool) "msg contains Logging" true (string_contains ~needle:"Logging" msg)
+
+(* Test: Kotlin data class pattern *)
+let test_kotlin_data_class () =
+  let pattern_text = {|@@
+metavar $NAME: single
+metavar $PARAMS: sequence
+@@
+data class $NAME($PARAMS)|} in
+  let source_text = {|
+data class User(val name: String, val age: Int)
+data class Point(val x: Double, val y: Double)
+class RegularClass(val value: Int)
+|} in
+  let results = Match.find_matches
+    ~language:"kotlin"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found two data classes" 2 (List.length results);
+  let names = List.map (fun (r : Match.match_result) ->
+    List.assoc "$NAME" r.bindings
+  ) results in
+  Alcotest.(check bool) "found User" true (List.mem "User" names);
+  Alcotest.(check bool) "found Point" true (List.mem "Point" names)
+
+(* Test: Kotlin chained method calls *)
+let test_kotlin_chained_calls () =
+  let pattern_text = {|@@
+metavar $OBJ: single
+metavar $M1: single
+metavar $M2: single
+@@
+$OBJ.$M1().$M2()|} in
+  let source_text = {|
+fun process(text: String): String {
+    return text.trim().lowercase()
+}
+|} in
+  let results = Match.find_matches
+    ~language:"kotlin"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found chained call" 1 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check string) "$OBJ" "text" (List.assoc "$OBJ" result.bindings);
+  Alcotest.(check string) "$M1" "trim" (List.assoc "$M1" result.bindings);
+  Alcotest.(check string) "$M2" "lowercase" (List.assoc "$M2" result.bindings)
+
+(* Test: Kotlin comparison operators *)
+let test_kotlin_comparison () =
+  let pattern_text = {|@@
+metavar $LEFT: single
+metavar $RIGHT: single
+@@
+$LEFT >= $RIGHT|} in
+  let source_text = {|
+fun isAdult(age: Int): Boolean {
+    return age >= 18
+}
+|} in
+  let results = Match.find_matches
+    ~language:"kotlin"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found comparison" 1 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check string) "$LEFT" "age" (List.assoc "$LEFT" result.bindings);
+  Alcotest.(check string) "$RIGHT" "18" (List.assoc "$RIGHT" result.bindings)
+
+(* Test: Kotlin null assertion *)
+let test_kotlin_null_assertion () =
+  let pattern_text = {|@@
+metavar $EXPR: single
+@@
+$EXPR!!|} in
+  let source_text = {|
+fun forceGet(value: String?): String {
+    return value!!
+}
+|} in
+  let results = Match.find_matches
+    ~language:"kotlin"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found null assertion" 1 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check string) "$EXPR" "value" (List.assoc "$EXPR" result.bindings)
+
+let kotlin_tests = [
+  Alcotest.test_case "kotlin println" `Quick test_kotlin_println;
+  Alcotest.test_case "kotlin val declaration" `Quick test_kotlin_val_declaration;
+  Alcotest.test_case "kotlin function call sequence" `Quick test_kotlin_function_call_sequence;
+  Alcotest.test_case "kotlin property access" `Quick test_kotlin_property_access;
+  Alcotest.test_case "kotlin class pattern" `Quick test_kotlin_class_pattern;
+  Alcotest.test_case "kotlin when expression" `Quick test_kotlin_when_expression;
+  Alcotest.test_case "kotlin lambda" `Quick test_kotlin_lambda;
+  Alcotest.test_case "kotlin safe call" `Quick test_kotlin_safe_call;
+  Alcotest.test_case "kotlin elvis" `Quick test_kotlin_elvis;
+  Alcotest.test_case "kotlin let scope" `Quick test_kotlin_let_scope;
+  Alcotest.test_case "kotlin if expression" `Quick test_kotlin_if_expression;
+  Alcotest.test_case "kotlin for loop" `Quick test_kotlin_for_loop;
+  Alcotest.test_case "kotlin nested in class" `Quick test_kotlin_nested_in_class;
+  Alcotest.test_case "kotlin data class" `Quick test_kotlin_data_class;
+  Alcotest.test_case "kotlin chained calls" `Quick test_kotlin_chained_calls;
+  Alcotest.test_case "kotlin comparison" `Quick test_kotlin_comparison;
+  Alcotest.test_case "kotlin null assertion" `Quick test_kotlin_null_assertion;
 ]

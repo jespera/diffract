@@ -10,6 +10,8 @@ type pattern
 type match_result = {
   node: Tree.t;  (** The matched node *)
   bindings: (string * string) list;  (** Metavar name -> matched text *)
+  node_bindings: (string * Tree.t) list;  (** Metavar name -> matched node (for 'on $VAR') *)
+  sequence_node_bindings: (string * Tree.t list) list;  (** Metavar name -> matched nodes for sequences *)
   start_point: Tree.point;
   end_point: Tree.point;
 }
@@ -18,6 +20,8 @@ type match_result = {
 type context_match = {
   context_node: Tree.t;
   context_bindings: (string * string) list;
+  context_node_bindings: (string * Tree.t) list;
+  context_sequence_node_bindings: (string * Tree.t list) list;
   context_start_point: Tree.point;
   context_end_point: Tree.point;
 }
@@ -26,10 +30,20 @@ type context_match = {
 type nested_match_result = {
   inner_node: Tree.t;
   inner_bindings: (string * string) list;
+  inner_node_bindings: (string * Tree.t) list;
+  inner_sequence_node_bindings: (string * Tree.t list) list;
   all_bindings: (string * string) list;
+  all_node_bindings: (string * Tree.t) list;
+  all_sequence_node_bindings: (string * Tree.t list) list;
   contexts: context_match list;  (** outermost first *)
   start_point: Tree.point;
   end_point: Tree.point;
+}
+
+(** Result of matching with parse information *)
+type match_search_result = {
+  matches: nested_match_result list;
+  parse_error_count: int;  (** Number of ERROR nodes in source *)
 }
 
 (** A nested pattern with multiple sections *)
@@ -42,8 +56,8 @@ val parse_pattern : language:string -> string -> pattern
     Pattern format:
     {v
     @@
-    $var1
-    $var2
+    metavar $var1: single
+    metavar $var2: single
     @@
     code using $var1 and $var2
     v}
@@ -54,18 +68,54 @@ val parse_pattern : language:string -> string -> pattern
 
     {2 Sequence metavars}
 
-    Metavars declared with a [*] suffix match zero or more sibling nodes:
+    Metavars declared with [sequence] type match zero or more sibling nodes:
     {v
     @@
-    $class_name
-    $body*
+    metavar $class_name: single
+    metavar $body: sequence
     @@
     class $class_name { $body }
     v}
 
-    Here [$body*] will match any number of children inside the class body,
+    Here [$body] will match any number of children inside the class body,
     binding their combined text to [$body]. This allows matching classes
-    with multiple methods, statements, etc. *)
+    with multiple methods, statements, etc.
+
+    {2 Partial matching}
+
+    Use [match: partial] to enable subset matching for children. Each pattern
+    child finds any matching source child (unordered), and extra source children
+    are ignored:
+    {v
+    @@
+    match: partial
+    metavar $X: single
+    @@
+    { someField: $X }
+    v}
+
+    This matches objects containing [someField], regardless of other properties.
+    Partial matching applies recursively to all nested structures.
+
+    {2 Direct matching with 'on'}
+
+    Use [on $VAR] to match directly against a previously-bound node instead of
+    traversing. This is used with nested patterns:
+    {v
+    @@
+    metavar $OBJ: single
+    @@
+    foo($OBJ)
+
+    @@
+    match: partial
+    on $OBJ
+    metavar $X: single
+    @@
+    { someField: $X }
+    v}
+
+    Section 2 matches directly against the node bound to [$OBJ], not its subtree. *)
 
 val parse_nested_pattern : language:string -> string -> nested_pattern
 (** [parse_nested_pattern ~language pattern_text] parses a pattern with
@@ -111,6 +161,15 @@ val find_nested_matches : language:string -> pattern_text:string -> source_text:
       can match (nested scoping)
 
     Returns matches with context chain showing how each match was scoped. *)
+
+val search : language:string -> pattern_text:string -> source_text:string -> match_search_result
+(** [search ~language ~pattern_text ~source_text] finds matches and returns
+    parse information.
+
+    Like [find_nested_matches] but also returns [parse_error_count] indicating
+    how many ERROR nodes (parse failures) were found in the source. This is
+    useful for detecting when a file couldn't be fully parsed (e.g., using
+    wrong grammar for the file type). *)
 
 (** {1 Output} *)
 

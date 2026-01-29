@@ -105,10 +105,104 @@ let find_all pred node =
 let find_by_type type_name node =
   find_all (fun n -> n.node_type = type_name) node
 
+(** {1 Parse error detection} *)
+
+(** Check if a node is an ERROR node (parse failure) *)
+let is_error node = node.node_type = "ERROR"
+
+(** Check if a tree has any parse errors *)
+let has_errors tree =
+  let found = ref false in
+  traverse (fun n -> if is_error n then found := true) tree.root;
+  !found
+
+(** Count the number of ERROR nodes in a tree *)
+let error_count tree =
+  let count = ref 0 in
+  traverse (fun n -> if is_error n then incr count) tree.root;
+  !count
+
+(** Get all ERROR nodes with their positions *)
+let get_errors tree =
+  find_all is_error tree.root
+
+(** {1 Formatting} *)
+
+(** Escape a string for display (newlines, tabs, etc.) *)
+let escape_string s =
+  let buf = Buffer.create (String.length s) in
+  String.iter (fun c ->
+    match c with
+    | '\n' -> Buffer.add_string buf "\\n"
+    | '\t' -> Buffer.add_string buf "\\t"
+    | '\r' -> Buffer.add_string buf "\\r"
+    | '\\' -> Buffer.add_string buf "\\\\"
+    | '"' -> Buffer.add_string buf "\\\""
+    | c when Char.code c < 32 -> Buffer.add_string buf (Printf.sprintf "\\x%02x" (Char.code c))
+    | c -> Buffer.add_char buf c
+  ) s;
+  Buffer.contents buf
+
+(** Format a tree as an indented string with positions and text.
+    Shows node types, field names, line:column positions, and text for leaf nodes.
+    ERROR nodes are marked for visibility. *)
+let format_tree tree =
+  let buf = Buffer.create 4096 in
+  let source = tree.source in
+  let rec format_node indent node =
+    let indent_str = String.make indent ' ' in
+    let pos = Printf.sprintf "[%d:%d-%d:%d]"
+      (node.start_point.row + 1) (node.start_point.column + 1)
+      (node.end_point.row + 1) (node.end_point.column + 1) in
+    let node_text = text source node in
+    let is_leaf = node.named_children = [] in
+    let is_err = is_error node in
+    (* Format the node line *)
+    Buffer.add_string buf indent_str;
+    if is_err then Buffer.add_string buf "ERROR ";
+    Buffer.add_string buf node.node_type;
+    Buffer.add_string buf " ";
+    Buffer.add_string buf pos;
+    (* Show text for leaf nodes and ERROR nodes *)
+    if is_leaf || is_err then begin
+      let display_text =
+        if String.length node_text > 60 then
+          String.sub node_text 0 57 ^ "..."
+        else
+          node_text
+      in
+      Buffer.add_string buf " \"";
+      Buffer.add_string buf (escape_string display_text);
+      Buffer.add_char buf '"'
+    end;
+    Buffer.add_char buf '\n';
+    (* Recurse into children, showing field names *)
+    List.iter (fun child ->
+      if child.node.is_named then begin
+        match child.field_name with
+        | Some name ->
+          let child_indent = String.make (indent + 2) ' ' in
+          Buffer.add_string buf child_indent;
+          Buffer.add_string buf name;
+          Buffer.add_string buf ":\n";
+          format_node (indent + 4) child.node
+        | None ->
+          format_node (indent + 2) child.node
+      end
+    ) node.children
+  in
+  format_node 0 tree.root;
+  Buffer.contents buf
+
 (** {1 Conversion from tree-sitter nodes} *)
 
-(** Convert a tree-sitter node to our internal representation *)
-let rec of_ts_node source (ts_node : Node.t) : t =
+(** Convert a tree-sitter node to our internal representation.
+    The ts_tree parameter is passed through the recursion to keep the tree-sitter
+    tree alive during traversal - without it, the GC might free the tree while
+    we're still accessing nodes, causing a use-after-free crash. *)
+let rec of_ts_node source ts_tree (ts_node : Node.t) : t =
+  (* Reference ts_tree to ensure it stays rooted during this call *)
+  let (_ : Node.tree) = ts_tree in
   let node_type = Node.node_type ts_node in
   let is_named = Node.is_named ts_node in
   let start_byte = Node.start_byte ts_node in
@@ -123,7 +217,7 @@ let rec of_ts_node source (ts_node : Node.t) : t =
   let children = List.init child_count (fun i ->
     let ts_child = Node.child ts_node i in
     let field_name = Node.field_name_for_child ts_node i in
-    { field_name; node = of_ts_node source ts_child }
+    { field_name; node = of_ts_node source ts_tree ts_child }
   ) in
 
   (* Extract named children *)
@@ -137,7 +231,7 @@ let rec of_ts_node source (ts_node : Node.t) : t =
 (** Convert a tree-sitter tree to our internal representation *)
 let of_ts_tree source (ts_tree : Node.tree) : tree =
   let ts_root = Node.root ts_tree in
-  let root = of_ts_node source ts_root in
+  let root = of_ts_node source ts_tree ts_root in
   { root; source }
 
 (** {1 Parsing} *)

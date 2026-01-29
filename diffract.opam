@@ -4,6 +4,7 @@ synopsis:
   "Structural diff and pattern inference for source code using tree-sitter"
 description:
   "A tool for computing structural diffs between source files, inferring transformation patterns from examples, and summarizing code changes using tree-sitter."
+license: "GPL-3.0-or-later"
 depends: [
   "ocaml" {>= "5.2"}
   "dune" {>= "3.0" & >= "3.0"}

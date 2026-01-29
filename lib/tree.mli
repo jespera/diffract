@@ -86,10 +86,45 @@ val find_all : (t -> bool) -> t -> t list
 (** [find_by_type type_name node] returns all nodes of the given type *)
 val find_by_type : string -> t -> t list
 
+(** {1 Parse error detection} *)
+
+(** [is_error node] returns true if the node is an ERROR node (parse failure) *)
+val is_error : t -> bool
+
+(** [has_errors tree] returns true if the tree contains any ERROR nodes *)
+val has_errors : tree -> bool
+
+(** [error_count tree] returns the number of ERROR nodes in the tree *)
+val error_count : tree -> int
+
+(** [get_errors tree] returns all ERROR nodes with their positions *)
+val get_errors : tree -> t list
+
+(** {1 Formatting} *)
+
+(** [format_tree tree] formats a tree as an indented string showing:
+    - Node types with [line:col-line:col] positions
+    - Field names for children where applicable
+    - Text content for leaf nodes (truncated if long)
+    - ERROR nodes marked and showing their text content
+
+    Example output:
+    {v
+    program [1:1-1:17]
+      lexical_declaration [1:1-1:17]
+        variable_declarator [1:7-1:16]
+          name:
+            identifier [1:7-1:8] "x"
+          value:
+            number [1:11-1:12] "42"
+    v} *)
+val format_tree : tree -> string
+
 (** {1 Conversion} *)
 
-(** [of_ts_node source ts_node] converts a tree-sitter node to internal format *)
-val of_ts_node : string -> Node.t -> t
+(** [of_ts_node source ts_tree ts_node] converts a tree-sitter node to internal format.
+    The ts_tree parameter must be provided to keep the tree alive during traversal. *)
+val of_ts_node : string -> Node.tree -> Node.t -> t
 
 (** [of_ts_tree source ts_tree] converts a tree-sitter tree to internal format *)
 val of_ts_tree : string -> Node.tree -> tree

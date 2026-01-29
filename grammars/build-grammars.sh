@@ -16,6 +16,13 @@ cc -shared -fPIC -o lib/libtree-sitter-typescript.so \
   node_modules/tree-sitter-typescript/typescript/src/parser.c \
   node_modules/tree-sitter-typescript/typescript/src/scanner.c
 
+# Build TSX grammar (TypeScript with JSX)
+echo "Building TSX grammar..."
+cc -shared -fPIC -o lib/libtree-sitter-tsx.so \
+  -I node_modules/tree-sitter-typescript/tsx/src \
+  node_modules/tree-sitter-typescript/tsx/src/parser.c \
+  node_modules/tree-sitter-typescript/tsx/src/scanner.c
+
 # Build Kotlin grammar
 echo "Building Kotlin grammar..."
 cc -shared -fPIC -o lib/libtree-sitter-kotlin.so \
