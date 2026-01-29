@@ -6,4 +6,5 @@ let () =
     ("Diff", Test_diff.tests);
     ("Antiunify", Test_antiunify.tests);
     ("Match", Test_match.tests);
+    ("Match (Kotlin)", Test_match.kotlin_tests);
   ]

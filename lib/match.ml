@@ -13,12 +13,16 @@ type pattern = {
   tree: Tree.tree;  (** Parsed pattern tree *)
   source: string;  (** Transformed source (with placeholders) *)
   original_source: string;  (** Original pattern source (after preamble) *)
+  partial: bool;  (** If true, use subset matching for children (unordered, extras ignored) *)
+  on_var: string option;  (** If set, match against the node bound to this var instead of traversing *)
 }
 
 (** A single match result *)
 type match_result = {
   node: Tree.t;  (** The matched node *)
   bindings: (string * string) list;  (** Metavar name -> matched text *)
+  node_bindings: (string * Tree.t) list;  (** Metavar name -> matched node (for 'on $VAR') *)
+  sequence_node_bindings: (string * Tree.t list) list;  (** Metavar name -> matched nodes for sequences *)
   start_point: Tree.point;
   end_point: Tree.point;
 }
@@ -27,6 +31,8 @@ type match_result = {
 type context_match = {
   context_node: Tree.t;
   context_bindings: (string * string) list;
+  context_node_bindings: (string * Tree.t) list;
+  context_sequence_node_bindings: (string * Tree.t list) list;
   context_start_point: Tree.point;
   context_end_point: Tree.point;
 }
@@ -35,10 +41,20 @@ type context_match = {
 type nested_match_result = {
   inner_node: Tree.t;
   inner_bindings: (string * string) list;
+  inner_node_bindings: (string * Tree.t) list;
+  inner_sequence_node_bindings: (string * Tree.t list) list;
   all_bindings: (string * string) list;
+  all_node_bindings: (string * Tree.t) list;
+  all_sequence_node_bindings: (string * Tree.t list) list;
   contexts: context_match list;  (** outermost first *)
   start_point: Tree.point;
   end_point: Tree.point;
+}
+
+(** Result of matching with parse information *)
+type match_search_result = {
+  matches: nested_match_result list;
+  parse_error_count: int;  (** Number of ERROR nodes in source *)
 }
 
 (** A nested pattern with multiple sections *)
@@ -46,15 +62,22 @@ type nested_pattern = {
   patterns: pattern list;  (** All sections; last is target, rest are contexts *)
 }
 
-(** Parse a metavar declaration line.
-    Format: "metavar $name: single" or "metavar $name: sequence"
-    Returns (name, is_sequence) or raises Failure if malformed. *)
-let parse_metavar_decl line =
+(** Result of parsing a single preamble line *)
+type preamble_line =
+  | Metavar of string * bool  (** name, is_sequence *)
+  | MatchPartial
+  | OnVar of string
+
+(** Parse a single preamble line.
+    Formats:
+    - "metavar $name: single" or "metavar $name: sequence"
+    - "match: partial"
+    - "on $var"
+    Returns None for empty lines, Some directive otherwise. *)
+let parse_preamble_line line =
   let line = String.trim line in
   if line = "" then None
-  else if not (String.starts_with ~prefix:"metavar " line) then
-    failwith (Printf.sprintf "Invalid declaration (expected 'metavar'): %s" line)
-  else
+  else if String.starts_with ~prefix:"metavar " line then
     (* Extract everything after "metavar " *)
     let rest = String.sub line 8 (String.length line - 8) |> String.trim in
     (* Split on ":" to get name and type *)
@@ -65,20 +88,40 @@ let parse_metavar_decl line =
       if not (String.starts_with ~prefix:"$" name) then
         failwith (Printf.sprintf "Metavar name must start with '$': %s" name);
       (match typ with
-       | "single" -> Some (name, false)
-       | "sequence" -> Some (name, true)
+       | "single" -> Some (Metavar (name, false))
+       | "sequence" -> Some (Metavar (name, true))
        | _ -> failwith (Printf.sprintf "Invalid metavar type '%s' (expected 'single' or 'sequence')" typ))
     | _ ->
       failwith (Printf.sprintf "Invalid metavar declaration (expected 'metavar $name: type'): %s" line)
+  else if line = "match: partial" then
+    Some MatchPartial
+  else if String.starts_with ~prefix:"on " line then
+    let var = String.sub line 3 (String.length line - 3) |> String.trim in
+    if not (String.starts_with ~prefix:"$" var) then
+      failwith (Printf.sprintf "on directive requires a metavar (starting with '$'): %s" var);
+    Some (OnVar var)
+  else
+    failwith (Printf.sprintf "Invalid preamble line: %s" line)
+
+(** Parsed preamble result *)
+type preamble_result = {
+  p_metavars: string list;
+  p_sequence_metavars: string list;
+  p_partial: bool;
+  p_on_var: string option;
+  p_pattern_body: string;
+}
 
 (** Parse the @@ preamble from pattern text.
     Format:
       @@
       metavar $name: single
       metavar $other: sequence
+      match: partial
+      on $var
       @@
       pattern body
-    Returns (metavars, sequence_metavars, pattern_body) or raises Failure if malformed. *)
+    Returns parsed preamble or raises Failure if malformed. *)
 let parse_preamble text =
   let text = String.trim text in
   if not (String.starts_with ~prefix:"@@" text) then
@@ -101,14 +144,19 @@ let parse_preamble text =
     let pattern_body = String.sub after_first (closing_pos + 2)
                          (String.length after_first - closing_pos - 2) in
     let pattern_body = String.trim pattern_body in
-    (* Parse metavar declarations - one per line *)
+    (* Parse preamble lines *)
     let lines = String.split_on_char '\n' vars_section in
-    let parsed = List.filter_map parse_metavar_decl lines in
-    let metavars = List.map fst parsed in
-    let sequence_metavars = parsed
-                            |> List.filter snd
-                            |> List.map fst in
-    (metavars, sequence_metavars, pattern_body)
+    let parsed = List.filter_map parse_preamble_line lines in
+    (* Extract components *)
+    let metavars = List.filter_map (function Metavar (n, _) -> Some n | _ -> None) parsed in
+    let sequence_metavars = List.filter_map (function Metavar (n, true) -> Some n | _ -> None) parsed in
+    let partial = List.exists (function MatchPartial -> true | _ -> false) parsed in
+    let on_var = List.find_map (function OnVar v -> Some v | _ -> None) parsed in
+    { p_metavars = metavars;
+      p_sequence_metavars = sequence_metavars;
+      p_partial = partial;
+      p_on_var = on_var;
+      p_pattern_body = pattern_body }
 
 (** Generate a valid placeholder identifier for a metavar *)
 let placeholder_for_index i = Printf.sprintf "__meta_%d__" i
@@ -181,18 +229,20 @@ let validate_metavars metavars pattern_body =
 
 (** Parse a pattern file/string into a pattern structure *)
 let parse_pattern ~language pattern_text =
-  let (metavars, sequence_metavars, pattern_body) = parse_preamble pattern_text in
-  validate_metavars metavars pattern_body;
-  let (transformed_source, substitutions) = substitute_metavars metavars pattern_body in
+  let preamble = parse_preamble pattern_text in
+  validate_metavars preamble.p_metavars preamble.p_pattern_body;
+  let (transformed_source, substitutions) = substitute_metavars preamble.p_metavars preamble.p_pattern_body in
   (* Parse the transformed pattern with tree-sitter *)
   let tree = Tree.parse ~language transformed_source in
   {
-    metavars;
-    sequence_metavars;
+    metavars = preamble.p_metavars;
+    sequence_metavars = preamble.p_sequence_metavars;
     substitutions;
     tree;
     source = transformed_source;
-    original_source = pattern_body;
+    original_source = preamble.p_pattern_body;
+    partial = preamble.p_partial;
+    on_var = preamble.p_on_var;
   }
 
 (** Split pattern text into sections.
@@ -248,15 +298,27 @@ let is_sequence_placeholder ~pattern substitutions source node =
   | Some var_name -> List.mem var_name pattern.sequence_metavars
   | None -> false
 
+(** Match bindings: text bindings and node bindings *)
+type match_bindings = {
+  text_bindings: (string * string) list;
+  node_bindings: (string * Tree.t) list;
+  sequence_node_bindings: (string * Tree.t list) list;  (** For sequence metavars *)
+}
+
+let empty_bindings = { text_bindings = []; node_bindings = []; sequence_node_bindings = [] }
+
 (** Try to match a pattern node against a source node.
-    Returns Some bindings if match succeeds, None otherwise. *)
+    Returns Some bindings if match succeeds, None otherwise.
+    Bindings include both text (for display/consistency) and nodes (for 'on $VAR'). *)
 let rec match_node ~pattern ~pattern_source ~source ~substitutions pattern_node source_node =
   (* Check if pattern node is a metavar placeholder *)
   match is_placeholder substitutions pattern_source pattern_node with
   | Some var_name ->
-    (* This is a metavar - bind it to the source node's text *)
+    (* This is a metavar - bind it to the source node's text and node *)
     let source_text = Tree.text source source_node in
-    Some [(var_name, source_text)]
+    Some { text_bindings = [(var_name, source_text)];
+           node_bindings = [(var_name, source_node)];
+           sequence_node_bindings = [] }
   | None ->
     (* Not a metavar - must match structurally *)
     let pattern_type = Tree.node_type pattern_node in
@@ -271,7 +333,7 @@ let rec match_node ~pattern ~pattern_source ~source ~substitutions pattern_node 
         (* Both are leaves - text must match exactly *)
         let pattern_text = Tree.text pattern_source pattern_node in
         let source_text = Tree.text source source_node in
-        if pattern_text = source_text then Some []
+        if pattern_text = source_text then Some empty_bindings
         else None
       else if pattern_children = [] then
         (* Pattern is leaf but source has children - no match *)
@@ -295,9 +357,41 @@ and precompute_cumulative_texts source arr start len =
     done;
     result
 
+(** Merge text bindings, checking that same var doesn't bind to different values *)
+and check_and_merge_text_bindings existing new_bindings =
+  let rec merge acc = function
+    | [] -> Some acc
+    | (var, value) :: rest ->
+      (match List.assoc_opt var acc with
+       | Some existing_value when existing_value <> value ->
+         None  (* Conflict *)
+       | _ ->
+         merge ((var, value) :: acc) rest)
+  in
+  merge existing new_bindings
+
+(** Merge match_bindings, checking text binding consistency *)
+and check_and_merge_bindings existing new_bindings =
+  match check_and_merge_text_bindings existing.text_bindings new_bindings.text_bindings with
+  | None -> None
+  | Some merged_text ->
+    (* Node bindings don't need consistency check - just accumulate *)
+    Some { text_bindings = merged_text;
+           node_bindings = existing.node_bindings @ new_bindings.node_bindings;
+           sequence_node_bindings = existing.sequence_node_bindings @ new_bindings.sequence_node_bindings }
+
 (** Match lists of children using arrays for O(n) sequence matching.
-    Sequence metavars (marked with * in preamble) can match 0 or more source children. *)
+    Sequence metavars (marked with : sequence in preamble) can match 0 or more source children.
+    When partial=true, uses unordered subset matching (each pattern child finds any
+    matching source child, extras ignored). *)
 and match_children ~pattern ~pattern_source ~source ~substitutions pattern_children source_children =
+  if pattern.partial then
+    match_children_partial ~pattern ~pattern_source ~source ~substitutions pattern_children source_children
+  else
+    match_children_exact ~pattern ~pattern_source ~source ~substitutions pattern_children source_children
+
+(** Exact (ordered) child matching - original behavior *)
+and match_children_exact ~pattern ~pattern_source ~source ~substitutions pattern_children source_children =
   (* Convert to arrays for efficient indexing *)
   let pattern_arr = Array.of_list pattern_children in
   let source_arr = Array.of_list source_children in
@@ -325,7 +419,13 @@ and match_children ~pattern ~pattern_source ~source ~substitutions pattern_child
             if n > remaining then None
             else
               let seq_text = cumulative.(n) in
-              let seq_binding = [(var_name, seq_text)] in
+              (* Collect the actual nodes matched by this sequence *)
+              let seq_nodes = Array.to_list (Array.sub source_arr si n) in
+              let seq_binding = {
+                text_bindings = [(var_name, seq_text)];
+                node_bindings = [];
+                sequence_node_bindings = [(var_name, seq_nodes)]
+              } in
               match check_and_merge_bindings bindings seq_binding with
               | None -> try_take (n + 1)  (* Binding conflict *)
               | Some merged ->
@@ -346,20 +446,51 @@ and match_children ~pattern ~pattern_source ~source ~substitutions pattern_child
             | None -> None
             | Some merged -> match_from merged (pi + 1) (si + 1)
   in
-  match_from [] 0 0
+  match_from empty_bindings 0 0
 
-(** Merge bindings, checking that same var doesn't bind to different values *)
-and check_and_merge_bindings existing new_bindings =
-  let rec merge acc = function
-    | [] -> Some acc
-    | (var, value) :: rest ->
-      (match List.assoc_opt var acc with
-       | Some existing_value when existing_value <> value ->
-         None  (* Conflict *)
-       | _ ->
-         merge ((var, value) :: acc) rest)
+(** Partial (unordered subset) child matching.
+    Each pattern child must find a matching source child (any position, consumed once matched).
+    Extra source children are ignored. Order doesn't matter. *)
+and match_children_partial ~pattern ~pattern_source ~source ~substitutions pattern_children source_children =
+  let source_arr = Array.of_list source_children in
+  let source_len = Array.length source_arr in
+  (* Track which source children have been consumed *)
+  let used = Array.make source_len false in
+
+  (* Try to find a matching source child for pattern child p *)
+  let find_match_for bindings p =
+    let is_seq = is_sequence_placeholder ~pattern substitutions pattern_source p in
+    if is_seq then
+      (* Sequence metavars don't make sense in partial mode - treat as single *)
+      None
+    else
+      (* Try each unconsumed source child *)
+      let rec try_source si =
+        if si >= source_len then None
+        else if used.(si) then try_source (si + 1)
+        else
+          match match_node ~pattern ~pattern_source ~source ~substitutions
+                  p source_arr.(si) with
+          | None -> try_source (si + 1)
+          | Some new_bindings ->
+            match check_and_merge_bindings bindings new_bindings with
+            | None -> try_source (si + 1)  (* Binding conflict, try next *)
+            | Some merged ->
+              used.(si) <- true;
+              Some merged
+      in
+      try_source 0
   in
-  merge existing new_bindings
+
+  (* Match each pattern child *)
+  let rec match_all bindings = function
+    | [] -> Some bindings
+    | p :: rest ->
+      match find_match_for bindings p with
+      | None -> None
+      | Some merged -> match_all merged rest
+  in
+  match_all empty_bindings pattern_children
 
 (** Get the innermost meaningful node from a pattern.
     This unwraps program/module wrappers and expression_statement wrappers
@@ -369,8 +500,8 @@ let get_pattern_content pattern =
     let node_type = Tree.node_type node in
     let children = Tree.named_children node in
     match node_type, children with
-    (* Unwrap program/module with single child *)
-    | ("program" | "module"), [child] -> unwrap child
+    (* Unwrap program/module/source_file with single child *)
+    | ("program" | "module" | "source_file"), [child] -> unwrap child
     (* Unwrap expression_statement with single child *)
     | "expression_statement", [child] -> unwrap child
     | _ -> node
@@ -393,10 +524,12 @@ let find_matches ~language ~pattern_text ~source_text =
             ~source
             ~substitutions:pattern.substitutions
             pattern_node source_node with
-    | Some bindings ->
+    | Some mb ->
       results := {
         node = source_node;
-        bindings;
+        bindings = mb.text_bindings;
+        node_bindings = mb.node_bindings;
+        sequence_node_bindings = mb.sequence_node_bindings;
         start_point = Tree.start_point source_node;
         end_point = Tree.end_point source_node;
       } :: !results
@@ -414,38 +547,65 @@ let find_matches_in_file ~language ~pattern_text ~source_path =
 let find_matches_in_subtree ~pattern ~inherited_bindings ~source ~root_node =
   let pattern_node = get_pattern_content pattern in
   let results = ref [] in
-  Tree.traverse (fun source_node ->
+  root_node |> Tree.traverse (fun source_node ->
     match match_node
             ~pattern
             ~pattern_source:pattern.source
             ~source
             ~substitutions:pattern.substitutions
             pattern_node source_node with
-    | Some bindings ->
+    | Some mb ->
       (* Check if new bindings are consistent with inherited ones *)
-      (match check_and_merge_bindings inherited_bindings bindings with
-       | Some merged_bindings ->
+      (match check_and_merge_bindings inherited_bindings mb with
+       | Some merged ->
          results := {
            node = source_node;
-           bindings = merged_bindings;
+           bindings = merged.text_bindings;
+           node_bindings = merged.node_bindings;
+           sequence_node_bindings = merged.sequence_node_bindings;
            start_point = Tree.start_point source_node;
            end_point = Tree.end_point source_node;
          } :: !results
        | None -> ())  (* Binding conflict - skip this match *)
     | None -> ()
-  ) root_node;
+  );
   List.rev !results
+
+(** Find matches for a pattern, respecting the 'on $VAR' directive.
+    If pattern has on_var, searches within the bound node(s).
+    For single metavars, treats as a sequence of one node.
+    Otherwise, traverses the subtree looking for matches. *)
+let find_pattern_matches ~pattern ~inherited_bindings ~source ~root_node =
+  match pattern.on_var with
+  | Some var_name ->
+    (* 'on $VAR' mode: get the target node(s) to search within *)
+    let target_nodes =
+      match List.assoc_opt var_name inherited_bindings.node_bindings with
+      | Some node -> [node]  (* Single node - treat as sequence of one *)
+      | None ->
+        match List.assoc_opt var_name inherited_bindings.sequence_node_bindings with
+        | Some nodes -> nodes
+        | None -> failwith (Printf.sprintf "on %s: variable not bound in previous pattern" var_name)
+    in
+    (* Search within each target node *)
+    List.concat_map (fun target_node ->
+      find_matches_in_subtree ~pattern ~inherited_bindings ~source ~root_node:target_node
+    ) target_nodes
+  | None ->
+    (* Normal mode: traverse subtree looking for matches *)
+    find_matches_in_subtree ~pattern ~inherited_bindings ~source ~root_node
 
 (** Recursively find nested matches.
     Process patterns left-to-right. For each context pattern, find matches,
-    then recurse into each match's subtree with remaining patterns. *)
+    then recurse into each match's subtree with remaining patterns.
+    Respects 'on $VAR' directive for direct matching against bound nodes. *)
 let rec find_nested_matches_impl ~source ~inherited_bindings
     ~accumulated_contexts ~root_node patterns =
   match patterns with
   | [] -> []  (* No patterns *)
   | [target] ->
-    (* Base case: match final/target pattern in current subtree *)
-    let matches = find_matches_in_subtree
+    (* Base case: match final/target pattern *)
+    let matches = find_pattern_matches
         ~pattern:target
         ~inherited_bindings
         ~source
@@ -453,14 +613,18 @@ let rec find_nested_matches_impl ~source ~inherited_bindings
     List.map (fun m -> {
       inner_node = m.node;
       inner_bindings = m.bindings;
+      inner_node_bindings = m.node_bindings;
+      inner_sequence_node_bindings = m.sequence_node_bindings;
       all_bindings = m.bindings;
+      all_node_bindings = m.node_bindings;
+      all_sequence_node_bindings = m.sequence_node_bindings;
       contexts = List.rev accumulated_contexts;
       start_point = m.start_point;
       end_point = m.end_point;
     }) matches
   | ctx :: rest ->
     (* Find context matches, then recurse into each *)
-    let ctx_matches = find_matches_in_subtree
+    let ctx_matches = find_pattern_matches
         ~pattern:ctx
         ~inherited_bindings
         ~source
@@ -469,48 +633,73 @@ let rec find_nested_matches_impl ~source ~inherited_bindings
       let ctx_record = {
         context_node = ctx_match.node;
         context_bindings = ctx_match.bindings;
+        context_node_bindings = ctx_match.node_bindings;
+        context_sequence_node_bindings = ctx_match.sequence_node_bindings;
         context_start_point = ctx_match.start_point;
         context_end_point = ctx_match.end_point;
       } in
+      let new_inherited = {
+        text_bindings = ctx_match.bindings;
+        node_bindings = ctx_match.node_bindings;
+        sequence_node_bindings = ctx_match.sequence_node_bindings;
+      } in
       find_nested_matches_impl
         ~source
-        ~inherited_bindings:ctx_match.bindings
+        ~inherited_bindings:new_inherited
         ~accumulated_contexts:(ctx_record :: accumulated_contexts)
         ~root_node:ctx_match.node
         rest
     ) ctx_matches
 
-(** Find nested matches using a pattern with multiple sections.
-    Auto-detects: single section behaves like find_matches, multiple sections
-    enable nested/scoped matching. *)
-let find_nested_matches ~language ~pattern_text ~source_text =
+(** Internal: find nested matches and return with source tree for error checking *)
+let find_nested_matches_internal ~language ~pattern_text ~source_text =
   let nested = parse_nested_pattern ~language pattern_text in
   let source_tree = Tree.parse ~language source_text in
   let source = source_tree.source in
   let source_root = source_tree.root in
-  if List.length nested.patterns = 1 then
-    (* Single pattern: use existing logic, convert to nested_match_result *)
-    let pattern = List.hd nested.patterns in
-    let matches = find_matches_in_subtree
-        ~pattern
-        ~inherited_bindings:[]
+  let matches =
+    if List.length nested.patterns = 1 then
+      (* Single pattern: use existing logic, convert to nested_match_result *)
+      let pattern = List.hd nested.patterns in
+      let matches = find_matches_in_subtree
+          ~pattern
+          ~inherited_bindings:empty_bindings
+          ~source
+          ~root_node:source_root in
+      List.map (fun m -> {
+        inner_node = m.node;
+        inner_bindings = m.bindings;
+        inner_node_bindings = m.node_bindings;
+        inner_sequence_node_bindings = m.sequence_node_bindings;
+        all_bindings = m.bindings;
+        all_node_bindings = m.node_bindings;
+        all_sequence_node_bindings = m.sequence_node_bindings;
+        contexts = [];
+        start_point = m.start_point;
+        end_point = m.end_point;
+      }) matches
+    else
+      find_nested_matches_impl
         ~source
-        ~root_node:source_root in
-    List.map (fun m -> {
-      inner_node = m.node;
-      inner_bindings = m.bindings;
-      all_bindings = m.bindings;
-      contexts = [];
-      start_point = m.start_point;
-      end_point = m.end_point;
-    }) matches
-  else
-    find_nested_matches_impl
-      ~source
-      ~inherited_bindings:[]
-      ~accumulated_contexts:[]
-      ~root_node:source_root
-      nested.patterns
+        ~inherited_bindings:empty_bindings
+        ~accumulated_contexts:[]
+        ~root_node:source_root
+        nested.patterns
+  in
+  (matches, source_tree)
+
+(** Find nested matches using a pattern with multiple sections.
+    Auto-detects: single section behaves like find_matches, multiple sections
+    enable nested/scoped matching. Supports 'on $VAR' for direct matching. *)
+let find_nested_matches ~language ~pattern_text ~source_text =
+  let (matches, _) = find_nested_matches_internal ~language ~pattern_text ~source_text in
+  matches
+
+(** Find nested matches and return parse error information.
+    Returns both matches and the count of parse errors (ERROR nodes) in the source. *)
+let search ~language ~pattern_text ~source_text =
+  let (matches, source_tree) = find_nested_matches_internal ~language ~pattern_text ~source_text in
+  { matches; parse_error_count = Tree.error_count source_tree }
 
 (** Format a match result for display *)
 let format_match source_text (result : match_result) =
@@ -583,7 +772,7 @@ let find_matches_with_index ~index ~pattern ~source ~source_root =
   match is_placeholder pattern.substitutions pattern.source pattern_node with
   | Some _ ->
     (* Pattern root is a metavar - can't filter by type, fall back to traversal *)
-    find_matches_in_subtree ~pattern ~inherited_bindings:[] ~source ~root_node:source_root
+    find_matches_in_subtree ~pattern ~inherited_bindings:empty_bindings ~source ~root_node:source_root
   | None ->
     (* Query index for candidate nodes *)
     let pattern_type = Tree.node_type pattern_node in
@@ -596,10 +785,12 @@ let find_matches_with_index ~index ~pattern ~source ~source_root =
               ~source
               ~substitutions:pattern.substitutions
               pattern_node source_node with
-      | Some bindings ->
+      | Some mb ->
         Some {
           node = source_node;
-          bindings;
+          bindings = mb.text_bindings;
+          node_bindings = mb.node_bindings;
+          sequence_node_bindings = mb.sequence_node_bindings;
           start_point = Tree.start_point source_node;
           end_point = Tree.end_point source_node;
         }

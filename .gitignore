@@ -9,7 +9,7 @@ _opam/
 node_modules/
 
 # Compiled grammars
-grammars/*.so
+grammars/**/*.so
 
 # Editor
 *.swp

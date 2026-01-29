@@ -6,21 +6,14 @@ open Foreign
 (* Cache for loaded languages *)
 let loaded_languages : (string, nativeint) Hashtbl.t = Hashtbl.create 16
 
-(* Map of language names to library base names and function names *)
+(* Map of language names to library base names and function names.
+   Only includes languages with grammars built in grammars/lib/. *)
 let language_info = [
   ("typescript", ("tree-sitter-typescript", "tree_sitter_typescript"));
   ("ts", ("tree-sitter-typescript", "tree_sitter_typescript"));
+  ("tsx", ("tree-sitter-tsx", "tree_sitter_tsx"));
   ("kotlin", ("tree-sitter-kotlin", "tree_sitter_kotlin"));
   ("kt", ("tree-sitter-kotlin", "tree_sitter_kotlin"));
-  ("javascript", ("tree-sitter-javascript", "tree_sitter_javascript"));
-  ("js", ("tree-sitter-javascript", "tree_sitter_javascript"));
-  ("python", ("tree-sitter-python", "tree_sitter_python"));
-  ("py", ("tree-sitter-python", "tree_sitter_python"));
-  ("c", ("tree-sitter-c", "tree_sitter_c"));
-  ("cpp", ("tree-sitter-cpp", "tree_sitter_cpp"));
-  ("rust", ("tree-sitter-rust", "tree_sitter_rust"));
-  ("go", ("tree-sitter-go", "tree_sitter_go"));
-  ("java", ("tree-sitter-java", "tree_sitter_java"));
 ]
 
 (* Search paths for grammar libraries *)

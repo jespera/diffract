@@ -4,6 +4,7 @@
 
 (package
  (name diffract)
+ (license GPL-3.0-or-later)
  (synopsis "Structural diff and pattern inference for source code using tree-sitter")
  (description "A tool for computing structural diffs between source files, inferring transformation patterns from examples, and summarizing code changes using tree-sitter.")
  (depends
