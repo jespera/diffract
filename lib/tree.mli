@@ -122,9 +122,8 @@ val format_tree : tree -> string
 
 (** {1 Conversion} *)
 
-(** [of_ts_node source ts_tree ts_node] converts a tree-sitter node to internal format.
-    The ts_tree parameter must be provided to keep the tree alive during traversal. *)
-val of_ts_node : string -> Node.tree -> Node.t -> t
+(** [of_ts_node source ts_node] converts a tree-sitter node to internal format. *)
+val of_ts_node : string -> Node.t -> t
 
 (** [of_ts_tree source ts_tree] converts a tree-sitter tree to internal format *)
 val of_ts_tree : string -> Node.tree -> tree
