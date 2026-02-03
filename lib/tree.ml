@@ -196,13 +196,8 @@ let format_tree tree =
 
 (** {1 Conversion from tree-sitter nodes} *)
 
-(** Convert a tree-sitter node to our internal representation.
-    The ts_tree parameter is passed through the recursion to keep the tree-sitter
-    tree alive during traversal - without it, the GC might free the tree while
-    we're still accessing nodes, causing a use-after-free crash. *)
-let rec of_ts_node source ts_tree (ts_node : Node.t) : t =
-  (* Reference ts_tree to ensure it stays rooted during this call *)
-  let (_ : Node.tree) = ts_tree in
+(** Convert a tree-sitter node to our internal representation. *)
+let rec of_ts_node source (ts_node : Node.t) : t =
   let node_type = Node.node_type ts_node in
   let is_named = Node.is_named ts_node in
   let start_byte = Node.start_byte ts_node in
@@ -217,7 +212,7 @@ let rec of_ts_node source ts_tree (ts_node : Node.t) : t =
   let children = List.init child_count (fun i ->
     let ts_child = Node.child ts_node i in
     let field_name = Node.field_name_for_child ts_node i in
-    { field_name; node = of_ts_node source ts_tree ts_child }
+    { field_name; node = of_ts_node source ts_child }
   ) in
 
   (* Extract named children *)
@@ -231,7 +226,8 @@ let rec of_ts_node source ts_tree (ts_node : Node.t) : t =
 (** Convert a tree-sitter tree to our internal representation *)
 let of_ts_tree source (ts_tree : Node.tree) : tree =
   let ts_root = Node.root ts_tree in
-  let root = of_ts_node source ts_tree ts_root in
+  let root = of_ts_node source ts_root in
+  ignore(Sys.opaque_identity ts_tree);
   { root; source }
 
 (** {1 Parsing} *)
