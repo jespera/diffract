@@ -38,7 +38,7 @@ dune test
 ## Usage
 
 ```bash
-# Parse a file to S-expression
+# Parse and print parsed tree
 diffract example.ts
 
 # Parse with explicit language
