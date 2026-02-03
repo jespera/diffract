@@ -17,7 +17,7 @@ An OCaml library and CLI tool for parsing source files using [tree-sitter](https
 - OCaml 5.2+
 - opam
 - tree-sitter library (`libtree-sitter`)
-- Node.js (for building grammar libraries)
+- npm (to fetch grammar sources)
 
 ### Build Steps
 
