@@ -68,9 +68,10 @@ let language_info = [
 
 ## Pattern File Format
 
-Patterns use `@@` delimiters with metavariable declarations:
+Patterns use `@@` delimiters with a **required** match mode and optional metavariable declarations:
 ```
 @@
+match: strict
 metavar $obj: single
 metavar $method: single
 @@
@@ -82,6 +83,7 @@ Types: `single` (one AST node), `sequence` (zero or more nodes)
 Ellipsis (`...`) can be used as anonymous sequence matching:
 ```
 @@
+match: strict
 @@
 <?php
 function test() {
@@ -95,6 +97,7 @@ function test() {
 - Does NOT replace `...$var` (PHP spread operator is preserved)
 - Each `...` gets a unique binding name (`..._0`, `..._1`, etc.)
 
-Matching modes:
-- `match: partial` - Subset matching (ignores extra children, unordered)
-- `match: field` - Field-based matching (matches children by tree-sitter field name instead of position, ignores extra source fields not in pattern, preserves order within each field)
+Matching modes (required - must specify one):
+- `match: strict` - Exact positional matching (no extra children allowed, ordered). Use for function calls, arrays.
+- `match: partial` - Subset matching (ignores extra children, unordered). Use for object literals, JSX attributes.
+- `match: field` - Field-based matching (matches children by tree-sitter field name instead of position, ignores extra source fields not in pattern, preserves order within each field). Use for definitions with decorators/attributes.

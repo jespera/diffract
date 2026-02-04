@@ -6,6 +6,7 @@ let example_nested_rules () =
   print_endline "Find println() calls only inside classes annotated with @Service\n";
 
   let pattern_text = {|@@
+match: strict
 metavar $CLASS: single
 metavar $BODY: sequence
 @@
@@ -14,6 +15,7 @@ metavar $BODY: sequence
 class $CLASS { $BODY }
 
 @@
+match: strict
 metavar $MSG: single
 @@
 println($MSG)|} in
@@ -68,12 +70,14 @@ let example_methods_in_classes () =
 
   (* Two-level nesting: class -> function *)
   let pattern_text = {|@@
+match: strict
 metavar $CLASS: single
 metavar $BODY: sequence
 @@
 class $CLASS { $BODY }
 
 @@
+match: strict
 metavar $METHOD: single
 metavar $MBODY: sequence
 @@
@@ -167,12 +171,14 @@ let example_partial_nested () =
 
   (* First find classes, then find return statements inside them *)
   let pattern_text = {|@@
+match: strict
 metavar $CLASS: single
 metavar $BODY: sequence
 @@
 class $CLASS { $BODY }
 
 @@
+match: strict
 metavar $EXPR: single
 @@
 return $EXPR|} in
@@ -222,18 +228,21 @@ let example_deep_nesting () =
   print_endline "Find database.query() calls inside methods inside Repository classes\n";
 
   let pattern_text = {|@@
+match: strict
 metavar $REPO: single
 metavar $BODY1: sequence
 @@
 class $REPO { $BODY1 }
 
 @@
+match: strict
 metavar $METHOD: single
 metavar $BODY2: sequence
 @@
 fun $METHOD() { $BODY2 }
 
 @@
+match: strict
 metavar $QUERY: single
 @@
 database.query($QUERY)|} in

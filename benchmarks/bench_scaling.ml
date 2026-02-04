@@ -9,6 +9,7 @@ let generate_class_source n =
 
 (* Sequence pattern for class matching *)
 let sequence_pattern = {|@@
+match: strict
 metavar $class_name: single
 metavar $body: sequence
 @@
@@ -16,12 +17,14 @@ class $class_name { $body }|}
 
 (* Nested pattern with sequence *)
 let nested_sequence_pattern = {|@@
+match: strict
 metavar $class_name: single
 metavar $body: sequence
 @@
 class $class_name { $body }
 
 @@
+match: strict
 metavar $msg: single
 @@
 console.log($msg)|}
