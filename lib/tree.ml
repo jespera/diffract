@@ -76,6 +76,13 @@ let field_name_for_child t i =
   | Some c -> c.field_name
   | None -> None
 
+(** Get named children with their field names preserved *)
+let named_children_with_fields t =
+  List.filter_map (fun c ->
+    if c.node.is_named then Some (c.field_name, c.node)
+    else None
+  ) t.children
+
 (** {1 Traversal} *)
 
 (** Iterate over all children *)

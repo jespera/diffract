@@ -22,4 +22,15 @@ There needs to be a rule-grammar.
 
 # Review all the code
 
-Claude wrote it, I need to get it and/or rewrite.
+Claude wrote almost all of it -- review and replace as time permits.
+
+# Better documentation
+
+There's so much documentation but it should be more structured.
+
+# Matching on contents of metavars
+
+Would be pretty cool to match on text-contents of metavar bindings.
+One use-case (the only?) would be in TS[X] code and matching on "^use."
+to find hooks.
+

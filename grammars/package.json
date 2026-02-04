@@ -7,6 +7,7 @@
   },
   "dependencies": {
     "tree-sitter-kotlin": "git+https://github.com/fwcd/tree-sitter-kotlin.git",
+    "tree-sitter-php": "^0.23.11",
     "tree-sitter-typescript": "^0.23.2"
   },
   "scripts": {

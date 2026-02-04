@@ -14,6 +14,7 @@ type pattern = {
   source: string;  (** Transformed source (with placeholders) *)
   original_source: string;  (** Original pattern source (after preamble) *)
   partial: bool;  (** If true, use subset matching for children (unordered, extras ignored) *)
+  field: bool;  (** If true, match children by field name instead of position *)
   on_var: string option;  (** If set, match against the node bound to this var instead of traversing *)
 }
 
@@ -66,6 +67,7 @@ type nested_pattern = {
 type preamble_line =
   | Metavar of string * bool  (** name, is_sequence *)
   | MatchPartial
+  | MatchField
   | OnVar of string
 
 (** Parse a single preamble line.
@@ -95,6 +97,8 @@ let parse_preamble_line line =
       failwith (Printf.sprintf "Invalid metavar declaration (expected 'metavar $name: type'): %s" line)
   else if line = "match: partial" then
     Some MatchPartial
+  else if line = "match: field" then
+    Some MatchField
   else if String.starts_with ~prefix:"on " line then
     let var = String.sub line 3 (String.length line - 3) |> String.trim in
     if not (String.starts_with ~prefix:"$" var) then
@@ -108,6 +112,7 @@ type preamble_result = {
   p_metavars: string list;
   p_sequence_metavars: string list;
   p_partial: bool;
+  p_field: bool;
   p_on_var: string option;
   p_pattern_body: string;
 }
@@ -151,10 +156,12 @@ let parse_preamble text =
     let metavars = List.filter_map (function Metavar (n, _) -> Some n | _ -> None) parsed in
     let sequence_metavars = List.filter_map (function Metavar (n, true) -> Some n | _ -> None) parsed in
     let partial = List.exists (function MatchPartial -> true | _ -> false) parsed in
+    let field = List.exists (function MatchField -> true | _ -> false) parsed in
     let on_var = List.find_map (function OnVar v -> Some v | _ -> None) parsed in
     { p_metavars = metavars;
       p_sequence_metavars = sequence_metavars;
       p_partial = partial;
+      p_field = field;
       p_on_var = on_var;
       p_pattern_body = pattern_body }
 
@@ -191,26 +198,32 @@ let substitute_metavars metavars pattern_text =
   ) pattern_text substitutions in
   (result, substitutions)
 
-(** Find all metavars used in pattern text (tokens starting with $) *)
+(** Find all metavars used in pattern text (tokens starting with $ followed by uppercase).
+    This distinguishes metavars ($MSG, $PROP) from language variables ($this, $name).
+    Metavars must start with an uppercase letter after the $. *)
 let find_metavars_in_text text =
   let results = ref [] in
   let i = ref 0 in
   while !i < String.length text do
-    if text.[!i] = '$' then begin
-      (* Found a potential metavar *)
-      let start = !i in
-      incr i;
-      (* Collect identifier characters *)
-      while !i < String.length text &&
-            (let c = text.[!i] in
-             (c >= 'a' && c <= 'z') ||
-             (c >= 'A' && c <= 'Z') ||
-             (c >= '0' && c <= '9') ||
-             c = '_') do
+    if text.[!i] = '$' && !i + 1 < String.length text then begin
+      let first_char = text.[!i + 1] in
+      (* Only consider it a metavar if first char after $ is uppercase *)
+      if first_char >= 'A' && first_char <= 'Z' then begin
+        let start = !i in
+        incr i;
+        (* Collect identifier characters *)
+        while !i < String.length text &&
+              (let c = text.[!i] in
+               (c >= 'a' && c <= 'z') ||
+               (c >= 'A' && c <= 'Z') ||
+               (c >= '0' && c <= '9') ||
+               c = '_') do
+          incr i
+        done;
+        if !i > start + 1 then
+          results := String.sub text start (!i - start) :: !results
+      end else
         incr i
-      done;
-      if !i > start + 1 then
-        results := String.sub text start (!i - start) :: !results
     end else
       incr i
   done;
@@ -227,21 +240,81 @@ let validate_metavars metavars pattern_body =
   if undeclared <> [] then
     failwith (Printf.sprintf "Undeclared metavars: %s" (String.concat ", " undeclared))
 
+(** Preprocess ellipsis (...) in pattern text.
+    Replaces ... with __ellipsis_N__ placeholders.
+    Adds trailing ; if ... is followed by only whitespace then newline (statement context).
+    Does NOT replace ... if immediately followed by $ or alphanumeric (PHP spread operator).
+    Returns (transformed_text, ellipsis_substitutions) where ellipsis_substitutions
+    maps unique var names to placeholder strings (e.g., [("..._0", "__ellipsis_0__")]). *)
+let preprocess_ellipsis text =
+  let len = String.length text in
+  let result = Buffer.create len in
+  let substitutions = ref [] in
+  let counter = ref 0 in
+  let i = ref 0 in
+  while !i < len do
+    (* Check for ... *)
+    if !i + 2 < len && text.[!i] = '.' && text.[!i+1] = '.' && text.[!i+2] = '.' then begin
+      (* Check what follows - don't replace if followed by $ or alphanumeric (spread operator) *)
+      let next_char = if !i + 3 < len then Some text.[!i+3] else None in
+      let is_spread = match next_char with
+        | Some '$' -> true
+        | Some c when (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') -> true
+        | _ -> false
+      in
+      if is_spread then begin
+        (* Keep as literal ... *)
+        Buffer.add_string result "...";
+        i := !i + 3
+      end else begin
+        (* Replace with placeholder - use unique var name for each ellipsis *)
+        let n = !counter in
+        let var_name = Printf.sprintf "..._%d" n in
+        let placeholder = Printf.sprintf "__ellipsis_%d__" n in
+        substitutions := (var_name, placeholder) :: !substitutions;
+        incr counter;
+        Buffer.add_string result placeholder;
+        i := !i + 3;
+        (* Check if followed by only whitespace then newline (or end) - add ; for statement context *)
+        let j = ref !i in
+        while !j < len && (text.[!j] = ' ' || text.[!j] = '\t') do
+          incr j
+        done;
+        if !j >= len || text.[!j] = '\n' then
+          Buffer.add_char result ';'
+      end
+    end else begin
+      Buffer.add_char result text.[!i];
+      incr i
+    end
+  done;
+  (Buffer.contents result, List.rev !substitutions)
+
 (** Parse a pattern file/string into a pattern structure *)
 let parse_pattern ~language pattern_text =
   let preamble = parse_preamble pattern_text in
   validate_metavars preamble.p_metavars preamble.p_pattern_body;
-  let (transformed_source, substitutions) = substitute_metavars preamble.p_metavars preamble.p_pattern_body in
+  (* First preprocess ellipsis (...) *)
+  let (after_ellipsis, ellipsis_subs) = preprocess_ellipsis preamble.p_pattern_body in
+  (* Then substitute declared metavars *)
+  let (transformed_source, metavar_subs) = substitute_metavars preamble.p_metavars after_ellipsis in
+  (* Combine substitutions *)
+  let all_substitutions = metavar_subs @ ellipsis_subs in
+  (* Ellipsis var names (e.g., "..._0", "..._1") are sequence metavars *)
+  let ellipsis_var_names = List.map fst ellipsis_subs in
   (* Parse the transformed pattern with tree-sitter *)
   let tree = Tree.parse ~language transformed_source in
+  (* Add ellipsis var names to sequence_metavars *)
+  let sequence_metavars = preamble.p_sequence_metavars @ ellipsis_var_names in
   {
     metavars = preamble.p_metavars;
-    sequence_metavars = preamble.p_sequence_metavars;
-    substitutions;
+    sequence_metavars;
+    substitutions = all_substitutions;
     tree;
     source = transformed_source;
     original_source = preamble.p_pattern_body;
     partial = preamble.p_partial;
+    field = preamble.p_field;
     on_var = preamble.p_on_var;
   }
 
@@ -285,12 +358,31 @@ let parse_nested_pattern ~language pattern_text =
   let patterns = List.map (parse_pattern ~language) sections in
   { patterns }
 
-(** Check if a node's text is a placeholder, return the original metavar name if so *)
+(** Check if a node's text is a placeholder, return the original metavar name if so.
+    Also handles wrapper nodes (like expression_statement) that contain just a placeholder
+    plus a trailing semicolon. This allows patterns like `$X;` in PHP to work. *)
 let is_placeholder substitutions source node =
   let text = Tree.text source node in
-  List.find_map (fun (var, placeholder) ->
+  (* First check if node's text directly matches *)
+  match List.find_map (fun (var, placeholder) ->
     if text = placeholder then Some var else None
-  ) substitutions
+  ) substitutions with
+  | Some _ as result -> result
+  | None ->
+    (* Check if node has a single named child whose text matches, and the parent
+       text is exactly the child's text plus a semicolon.
+       This handles expression_statement wrapping an identifier placeholder. *)
+    match Tree.named_children node with
+    | [single_child] ->
+      let child_text = Tree.text source single_child in
+      (* Only unwrap if parent is exactly child + ";" *)
+      if text = child_text ^ ";" then
+        List.find_map (fun (var, placeholder) ->
+          if child_text = placeholder then Some var else None
+        ) substitutions
+      else
+        None
+    | _ -> None
 
 (** Check if a node's text is a placeholder for a sequence metavar *)
 let is_sequence_placeholder ~pattern substitutions source node =
@@ -341,7 +433,7 @@ let rec match_node ~pattern ~pattern_source ~source ~substitutions pattern_node 
       else
         (* Both have children - match them *)
         match_children ~pattern ~pattern_source ~source ~substitutions
-          pattern_children source_children
+          pattern_node source_node pattern_children source_children
 
 (** Precompute cumulative texts for all possible sequence lengths.
     cumulative_texts.(i) = text of children 0..i-1 (empty string for i=0) *)
@@ -383,9 +475,14 @@ and check_and_merge_bindings existing new_bindings =
 (** Match lists of children using arrays for O(n) sequence matching.
     Sequence metavars (marked with : sequence in preamble) can match 0 or more source children.
     When partial=true, uses unordered subset matching (each pattern child finds any
-    matching source child, extras ignored). *)
-and match_children ~pattern ~pattern_source ~source ~substitutions pattern_children source_children =
-  if pattern.partial then
+    matching source child, extras ignored).
+    When field=true, matches children by field name instead of position. *)
+and match_children ~pattern ~pattern_source ~source ~substitutions
+    pattern_node source_node pattern_children source_children =
+  if pattern.field then
+    match_children_field ~pattern ~pattern_source ~source ~substitutions
+      pattern_node source_node
+  else if pattern.partial then
     match_children_partial ~pattern ~pattern_source ~source ~substitutions pattern_children source_children
   else
     match_children_exact ~pattern ~pattern_source ~source ~substitutions pattern_children source_children
@@ -492,6 +589,51 @@ and match_children_partial ~pattern ~pattern_source ~source ~substitutions patte
   in
   match_all empty_bindings pattern_children
 
+(** Field-based child matching.
+    Matches children by tree-sitter field name instead of position.
+    Children with the same field name are matched in order within that field group.
+    Extra source fields (not in pattern) are ignored.
+    Children without field names are matched positionally within their group. *)
+and match_children_field ~pattern ~pattern_source ~source ~substitutions
+    pattern_node source_node =
+  let pattern_children = Tree.named_children_with_fields pattern_node in
+  let source_children = Tree.named_children_with_fields source_node in
+
+  (* Group children by field name: returns (field_name option * node list) list *)
+  let group_by_field children =
+    let tbl = Hashtbl.create 8 in
+    (* Track insertion order for deterministic iteration *)
+    let order = ref [] in
+    List.iter (fun (field, node) ->
+      let existing = Hashtbl.find_opt tbl field |> Option.value ~default:[] in
+      if existing = [] then order := field :: !order;
+      Hashtbl.replace tbl field (existing @ [node])
+    ) children;
+    List.rev_map (fun field -> (field, Hashtbl.find tbl field)) !order
+  in
+
+  let pattern_grouped = group_by_field pattern_children in
+  let source_grouped = group_by_field source_children in
+
+  (* Match each field group from pattern against corresponding source field group *)
+  let rec match_groups bindings = function
+    | [] -> Some bindings
+    | (field_name, pat_nodes) :: rest ->
+      let src_nodes =
+        List.assoc_opt field_name source_grouped
+        |> Option.value ~default:[]
+      in
+      (* Use exact matching within field group - order matters within a field *)
+      match match_children_exact ~pattern ~pattern_source ~source ~substitutions
+              pat_nodes src_nodes with
+      | None -> None
+      | Some new_bindings ->
+        match check_and_merge_bindings bindings new_bindings with
+        | None -> None
+        | Some merged -> match_groups merged rest
+  in
+  match_groups empty_bindings pattern_grouped
+
 (** Get the innermost meaningful node from a pattern.
     This unwraps program/module wrappers and expression_statement wrappers
     to get to the actual pattern content. *)
@@ -504,6 +646,11 @@ let get_pattern_content pattern =
     | ("program" | "module" | "source_file"), [child] -> unwrap child
     (* Unwrap expression_statement with single child *)
     | "expression_statement", [child] -> unwrap child
+    (* PHP: skip php_tag prefix in program node *)
+    | "program", first :: rest when Tree.node_type first = "php_tag" ->
+      (match rest with
+       | [child] -> unwrap child
+       | _ -> node)
     | _ -> node
   in
   unwrap pattern.tree.root

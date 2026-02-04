@@ -66,6 +66,9 @@ val field : t -> string -> t option
 (** [field_name_for_child t i] returns the field name for child at index i *)
 val field_name_for_child : t -> int -> string option
 
+(** [named_children_with_fields t] returns named children paired with their field names *)
+val named_children_with_fields : t -> (string option * t) list
+
 (** {1 Traversal} *)
 
 (** [iter_children f t] applies f to all children *)

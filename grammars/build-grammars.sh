@@ -30,5 +30,12 @@ cc -shared -fPIC -o lib/libtree-sitter-kotlin.so \
   node_modules/tree-sitter-kotlin/src/parser.c \
   node_modules/tree-sitter-kotlin/src/scanner.c
 
+# Build PHP grammar
+echo "Building PHP grammar..."
+cc -shared -fPIC -o lib/libtree-sitter-php.so \
+  -I node_modules/tree-sitter-php/php/src \
+  node_modules/tree-sitter-php/php/src/parser.c \
+  node_modules/tree-sitter-php/php/src/scanner.c
+
 echo "Grammar libraries built in grammars/lib/"
 ls -la lib/

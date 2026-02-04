@@ -115,11 +115,11 @@ console.log($msg)|} in
 (* Test: undeclared metavar raises error *)
 let test_undeclared_metavar () =
   let pattern_text = {|@@
-metavar $msg: single
+metavar $MSG: single
 @@
-console.log($mesage)|} in  (* Typo: $mesage instead of $msg *)
+console.log($MESAGE)|} in  (* Typo: $MESAGE instead of $MSG *)
   Alcotest.check_raises "undeclared metavar"
-    (Failure "Undeclared metavars: $mesage")
+    (Failure "Undeclared metavars: $MESAGE")
     (fun () ->
       ignore (Match.find_matches
         ~language:"typescript"
@@ -1010,4 +1010,801 @@ let kotlin_tests = [
   Alcotest.test_case "kotlin chained calls" `Quick test_kotlin_chained_calls;
   Alcotest.test_case "kotlin comparison" `Quick test_kotlin_comparison;
   Alcotest.test_case "kotlin null assertion" `Quick test_kotlin_null_assertion;
+]
+
+(* === PHP-specific tests === *)
+
+(* Test: basic PHP echo pattern *)
+let test_php_echo () =
+  let pattern_text = {|@@
+metavar $MSG: single
+@@
+<?php echo $MSG;|} in
+  let source_text = {|<?php echo "Hello World"; echo $name;|} in
+  let results = Match.find_matches
+    ~language:"php"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found two echo statements" 2 (List.length results)
+
+(* Test: PHP function call pattern *)
+let test_php_function_call () =
+  let pattern_text = {|@@
+metavar $FUNC: single
+metavar $ARGS: sequence
+@@
+<?php $FUNC($ARGS);|} in
+  let source_text = {|<?php
+error_log("debug message");
+strlen($input);
+array_map($callback, $items);
+|} in
+  let results = Match.find_matches
+    ~language:"php"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found three function calls" 3 (List.length results)
+
+(* Test: PHP error_log pattern - common logging function *)
+let test_php_error_log () =
+  let pattern_text = {|@@
+metavar $MSG: single
+@@
+<?php error_log($MSG);|} in
+  let source_text = {|<?php
+function process($data) {
+    error_log("Processing: " . $data);
+    $result = doWork($data);
+    error_log("Done");
+    return $result;
+}
+|} in
+  let results = Match.find_matches
+    ~language:"php"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found two error_log calls" 2 (List.length results)
+
+(* Test: PHP variable assignment - match right-hand side expression *)
+let test_php_variable_assignment () =
+  (* Note: Can't use metavar on LHS because PHP requires $ for variables.
+     Instead, match assignments where we know the variable name. *)
+  let pattern_text = {|@@
+metavar $EXPR: single
+@@
+<?php $name = $EXPR;|} in
+  let source_text = {|<?php
+$name = "Alice";
+$name = compute($data);
+$age = 25;
+|} in
+  let results = Match.find_matches
+    ~language:"php"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found two assignments to $name" 2 (List.length results);
+  let first = List.hd results in
+  Alcotest.(check string) "$EXPR" {|"Alice"|} (List.assoc "$EXPR" first.bindings)
+
+(* Test: PHP class method pattern *)
+let test_php_class_method () =
+  let pattern_text = {|@@
+metavar $CLASS: single
+metavar $BODY: sequence
+@@
+<?php class $CLASS { $BODY }|} in
+  let source_text = {|<?php
+class UserService {
+    public function getUser($id) {
+        return $this->db->find($id);
+    }
+
+    public function deleteUser($id) {
+        $this->db->delete($id);
+    }
+}
+|} in
+  let results = Match.find_matches
+    ~language:"php"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found one class" 1 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check string) "$CLASS" "UserService" (List.assoc "$CLASS" result.bindings);
+  let body = List.assoc "$BODY" result.bindings in
+  Alcotest.(check bool) "body contains getUser" true (string_contains ~needle:"getUser" body);
+  Alcotest.(check bool) "body contains deleteUser" true (string_contains ~needle:"deleteUser" body)
+
+(* Test: PHP property access with $this *)
+let test_php_this_property () =
+  let pattern_text = {|@@
+metavar $PROP: single
+@@
+<?php $this->$PROP;|} in
+  let source_text = {|<?php
+class User {
+    public function getName() {
+        return $this->name;
+    }
+    public function getAge() {
+        return $this->age;
+    }
+}
+|} in
+  let results = Match.find_matches
+    ~language:"php"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found two property accesses" 2 (List.length results);
+  let props = List.map (fun (r : Match.match_result) ->
+    List.assoc "$PROP" r.bindings
+  ) results in
+  Alcotest.(check bool) "found name prop" true (List.mem "name" props);
+  Alcotest.(check bool) "found age prop" true (List.mem "age" props)
+
+(* Test: PHP method call on $this *)
+let test_php_this_method_call () =
+  let pattern_text = {|@@
+metavar $METHOD: single
+metavar $ARGS: sequence
+@@
+<?php $this->$METHOD($ARGS);|} in
+  let source_text = {|<?php
+class Service {
+    public function process() {
+        $this->validate($input);
+        $this->save($data);
+        $this->notify($user, $message);
+    }
+}
+|} in
+  let results = Match.find_matches
+    ~language:"php"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found three method calls" 3 (List.length results);
+  let methods = List.map (fun (r : Match.match_result) ->
+    List.assoc "$METHOD" r.bindings
+  ) results in
+  Alcotest.(check bool) "found validate" true (List.mem "validate" methods);
+  Alcotest.(check bool) "found save" true (List.mem "save" methods);
+  Alcotest.(check bool) "found notify" true (List.mem "notify" methods)
+
+(* Test: PHP foreach loop *)
+let test_php_foreach () =
+  let pattern_text = {|@@
+metavar $ARRAY: single
+metavar $ITEM: single
+metavar $BODY: single
+@@
+<?php foreach ($ARRAY as $ITEM) $BODY|} in
+  let source_text = {|<?php
+foreach ($users as $user) {
+    echo $user->name;
+}
+|} in
+  let results = Match.find_matches
+    ~language:"php"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found foreach loop" 1 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check string) "$ARRAY" "$users" (List.assoc "$ARRAY" result.bindings);
+  Alcotest.(check string) "$ITEM" "$user" (List.assoc "$ITEM" result.bindings)
+
+(* Test: PHP foreach with key => value *)
+let test_php_foreach_key_value () =
+  let pattern_text = {|@@
+metavar $ARRAY: single
+metavar $KEY: single
+metavar $VALUE: single
+metavar $BODY: single
+@@
+<?php foreach ($ARRAY as $KEY => $VALUE) $BODY|} in
+  let source_text = {|<?php
+foreach ($config as $key => $value) {
+    echo "$key: $value";
+}
+|} in
+  let results = Match.find_matches
+    ~language:"php"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found foreach with key-value" 1 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check string) "$ARRAY" "$config" (List.assoc "$ARRAY" result.bindings);
+  Alcotest.(check string) "$KEY" "$key" (List.assoc "$KEY" result.bindings);
+  Alcotest.(check string) "$VALUE" "$value" (List.assoc "$VALUE" result.bindings)
+
+(* Test: PHP try-catch block - match function calls inside catch blocks *)
+let test_php_try_catch () =
+  (* PHP try-catch patterns are complex due to required {} blocks.
+     Test that we can match specific function calls inside catch blocks
+     using nested patterns. *)
+  let pattern_text = {|@@
+metavar $TYPE: single
+metavar $CATCH_BODY: sequence
+@@
+<?php try {} catch ($TYPE $e) { $CATCH_BODY }
+
+@@
+metavar $MSG: single
+@@
+<?php error_log($MSG);|} in
+  let source_text = {|<?php
+try {} catch (Exception $e) {
+    error_log("caught exception");
+}
+try {} catch (RuntimeException $e) {
+    error_log("runtime error");
+}
+error_log("outside catch");
+|} in
+  let results = Match.find_nested_matches
+    ~language:"php"
+    ~pattern_text
+    ~source_text in
+  (* Should find error_log inside catch blocks only, not the one outside *)
+  Alcotest.(check int) "found two error_logs in catch blocks" 2 (List.length results);
+  let types = List.map (fun (r : Match.nested_match_result) ->
+    List.assoc "$TYPE" (List.hd r.contexts).context_bindings
+  ) results in
+  Alcotest.(check bool) "found Exception" true (List.mem "Exception" types);
+  Alcotest.(check bool) "found RuntimeException" true (List.mem "RuntimeException" types)
+
+(* Test: PHP static method call *)
+let test_php_static_method () =
+  let pattern_text = {|@@
+metavar $CLASS: single
+metavar $METHOD: single
+metavar $ARGS: sequence
+@@
+<?php $CLASS::$METHOD($ARGS);|} in
+  let source_text = {|<?php
+$user = User::find($id);
+$config = Config::get("database");
+Logger::info("Started");
+|} in
+  let results = Match.find_matches
+    ~language:"php"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found three static calls" 3 (List.length results);
+  let first = List.hd results in
+  Alcotest.(check string) "$CLASS" "User" (List.assoc "$CLASS" first.bindings);
+  Alcotest.(check string) "$METHOD" "find" (List.assoc "$METHOD" first.bindings)
+
+(* Test: PHP array access *)
+let test_php_array_access () =
+  let pattern_text = {|@@
+metavar $ARR: single
+metavar $KEY: single
+@@
+<?php $ARR[$KEY];|} in
+  let source_text = {|<?php
+$name = $data["name"];
+$first = $items[0];
+$value = $config[$key];
+|} in
+  let results = Match.find_matches
+    ~language:"php"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found three array accesses" 3 (List.length results)
+
+(* Test: PHP new object instantiation *)
+let test_php_new_object () =
+  let pattern_text = {|@@
+metavar $CLASS: single
+metavar $ARGS: sequence
+@@
+<?php new $CLASS($ARGS);|} in
+  let source_text = {|<?php
+$user = new User("Alice", 25);
+$db = new Database($config);
+$empty = new stdClass();
+|} in
+  let results = Match.find_matches
+    ~language:"php"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found three instantiations" 3 (List.length results);
+  let classes = List.map (fun (r : Match.match_result) ->
+    List.assoc "$CLASS" r.bindings
+  ) results in
+  Alcotest.(check bool) "found User" true (List.mem "User" classes);
+  Alcotest.(check bool) "found Database" true (List.mem "Database" classes)
+
+(* Test: PHP null coalescing operator *)
+let test_php_null_coalesce () =
+  let pattern_text = {|@@
+metavar $NULLABLE: single
+metavar $DEFAULT: single
+@@
+<?php $NULLABLE ?? $DEFAULT;|} in
+  let source_text = {|<?php
+$name = $user->name ?? "Guest";
+$port = $config["port"] ?? 8080;
+|} in
+  let results = Match.find_matches
+    ~language:"php"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found two null coalescing" 2 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check string) "$NULLABLE" {|$user->name|} (List.assoc "$NULLABLE" result.bindings);
+  Alcotest.(check string) "$DEFAULT" {|"Guest"|} (List.assoc "$DEFAULT" result.bindings)
+
+(* Test: PHP arrow function (PHP 7.4+) *)
+let test_php_arrow_function () =
+  let pattern_text = {|@@
+metavar $PARAMS: sequence
+metavar $EXPR: single
+@@
+<?php fn($PARAMS) => $EXPR;|} in
+  let source_text = {|<?php
+$double = fn($x) => $x * 2;
+$add = fn($a, $b) => $a + $b;
+$nums = array_map(fn($n) => $n * $n, $items);
+|} in
+  let results = Match.find_matches
+    ~language:"php"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found three arrow functions" 3 (List.length results)
+
+(* Test: PHP nested pattern - find error_log inside class methods *)
+let test_php_nested_in_class () =
+  let pattern_text = {|@@
+metavar $CLASS: single
+metavar $BODY: sequence
+@@
+<?php class $CLASS { $BODY }
+
+@@
+metavar $MSG: single
+@@
+<?php error_log($MSG);|} in
+  let source_text = {|<?php
+class Logger {
+    public function log($msg) {
+        error_log("Inside class: " . $msg);
+    }
+}
+
+error_log("Outside class");
+|} in
+  let results = Match.find_nested_matches
+    ~language:"php"
+    ~pattern_text
+    ~source_text in
+  (* Should only find error_log inside the class, not outside *)
+  Alcotest.(check int) "found one nested match" 1 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check string) "$CLASS" "Logger"
+    (List.assoc "$CLASS" (List.hd result.contexts).context_bindings);
+  let msg = List.assoc "$MSG" result.inner_bindings in
+  Alcotest.(check bool) "msg contains Inside class" true (string_contains ~needle:"Inside class" msg)
+
+(* Test: PHP chained method calls - match method names in chain *)
+let test_php_chained_calls () =
+  (* Note: Can't use metavar for object ($query) because PHP variables need $.
+     Instead, match specific chain pattern with known object variable. *)
+  let pattern_text = {|@@
+metavar $M1: single
+metavar $M2: single
+@@
+<?php $query->$M1()->$M2();|} in
+  let source_text = {|<?php
+$result = $query->where()->orderBy();
+$other = $query->select()->limit();
+|} in
+  let results = Match.find_matches
+    ~language:"php"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found two chained calls on $query" 2 (List.length results);
+  let first = List.hd results in
+  Alcotest.(check string) "$M1" "where" (List.assoc "$M1" first.bindings);
+  Alcotest.(check string) "$M2" "orderBy" (List.assoc "$M2" first.bindings)
+
+(* Test: PHP return statement *)
+let test_php_return () =
+  let pattern_text = {|@@
+metavar $EXPR: single
+@@
+<?php return $EXPR;|} in
+  let source_text = {|<?php
+function getUser($id) {
+    if (!$id) {
+        return null;
+    }
+    return $this->db->find($id);
+}
+|} in
+  let results = Match.find_matches
+    ~language:"php"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found two return statements" 2 (List.length results)
+
+let php_tests = [
+  Alcotest.test_case "php echo" `Quick test_php_echo;
+  Alcotest.test_case "php function call" `Quick test_php_function_call;
+  Alcotest.test_case "php error_log" `Quick test_php_error_log;
+  Alcotest.test_case "php variable assignment" `Quick test_php_variable_assignment;
+  Alcotest.test_case "php class method" `Quick test_php_class_method;
+  Alcotest.test_case "php this property" `Quick test_php_this_property;
+  Alcotest.test_case "php this method call" `Quick test_php_this_method_call;
+  Alcotest.test_case "php foreach" `Quick test_php_foreach;
+  Alcotest.test_case "php foreach key value" `Quick test_php_foreach_key_value;
+  Alcotest.test_case "php try catch" `Quick test_php_try_catch;
+  Alcotest.test_case "php static method" `Quick test_php_static_method;
+  Alcotest.test_case "php array access" `Quick test_php_array_access;
+  Alcotest.test_case "php new object" `Quick test_php_new_object;
+  Alcotest.test_case "php null coalesce" `Quick test_php_null_coalesce;
+  Alcotest.test_case "php arrow function" `Quick test_php_arrow_function;
+  Alcotest.test_case "php nested in class" `Quick test_php_nested_in_class;
+  Alcotest.test_case "php chained calls" `Quick test_php_chained_calls;
+  Alcotest.test_case "php return" `Quick test_php_return;
+]
+
+(* === Field-based matching tests === *)
+
+(* Test: PHP function with attributes - field mode should match despite extra children *)
+let test_field_php_attributes () =
+  let pattern = {|@@
+match: field
+@@
+<?php
+function test() {
+    echo "Test";
+}|} in
+  let source = {|<?php
+#[Attr1]
+function test() {
+    echo "Test";
+}|} in
+  let results = Match.find_matches ~language:"php" ~pattern_text:pattern ~source_text:source in
+  Alcotest.(check int) "matches with attributes" 1 (List.length results)
+
+(* Test: verify ordering is preserved within fields *)
+let test_field_order_preserved () =
+  let pattern = {|@@
+match: field
+@@
+<?php
+function test() {
+    $a = 1;
+    $b = 2;
+}|} in
+  let source_correct = {|<?php
+#[Attr]
+function test() {
+    $a = 1;
+    $b = 2;
+}|} in
+  let source_wrong = {|<?php
+function test() {
+    $b = 2;
+    $a = 1;
+}|} in
+  (* Should match correct order *)
+  let r1 = Match.find_matches ~language:"php" ~pattern_text:pattern ~source_text:source_correct in
+  Alcotest.(check int) "matches correct order" 1 (List.length r1);
+  (* Should NOT match wrong order *)
+  let r2 = Match.find_matches ~language:"php" ~pattern_text:pattern ~source_text:source_wrong in
+  Alcotest.(check int) "rejects wrong order" 0 (List.length r2)
+
+(* Test: field matching with metavars *)
+let test_field_with_metavars () =
+  let pattern = {|@@
+match: field
+metavar $BODY: single
+@@
+<?php
+function test() {
+    $BODY
+}|} in
+  let source = {|<?php
+#[Route("/api")]
+#[Auth]
+function test() {
+    return $data;
+}|} in
+  let results = Match.find_matches ~language:"php" ~pattern_text:pattern ~source_text:source in
+  Alcotest.(check int) "matches with metavar" 1 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check bool) "has $BODY binding" true (List.mem_assoc "$BODY" result.bindings)
+
+(* Test: field matching without attributes still works *)
+let test_field_no_attributes () =
+  let pattern = {|@@
+match: field
+@@
+<?php
+function test() {
+    echo "Test";
+}|} in
+  let source = {|<?php
+function test() {
+    echo "Test";
+}|} in
+  let results = Match.find_matches ~language:"php" ~pattern_text:pattern ~source_text:source in
+  Alcotest.(check int) "matches without attributes" 1 (List.length results)
+
+(* Test: field matching in TypeScript class with decorators *)
+let test_field_typescript_decorators () =
+  let pattern = {|@@
+match: field
+metavar $NAME: single
+metavar $BODY: sequence
+@@
+class $NAME { $BODY }|} in
+  let source = {|
+@Component({selector: 'app'})
+class MyComponent {
+  render() { return null; }
+}|} in
+  let results = Match.find_matches ~language:"typescript" ~pattern_text:pattern ~source_text:source in
+  Alcotest.(check int) "matches class with decorator" 1 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check string) "$NAME" "MyComponent" (List.assoc "$NAME" result.bindings)
+
+(* Test: field mode matches by field regardless of extra source fields *)
+let test_field_extra_source_fields () =
+  (* Pattern has body and name, source has attributes + body + name *)
+  let pattern = {|@@
+match: field
+metavar $NAME: single
+metavar $BODY: sequence
+@@
+<?php
+function $NAME() { $BODY }|} in
+  let source = {|<?php
+#[Route("/")]
+function foo() { return 1; }
+#[Auth]
+function bar() { echo "hi"; }
+|} in
+  let results = Match.find_matches ~language:"php" ~pattern_text:pattern ~source_text:source in
+  (* Should match both - attributes field is ignored since pattern doesn't have it *)
+  Alcotest.(check int) "matches both functions with attributes" 2 (List.length results)
+
+let field_tests = [
+  Alcotest.test_case "field php attributes" `Quick test_field_php_attributes;
+  Alcotest.test_case "field order preserved" `Quick test_field_order_preserved;
+  Alcotest.test_case "field with metavars" `Quick test_field_with_metavars;
+  Alcotest.test_case "field no attributes" `Quick test_field_no_attributes;
+  Alcotest.test_case "field typescript decorators" `Quick test_field_typescript_decorators;
+  Alcotest.test_case "field extra source fields" `Quick test_field_extra_source_fields;
+]
+
+(* === Ellipsis (...) tests === *)
+
+(* Test: ellipsis in statement context *)
+let test_ellipsis_statements () =
+  let pattern = {|@@
+@@
+
+<?php
+
+function test() {
+    ...
+    echo "B";
+    echo "C";
+    ...
+}|} in
+  let source = {|<?php
+
+function test ()
+{
+    echo "A";
+    echo "B";
+    echo "C";
+    echo "D";
+}|} in
+  let results = Match.find_matches ~language:"php" ~pattern_text:pattern ~source_text:source in
+  Alcotest.(check int) "found one match" 1 (List.length results);
+  let result = List.hd results in
+  (* Check that ellipsis captured the right content *)
+  Alcotest.(check bool) "has ..._0 binding" true (List.mem_assoc "..._0" result.bindings);
+  Alcotest.(check bool) "has ..._1 binding" true (List.mem_assoc "..._1" result.bindings);
+  let first_ellipsis = List.assoc "..._0" result.bindings in
+  let second_ellipsis = List.assoc "..._1" result.bindings in
+  Alcotest.(check bool) "first ellipsis has A" true (string_contains ~needle:"A" first_ellipsis);
+  Alcotest.(check bool) "second ellipsis has D" true (string_contains ~needle:"D" second_ellipsis)
+
+(* Test: ellipsis in argument context *)
+let test_ellipsis_arguments () =
+  let pattern = {|@@
+metavar $FUNC: single
+@@
+<?php $FUNC(..., $x, ...);|} in
+  let source = {|<?php
+foo($a, $x, $b);
+bar($x);
+baz($m, $n, $x, $o, $p);
+|} in
+  let results = Match.find_matches ~language:"php" ~pattern_text:pattern ~source_text:source in
+  Alcotest.(check int) "found three matches" 3 (List.length results)
+
+(* Test: ellipsis with zero matches *)
+let test_ellipsis_zero () =
+  let pattern = {|@@
+@@
+<?php
+function test() {
+    ...
+    echo "only";
+    ...
+}|} in
+  let source = {|<?php
+function test() {
+    echo "only";
+}|} in
+  let results = Match.find_matches ~language:"php" ~pattern_text:pattern ~source_text:source in
+  Alcotest.(check int) "found one match with empty ellipsis" 1 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check string) "first ellipsis empty" "" (List.assoc "..._0" result.bindings);
+  Alcotest.(check string) "second ellipsis empty" "" (List.assoc "..._1" result.bindings)
+
+(* Test: PHP spread operator not confused with ellipsis *)
+let test_ellipsis_not_spread () =
+  let pattern = {|@@
+metavar $FUNC: single
+metavar $ARR: single
+@@
+<?php $FUNC(...$ARR);|} in
+  let source = {|<?php
+foo(...$args);
+bar($a, ...$rest);
+|} in
+  let results = Match.find_matches ~language:"php" ~pattern_text:pattern ~source_text:source in
+  Alcotest.(check int) "found spread operator match" 1 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check string) "$ARR" "$args" (List.assoc "$ARR" result.bindings)
+
+(* Test: ellipsis in TypeScript/JavaScript *)
+let test_ellipsis_typescript () =
+  let pattern = {|@@
+metavar $NAME: single
+@@
+function $NAME() {
+    ...
+    console.log("middle");
+    ...
+}|} in
+  let source = {|
+function test() {
+    setup();
+    console.log("middle");
+    cleanup();
+}|} in
+  let results = Match.find_matches ~language:"typescript" ~pattern_text:pattern ~source_text:source in
+  Alcotest.(check int) "found typescript match" 1 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check string) "$NAME" "test" (List.assoc "$NAME" result.bindings)
+
+(* Test: ellipsis in TypeScript arrays *)
+let test_ellipsis_typescript_array () =
+  let pattern = {|@@
+@@
+[..., "middle", ...]|} in
+  let source = {|
+const arr1 = ["a", "middle", "b"];
+const arr2 = ["middle"];
+const arr3 = ["x", "y", "middle", "z"];
+|} in
+  let results = Match.find_matches ~language:"typescript" ~pattern_text:pattern ~source_text:source in
+  Alcotest.(check int) "found three array matches" 3 (List.length results)
+
+(* Test: ellipsis in TypeScript class methods *)
+let test_ellipsis_typescript_class () =
+  let pattern = {|@@
+metavar $NAME: single
+@@
+class $NAME {
+    ...
+    render() {}
+    ...
+}|} in
+  let source = {|
+class Component {
+    constructor() {}
+    setup() {}
+    render() {}
+    cleanup() {}
+}
+
+class Simple {
+    render() {}
+}
+|} in
+  let results = Match.find_matches ~language:"typescript" ~pattern_text:pattern ~source_text:source in
+  Alcotest.(check int) "found two class matches" 2 (List.length results);
+  let names = List.map (fun (r : Match.match_result) ->
+    List.assoc "$NAME" r.bindings
+  ) results in
+  Alcotest.(check bool) "found Component" true (List.mem "Component" names);
+  Alcotest.(check bool) "found Simple" true (List.mem "Simple" names)
+
+(* Test: ellipsis in TSX function components *)
+let test_ellipsis_tsx_function () =
+  let pattern = {|@@
+metavar $NAME: single
+@@
+function $NAME() {
+    ...
+    return <div />;
+}|} in
+  let source = {|
+function Header() {
+    const title = "Hello";
+    return <div />;
+}
+
+function Footer() {
+    return <div />;
+}
+|} in
+  let results = Match.find_matches ~language:"tsx" ~pattern_text:pattern ~source_text:source in
+  Alcotest.(check int) "found two TSX function matches" 2 (List.length results);
+  let names = List.map (fun (r : Match.match_result) ->
+    List.assoc "$NAME" r.bindings
+  ) results in
+  Alcotest.(check bool) "found Header" true (List.mem "Header" names);
+  Alcotest.(check bool) "found Footer" true (List.mem "Footer" names)
+
+(* Test: ellipsis in TSX arrow function components *)
+let test_ellipsis_tsx_arrow () =
+  let pattern = {|@@
+metavar $NAME: single
+@@
+const $NAME = () => {
+    ...
+    return <div />;
+};|} in
+  let source = {|
+const Header = () => {
+    const title = "Hello";
+    return <div />;
+};
+
+const Footer = () => {
+    return <div />;
+};
+|} in
+  let results = Match.find_matches ~language:"tsx" ~pattern_text:pattern ~source_text:source in
+  Alcotest.(check int) "found two TSX arrow function matches" 2 (List.length results)
+
+(* Test: TypeScript spread operator preserved (exact match) *)
+let test_ellipsis_typescript_spread () =
+  let pattern = {|@@
+metavar $OBJ: single
+@@
+{ ...$OBJ }|} in
+  let source = {|
+const copy = { ...original };
+const another = { ...source };
+|} in
+  let results = Match.find_matches ~language:"typescript" ~pattern_text:pattern ~source_text:source in
+  Alcotest.(check int) "found spread patterns" 2 (List.length results);
+  let objs = List.map (fun (r : Match.match_result) ->
+    List.assoc "$OBJ" r.bindings
+  ) results in
+  Alcotest.(check bool) "found original" true (List.mem "original" objs);
+  Alcotest.(check bool) "found source" true (List.mem "source" objs)
+
+let ellipsis_tests = [
+  Alcotest.test_case "ellipsis statements" `Quick test_ellipsis_statements;
+  Alcotest.test_case "ellipsis arguments" `Quick test_ellipsis_arguments;
+  Alcotest.test_case "ellipsis zero" `Quick test_ellipsis_zero;
+  Alcotest.test_case "ellipsis not spread" `Quick test_ellipsis_not_spread;
+  Alcotest.test_case "ellipsis typescript" `Quick test_ellipsis_typescript;
+  Alcotest.test_case "ellipsis typescript array" `Quick test_ellipsis_typescript_array;
+  Alcotest.test_case "ellipsis typescript class" `Quick test_ellipsis_typescript_class;
+  Alcotest.test_case "ellipsis tsx function" `Quick test_ellipsis_tsx_function;
+  Alcotest.test_case "ellipsis tsx arrow" `Quick test_ellipsis_tsx_arrow;
+  Alcotest.test_case "ellipsis typescript spread" `Quick test_ellipsis_typescript_spread;
 ]
