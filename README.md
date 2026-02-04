@@ -16,14 +16,31 @@ An OCaml library and CLI tool for parsing source files using [tree-sitter](https
 
 - OCaml 5.2+
 - opam
-- tree-sitter library (`libtree-sitter`)
+- tree-sitter library (`libtree-sitter`) - see below
 - npm (to fetch grammar sources)
+
+#### Installing tree-sitter
+
+**macOS:**
+```bash
+brew install tree-sitter
+```
+
+**Ubuntu/Debian:**
+```bash
+sudo apt install libtree-sitter-dev
+```
+
+**Arch Linux:**
+```bash
+sudo pacman -S tree-sitter
+```
 
 ### Build Steps
 
 ```bash
-# Install OCaml dependencies
-opam install . --deps-only
+# Install OCaml dependencies (add --with-test to include test/benchmark deps)
+opam install . --deps-only --with-test
 
 # Build grammar libraries (TypeScript, Kotlin)
 cd grammars && ./build-grammars.sh && cd ..
