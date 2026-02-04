@@ -2,6 +2,12 @@
 (name diffract)
 (generate_opam_files true)
 
+(maintainers "Jesper Andersen")
+(authors "Jesper Andersen")
+(homepage "https://github.com/jespera/diffract")
+(bug_reports "https://github.com/jespera/diffract/issues")
+(source (github jespera/diffract))
+
 (package
  (name diffract)
  (license GPL-3.0-or-later)
