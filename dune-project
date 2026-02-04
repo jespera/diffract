@@ -15,4 +15,6 @@
   ctypes-foreign
   (alcotest :with-test)
   (bechamel :with-test)
+  (bechamel-notty :with-test)
+  (notty :with-test)
   (yojson :with-test)))
