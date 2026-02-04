@@ -1,15 +1,72 @@
 # Pattern File Format
 
-Pattern files use `@@` delimiters with explicit metavariable declarations:
+Pattern files use `@@` delimiters with a **required** match mode and optional metavariable declarations:
 
 ```
 @@
+match: strict
 metavar $obj: single
 metavar $method: single
 metavar $arg: single
 @@
 $obj.$method($arg)
 ```
+
+**Match modes (required - must specify one):**
+- `match: strict` - Exact positional matching (no extra children allowed, ordered). Use for function calls, arrays.
+- `match: partial` - Subset matching (ignores extra children, unordered). Use for object literals, JSX attributes.
+- `match: field` - Field-based matching (matches by tree-sitter field name, ignores extra fields, preserves order within each field). Use for definitions with decorators/attributes.
+
+## Comparing Match Modes
+
+The three modes behave differently when the source has extra children or different ordering:
+
+### Example: Function calls (use `strict`)
+
+Pattern: `foo($a, $b)`
+
+| Source | strict | partial | field |
+|--------|--------|---------|-------|
+| `foo(1, 2)` | ✓ match | ✓ match | ✓ match |
+| `foo(1, 2, 3)` | ✗ no match (extra arg) | ✓ match | ✓ match |
+| `foo(2, 1)` | ✓ match ($a=2, $b=1) | ✓ match | ✓ match |
+
+For function calls, you typically want `strict` because `foo(1, 2)` and `foo(1, 2, 3)` are semantically different calls.
+
+### Example: Object literals (use `partial`)
+
+Pattern: `{ x: $X, y: $Y }`
+
+| Source | strict | partial | field |
+|--------|--------|---------|-------|
+| `{ x: 1, y: 2 }` | ✓ match | ✓ match | ✓ match |
+| `{ x: 1, y: 2, z: 3 }` | ✗ no match | ✓ match | ✓ match |
+| `{ y: 2, x: 1 }` | ✗ no match (wrong order) | ✓ match | ✗ no match |
+
+For object literals, you typically want `partial` because property order doesn't matter and you may not care about extra properties.
+
+### Example: Function definitions with decorators (use `field`)
+
+Pattern:
+```
+function $NAME() { $BODY }
+```
+
+| Source | strict | partial | field |
+|--------|--------|---------|-------|
+| `function foo() { return 1; }` | ✓ match | ✓ match | ✓ match |
+| `@decorator function foo() { return 1; }` | ✗ no match | ✓ match | ✓ match |
+| `function foo() { return 1; return 2; }` | ✗ no match | ✓ match | ✗ no match |
+
+For function definitions, `field` is ideal: it ignores decorators/attributes (which are in a different tree-sitter field) while still enforcing order within the function body.
+
+### Summary
+
+| Mode | Extra children | Ordering | Best for |
+|------|---------------|----------|----------|
+| `strict` | Fail | Required | Function calls, arrays, exact structure |
+| `partial` | Ignored | Ignored | Object literals, JSX attributes |
+| `field` | Ignored (different field) | Required within fields | Definitions with decorators/attributes |
 
 Each metavariable must be declared with a type:
 - `single` - matches exactly one AST node (which may be a compound expression)
@@ -18,6 +75,7 @@ Each metavariable must be declared with a type:
 **Example with sequence metavar:**
 ```
 @@
+match: strict
 metavar $class_name: single
 metavar $body: sequence
 @@
@@ -58,12 +116,14 @@ Use multiple `@@` sections for nested/scoped matching. Each context pattern rest
 
 ```
 @@
+match: strict
 metavar $class_name: single
 metavar $body: single
 @@
 class $class_name { $body }
 
 @@
+match: strict
 metavar $msg: single
 @@
 console.log($msg)
@@ -75,6 +135,7 @@ Use `on $VAR` to match directly against a previously-bound node instead of trave
 
 ```
 @@
+match: strict
 metavar $OBJ: single
 @@
 foo($OBJ)
@@ -132,6 +193,7 @@ Printf.printf "%s\n" (Diffract.Antiunify.to_string ann)
 
 (* Pattern matching with concrete syntax *)
 let pattern_text = {|@@
+match: strict
 metavar $obj: single
 metavar $method: single
 @@

@@ -22,14 +22,17 @@ let generate_source ~num_logs ~num_errors ~num_classes =
 (* Patterns that match different node types *)
 let patterns = [
   {|@@
+match: strict
 metavar $msg: single
 @@
 console.log($msg)|};
   {|@@
+match: strict
 metavar $msg: single
 @@
 console.error($msg)|};
   {|@@
+match: strict
 metavar $name: single
 metavar $body: sequence
 @@
@@ -169,11 +172,13 @@ const j = i * d;
 
   let test_patterns = [
     ("class (rare)", {|@@
+match: strict
 metavar $name: single
 metavar $body: sequence
 @@
 class $name { $body }|});
     ("const (common)", {|@@
+match: strict
 metavar $name: single
 metavar $val: single
 @@

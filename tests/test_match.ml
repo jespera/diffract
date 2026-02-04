@@ -21,6 +21,7 @@ let string_contains ~needle haystack =
 (* Test: parse preamble *)
 let test_parse_simple_pattern () =
   let pattern_text = {|@@
+match: strict
 metavar $msg: single
 @@
 console.log($msg)|} in
@@ -38,6 +39,7 @@ console.log($msg)|} in
 (* Test: multiple metavars *)
 let test_multiple_metavars () =
   let pattern_text = {|@@
+match: strict
 metavar $obj: single
 metavar $method: single
 metavar $arg: single
@@ -55,6 +57,7 @@ $obj.$method($arg)|} in
 (* Test: no matches *)
 let test_no_matches () =
   let pattern_text = {|@@
+match: strict
 metavar $x: single
 @@
 nonexistent($x)|} in
@@ -67,6 +70,7 @@ nonexistent($x)|} in
 (* Test: multiple matches *)
 let test_multiple_matches () =
   let pattern_text = {|@@
+match: strict
 metavar $n: single
 @@
 console.log($n)|} in
@@ -84,6 +88,7 @@ console.log($n)|} in
 (* Test: metavar used twice must match same value *)
 let test_metavar_consistency () =
   let pattern_text = {|@@
+match: strict
 metavar $x: single
 @@
 $x + $x|} in
@@ -99,6 +104,7 @@ $x + $x|} in
 (* Test: format_match output *)
 let test_format_match () =
   let pattern_text = {|@@
+match: strict
 metavar $msg: single
 @@
 console.log($msg)|} in
@@ -115,6 +121,7 @@ console.log($msg)|} in
 (* Test: undeclared metavar raises error *)
 let test_undeclared_metavar () =
   let pattern_text = {|@@
+match: strict
 metavar $MSG: single
 @@
 console.log($MESAGE)|} in  (* Typo: $MESAGE instead of $MSG *)
@@ -129,12 +136,14 @@ console.log($MESAGE)|} in  (* Typo: $MESAGE instead of $MSG *)
 (* Test: single context level - matches only within context *)
 let test_single_context () =
   let pattern_text = {|@@
+match: strict
 metavar $class_name: single
 metavar $body: single
 @@
 class $class_name { $body }
 
 @@
+match: strict
 metavar $msg: single
 @@
 console.log($msg)|} in
@@ -165,18 +174,21 @@ console.log("outside class");
 let test_multiple_context_levels () =
   (* Use nested if statements to test multiple context levels *)
   let pattern_text = {|@@
+match: strict
 metavar $outer_cond: single
 metavar $outer_body: single
 @@
 if ($outer_cond) { $outer_body }
 
 @@
+match: strict
 metavar $inner_cond: single
 metavar $inner_body: single
 @@
 if ($inner_cond) { $inner_body }
 
 @@
+match: strict
 metavar $msg: single
 @@
 console.log($msg)|} in
@@ -201,12 +213,14 @@ if (a) {
 (* Test: binding inheritance - inner sees outer bindings *)
 let test_binding_inheritance () =
   let pattern_text = {|@@
+match: strict
 metavar $class_name: single
 metavar $body: single
 @@
 class $class_name { $body }
 
 @@
+match: strict
 metavar $msg: single
 @@
 console.log($msg)|} in
@@ -232,12 +246,14 @@ class MyClass {
 (* Test: binding consistency across levels *)
 let test_binding_consistency_across_levels () =
   let pattern_text = {|@@
+match: strict
 metavar $name: single
 metavar $body: single
 @@
 class $name { $body }
 
 @@
+match: strict
 metavar $name: single
 @@
 console.log($name)|} in
@@ -269,12 +285,14 @@ class Bar {
 (* Test: no match when inner pattern is outside all contexts *)
 let test_no_match_outside_context () =
   let pattern_text = {|@@
+match: strict
 metavar $class_name: single
 metavar $body: single
 @@
 class $class_name { $body }
 
 @@
+match: strict
 metavar $x: single
 @@
 outsideCall($x)|} in
@@ -298,12 +316,14 @@ outsideCall(2);
    Due to memory management of tree-sitter nodes, we keep this test simple. *)
 let test_format_nested_match () =
   let pattern_text = {|@@
+match: strict
 metavar $class_name: single
 metavar $body: single
 @@
 class $class_name { $body }
 
 @@
+match: strict
 metavar $msg: single
 @@
 console.log($msg)|} in
@@ -327,6 +347,7 @@ class Logger {
 (* Test: single section pattern works with find_nested_matches (backward compat) *)
 let test_single_section_backward_compat () =
   let pattern_text = {|@@
+match: strict
 metavar $msg: single
 @@
 console.log($msg)|} in
@@ -343,6 +364,7 @@ console.log($msg)|} in
 (* Test: sequence metavar matches multiple children *)
 let test_sequence_metavar_multiple () =
   let pattern_text = {|@@
+match: strict
 metavar $class_name: single
 metavar $body: sequence
 @@
@@ -369,6 +391,7 @@ class Service {
 (* Test: sequence metavar matches zero children *)
 let test_sequence_metavar_zero () =
   let pattern_text = {|@@
+match: strict
 metavar $items: sequence
 @@
 [$items]|} in
@@ -385,12 +408,14 @@ metavar $items: sequence
 (* Test: sequence metavar in nested patterns *)
 let test_sequence_metavar_nested () =
   let pattern_text = {|@@
+match: strict
 metavar $class_name: single
 metavar $body: sequence
 @@
 class $class_name { $body }
 
 @@
+match: strict
 metavar $msg: single
 @@
 console.log($msg)|} in
@@ -422,6 +447,7 @@ console.log("outside");
 (* Test: index-based matching produces same results as traversal *)
 let test_indexed_same_as_traversal () =
   let pattern_text = {|@@
+match: strict
 metavar $msg: single
 @@
 console.log($msg)|} in
@@ -438,6 +464,7 @@ console.log($msg)|} in
 (* Test: index-based with metavar root falls back correctly *)
 let test_indexed_metavar_root_fallback () =
   let pattern_text = {|@@
+match: strict
 metavar $x: single
 @@
 $x|} in
@@ -453,10 +480,12 @@ $x|} in
 let test_multi_pattern () =
   let patterns = [
     {|@@
+match: strict
 metavar $msg: single
 @@
 console.log($msg)|};
     {|@@
+match: strict
 metavar $msg: single
 @@
 console.error($msg)|};
@@ -491,6 +520,7 @@ metavar $X: single
    Section 1 matches foo($OBJ), section 2 uses 'on $OBJ' with partial matching. *)
 let test_partial_with_on_var () =
   let pattern_text = {|@@
+match: strict
 metavar $OBJ: single
 @@
 foo($OBJ)
@@ -533,6 +563,7 @@ metavar $X: single
 (* Test: exact object pattern only matches objects with exact same properties *)
 let test_exact_object_match () =
   let pattern_text = {|@@
+match: strict
 metavar $X: single
 @@
 { someField: $X }|} in
@@ -579,6 +610,7 @@ let tests = [
 (* Test: basic Kotlin println pattern *)
 let test_kotlin_println () =
   let pattern_text = {|@@
+match: strict
 metavar $NAME: single
 @@
 println($NAME)|} in
@@ -600,6 +632,7 @@ fun main() {
 (* Test: Kotlin val declaration pattern *)
 let test_kotlin_val_declaration () =
   let pattern_text = {|@@
+match: strict
 metavar $VAR: single
 metavar $EXPR: single
 @@
@@ -624,6 +657,7 @@ fun main() {
 (* Test: Kotlin function call with sequence metavar *)
 let test_kotlin_function_call_sequence () =
   let pattern_text = {|@@
+match: strict
 metavar $FUNC: single
 metavar $ARGS: sequence
 @@
@@ -651,6 +685,7 @@ fun main() {
 (* Test: Kotlin property access pattern *)
 let test_kotlin_property_access () =
   let pattern_text = {|@@
+match: strict
 metavar $OBJ: single
 metavar $PROP: single
 @@
@@ -677,6 +712,7 @@ fun processUser(user: User) {
 (* Test: Kotlin class with methods *)
 let test_kotlin_class_pattern () =
   let pattern_text = {|@@
+match: strict
 metavar $CLASS: single
 metavar $BODY: sequence
 @@
@@ -705,6 +741,7 @@ class User {
 (* Test: Kotlin when expression *)
 let test_kotlin_when_expression () =
   let pattern_text = {|@@
+match: strict
 metavar $SUBJECT: single
 metavar $BRANCHES: sequence
 @@
@@ -734,6 +771,7 @@ fun describe(x: Int): String {
    so { $PARAMS -> $BODY } only matches explicit param lambdas *)
 let test_kotlin_lambda () =
   let pattern_text = {|@@
+match: strict
 metavar $PARAM: single
 metavar $BODY: single
 @@
@@ -759,6 +797,7 @@ fun main() {
 (* Test: Kotlin safe call operator *)
 let test_kotlin_safe_call () =
   let pattern_text = {|@@
+match: strict
 metavar $OBJ: single
 metavar $MEMBER: single
 @@
@@ -780,6 +819,7 @@ fun getName(user: User?): String {
 (* Test: Kotlin elvis operator *)
 let test_kotlin_elvis () =
   let pattern_text = {|@@
+match: strict
 metavar $NULLABLE: single
 metavar $DEFAULT: single
 @@
@@ -801,6 +841,7 @@ fun getName(user: User?): String {
 (* Test: Kotlin let scope function - a common Kotlin idiom *)
 let test_kotlin_let_scope () =
   let pattern_text = {|@@
+match: strict
 metavar $OBJ: single
 metavar $BODY: single
 @@
@@ -825,6 +866,7 @@ fun process(name: String?) {
 (* Test: Kotlin if expression *)
 let test_kotlin_if_expression () =
   let pattern_text = {|@@
+match: strict
 metavar $COND: single
 metavar $THEN: single
 metavar $ELSE: single
@@ -848,6 +890,7 @@ fun max(a: Int, b: Int): Int {
 (* Test: Kotlin for loop pattern *)
 let test_kotlin_for_loop () =
   let pattern_text = {|@@
+match: strict
 metavar $VAR: single
 metavar $ITER: single
 metavar $BODY: single
@@ -874,12 +917,14 @@ fun sumList(items: List<Int>): Int {
 (* Test: Kotlin nested pattern - find println calls inside classes *)
 let test_kotlin_nested_in_class () =
   let pattern_text = {|@@
+match: strict
 metavar $CLASS: single
 metavar $BODY: sequence
 @@
 class $CLASS { $BODY }
 
 @@
+match: strict
 metavar $MSG: single
 @@
 println($MSG)|} in
@@ -909,6 +954,7 @@ fun standalone() {
 (* Test: Kotlin data class pattern *)
 let test_kotlin_data_class () =
   let pattern_text = {|@@
+match: strict
 metavar $NAME: single
 metavar $PARAMS: sequence
 @@
@@ -932,6 +978,7 @@ class RegularClass(val value: Int)
 (* Test: Kotlin chained method calls *)
 let test_kotlin_chained_calls () =
   let pattern_text = {|@@
+match: strict
 metavar $OBJ: single
 metavar $M1: single
 metavar $M2: single
@@ -955,6 +1002,7 @@ fun process(text: String): String {
 (* Test: Kotlin comparison operators *)
 let test_kotlin_comparison () =
   let pattern_text = {|@@
+match: strict
 metavar $LEFT: single
 metavar $RIGHT: single
 @@
@@ -976,6 +1024,7 @@ fun isAdult(age: Int): Boolean {
 (* Test: Kotlin null assertion *)
 let test_kotlin_null_assertion () =
   let pattern_text = {|@@
+match: strict
 metavar $EXPR: single
 @@
 $EXPR!!|} in
@@ -1017,6 +1066,7 @@ let kotlin_tests = [
 (* Test: basic PHP echo pattern *)
 let test_php_echo () =
   let pattern_text = {|@@
+match: strict
 metavar $MSG: single
 @@
 <?php echo $MSG;|} in
@@ -1030,6 +1080,7 @@ metavar $MSG: single
 (* Test: PHP function call pattern *)
 let test_php_function_call () =
   let pattern_text = {|@@
+match: strict
 metavar $FUNC: single
 metavar $ARGS: sequence
 @@
@@ -1048,6 +1099,7 @@ array_map($callback, $items);
 (* Test: PHP error_log pattern - common logging function *)
 let test_php_error_log () =
   let pattern_text = {|@@
+match: strict
 metavar $MSG: single
 @@
 <?php error_log($MSG);|} in
@@ -1070,6 +1122,7 @@ let test_php_variable_assignment () =
   (* Note: Can't use metavar on LHS because PHP requires $ for variables.
      Instead, match assignments where we know the variable name. *)
   let pattern_text = {|@@
+match: strict
 metavar $EXPR: single
 @@
 <?php $name = $EXPR;|} in
@@ -1089,6 +1142,7 @@ $age = 25;
 (* Test: PHP class method pattern *)
 let test_php_class_method () =
   let pattern_text = {|@@
+match: strict
 metavar $CLASS: single
 metavar $BODY: sequence
 @@
@@ -1118,6 +1172,7 @@ class UserService {
 (* Test: PHP property access with $this *)
 let test_php_this_property () =
   let pattern_text = {|@@
+match: strict
 metavar $PROP: single
 @@
 <?php $this->$PROP;|} in
@@ -1145,6 +1200,7 @@ class User {
 (* Test: PHP method call on $this *)
 let test_php_this_method_call () =
   let pattern_text = {|@@
+match: strict
 metavar $METHOD: single
 metavar $ARGS: sequence
 @@
@@ -1173,6 +1229,7 @@ class Service {
 (* Test: PHP foreach loop *)
 let test_php_foreach () =
   let pattern_text = {|@@
+match: strict
 metavar $ARRAY: single
 metavar $ITEM: single
 metavar $BODY: single
@@ -1195,6 +1252,7 @@ foreach ($users as $user) {
 (* Test: PHP foreach with key => value *)
 let test_php_foreach_key_value () =
   let pattern_text = {|@@
+match: strict
 metavar $ARRAY: single
 metavar $KEY: single
 metavar $VALUE: single
@@ -1222,12 +1280,14 @@ let test_php_try_catch () =
      Test that we can match specific function calls inside catch blocks
      using nested patterns. *)
   let pattern_text = {|@@
+match: strict
 metavar $TYPE: single
 metavar $CATCH_BODY: sequence
 @@
 <?php try {} catch ($TYPE $e) { $CATCH_BODY }
 
 @@
+match: strict
 metavar $MSG: single
 @@
 <?php error_log($MSG);|} in
@@ -1255,6 +1315,7 @@ error_log("outside catch");
 (* Test: PHP static method call *)
 let test_php_static_method () =
   let pattern_text = {|@@
+match: strict
 metavar $CLASS: single
 metavar $METHOD: single
 metavar $ARGS: sequence
@@ -1277,6 +1338,7 @@ Logger::info("Started");
 (* Test: PHP array access *)
 let test_php_array_access () =
   let pattern_text = {|@@
+match: strict
 metavar $ARR: single
 metavar $KEY: single
 @@
@@ -1295,6 +1357,7 @@ $value = $config[$key];
 (* Test: PHP new object instantiation *)
 let test_php_new_object () =
   let pattern_text = {|@@
+match: strict
 metavar $CLASS: single
 metavar $ARGS: sequence
 @@
@@ -1318,6 +1381,7 @@ $empty = new stdClass();
 (* Test: PHP null coalescing operator *)
 let test_php_null_coalesce () =
   let pattern_text = {|@@
+match: strict
 metavar $NULLABLE: single
 metavar $DEFAULT: single
 @@
@@ -1338,6 +1402,7 @@ $port = $config["port"] ?? 8080;
 (* Test: PHP arrow function (PHP 7.4+) *)
 let test_php_arrow_function () =
   let pattern_text = {|@@
+match: strict
 metavar $PARAMS: sequence
 metavar $EXPR: single
 @@
@@ -1356,12 +1421,14 @@ $nums = array_map(fn($n) => $n * $n, $items);
 (* Test: PHP nested pattern - find error_log inside class methods *)
 let test_php_nested_in_class () =
   let pattern_text = {|@@
+match: strict
 metavar $CLASS: single
 metavar $BODY: sequence
 @@
 <?php class $CLASS { $BODY }
 
 @@
+match: strict
 metavar $MSG: single
 @@
 <?php error_log($MSG);|} in
@@ -1391,6 +1458,7 @@ let test_php_chained_calls () =
   (* Note: Can't use metavar for object ($query) because PHP variables need $.
      Instead, match specific chain pattern with known object variable. *)
   let pattern_text = {|@@
+match: strict
 metavar $M1: single
 metavar $M2: single
 @@
@@ -1411,6 +1479,7 @@ $other = $query->select()->limit();
 (* Test: PHP return statement *)
 let test_php_return () =
   let pattern_text = {|@@
+match: strict
 metavar $EXPR: single
 @@
 <?php return $EXPR;|} in
@@ -1585,6 +1654,7 @@ let field_tests = [
 (* Test: ellipsis in statement context *)
 let test_ellipsis_statements () =
   let pattern = {|@@
+match: strict
 @@
 
 <?php
@@ -1618,6 +1688,7 @@ function test ()
 (* Test: ellipsis in argument context *)
 let test_ellipsis_arguments () =
   let pattern = {|@@
+match: strict
 metavar $FUNC: single
 @@
 <?php $FUNC(..., $x, ...);|} in
@@ -1632,6 +1703,7 @@ baz($m, $n, $x, $o, $p);
 (* Test: ellipsis with zero matches *)
 let test_ellipsis_zero () =
   let pattern = {|@@
+match: strict
 @@
 <?php
 function test() {
@@ -1652,6 +1724,7 @@ function test() {
 (* Test: PHP spread operator not confused with ellipsis *)
 let test_ellipsis_not_spread () =
   let pattern = {|@@
+match: strict
 metavar $FUNC: single
 metavar $ARR: single
 @@
@@ -1668,6 +1741,7 @@ bar($a, ...$rest);
 (* Test: ellipsis in TypeScript/JavaScript *)
 let test_ellipsis_typescript () =
   let pattern = {|@@
+match: strict
 metavar $NAME: single
 @@
 function $NAME() {
@@ -1689,6 +1763,7 @@ function test() {
 (* Test: ellipsis in TypeScript arrays *)
 let test_ellipsis_typescript_array () =
   let pattern = {|@@
+match: strict
 @@
 [..., "middle", ...]|} in
   let source = {|
@@ -1702,6 +1777,7 @@ const arr3 = ["x", "y", "middle", "z"];
 (* Test: ellipsis in TypeScript class methods *)
 let test_ellipsis_typescript_class () =
   let pattern = {|@@
+match: strict
 metavar $NAME: single
 @@
 class $NAME {
@@ -1732,6 +1808,7 @@ class Simple {
 (* Test: ellipsis in TSX function components *)
 let test_ellipsis_tsx_function () =
   let pattern = {|@@
+match: strict
 metavar $NAME: single
 @@
 function $NAME() {
@@ -1759,6 +1836,7 @@ function Footer() {
 (* Test: ellipsis in TSX arrow function components *)
 let test_ellipsis_tsx_arrow () =
   let pattern = {|@@
+match: strict
 metavar $NAME: single
 @@
 const $NAME = () => {
@@ -1781,6 +1859,7 @@ const Footer = () => {
 (* Test: TypeScript spread operator preserved (exact match) *)
 let test_ellipsis_typescript_spread () =
   let pattern = {|@@
+match: strict
 metavar $OBJ: single
 @@
 { ...$OBJ }|} in

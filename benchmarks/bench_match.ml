@@ -12,6 +12,7 @@ let generate_class_source n =
 
 (* Simple pattern - no sequence metavars *)
 let simple_pattern = {|@@
+match: strict
 metavar $obj: single
 metavar $method: single
 metavar $arg: single
@@ -27,6 +28,7 @@ Math.ceil(2.5);
 
 (* Sequence pattern for class matching *)
 let sequence_pattern = {|@@
+match: strict
 metavar $class_name: single
 metavar $body: sequence
 @@
@@ -34,12 +36,14 @@ class $class_name { $body }|}
 
 (* Nested pattern with sequence *)
 let nested_sequence_pattern = {|@@
+match: strict
 metavar $class_name: single
 metavar $body: sequence
 @@
 class $class_name { $body }
 
 @@
+match: strict
 metavar $msg: single
 @@
 console.log($msg)|}

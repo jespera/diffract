@@ -389,10 +389,12 @@ find_matches_multi(language, patterns, source):
 (* Match multiple patterns efficiently *)
 let patterns = [
   {|@@
+match: strict
 metavar $msg: single
 @@
 console.log($msg)|};
   {|@@
+match: strict
 metavar $msg: single
 @@
 console.error($msg)|};

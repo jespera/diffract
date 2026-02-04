@@ -5,6 +5,12 @@ type ast_index = {
   by_type: (string, Tree.t list) Hashtbl.t;
 }
 
+(** Match mode for child matching *)
+type match_mode =
+  | Strict   (** Exact positional matching - no extra children allowed *)
+  | Field    (** Match by field name - extras in other fields ignored, ordered within fields *)
+  | Partial  (** Unordered subset matching - extras ignored, order doesn't matter *)
+
 (** A parsed pattern with metavariable information *)
 type pattern = {
   metavars: string list;  (** Original metavar names (e.g., ["$msg"; "$fn"]) *)
@@ -13,8 +19,7 @@ type pattern = {
   tree: Tree.tree;  (** Parsed pattern tree *)
   source: string;  (** Transformed source (with placeholders) *)
   original_source: string;  (** Original pattern source (after preamble) *)
-  partial: bool;  (** If true, use subset matching for children (unordered, extras ignored) *)
-  field: bool;  (** If true, match children by field name instead of position *)
+  match_mode: match_mode;  (** How to match children *)
   on_var: string option;  (** If set, match against the node bound to this var instead of traversing *)
 }
 
@@ -66,8 +71,7 @@ type nested_pattern = {
 (** Result of parsing a single preamble line *)
 type preamble_line =
   | Metavar of string * bool  (** name, is_sequence *)
-  | MatchPartial
-  | MatchField
+  | MatchMode of match_mode
   | OnVar of string
 
 (** Parse a single preamble line.
@@ -95,10 +99,12 @@ let parse_preamble_line line =
        | _ -> failwith (Printf.sprintf "Invalid metavar type '%s' (expected 'single' or 'sequence')" typ))
     | _ ->
       failwith (Printf.sprintf "Invalid metavar declaration (expected 'metavar $name: type'): %s" line)
-  else if line = "match: partial" then
-    Some MatchPartial
+  else if line = "match: strict" then
+    Some (MatchMode Strict)
   else if line = "match: field" then
-    Some MatchField
+    Some (MatchMode Field)
+  else if line = "match: partial" then
+    Some (MatchMode Partial)
   else if String.starts_with ~prefix:"on " line then
     let var = String.sub line 3 (String.length line - 3) |> String.trim in
     if not (String.starts_with ~prefix:"$" var) then
@@ -111,8 +117,7 @@ let parse_preamble_line line =
 type preamble_result = {
   p_metavars: string list;
   p_sequence_metavars: string list;
-  p_partial: bool;
-  p_field: bool;
+  p_match_mode: match_mode option;
   p_on_var: string option;
   p_pattern_body: string;
 }
@@ -155,13 +160,11 @@ let parse_preamble text =
     (* Extract components *)
     let metavars = List.filter_map (function Metavar (n, _) -> Some n | _ -> None) parsed in
     let sequence_metavars = List.filter_map (function Metavar (n, true) -> Some n | _ -> None) parsed in
-    let partial = List.exists (function MatchPartial -> true | _ -> false) parsed in
-    let field = List.exists (function MatchField -> true | _ -> false) parsed in
+    let match_mode = List.find_map (function MatchMode m -> Some m | _ -> None) parsed in
     let on_var = List.find_map (function OnVar v -> Some v | _ -> None) parsed in
     { p_metavars = metavars;
       p_sequence_metavars = sequence_metavars;
-      p_partial = partial;
-      p_field = field;
+      p_match_mode = match_mode;
       p_on_var = on_var;
       p_pattern_body = pattern_body }
 
@@ -293,6 +296,11 @@ let preprocess_ellipsis text =
 (** Parse a pattern file/string into a pattern structure *)
 let parse_pattern ~language pattern_text =
   let preamble = parse_preamble pattern_text in
+  (* Require explicit match mode *)
+  let match_mode = match preamble.p_match_mode with
+    | Some m -> m
+    | None -> failwith "Pattern must specify match mode (match: strict, match: field, or match: partial)"
+  in
   validate_metavars preamble.p_metavars preamble.p_pattern_body;
   (* First preprocess ellipsis (...) *)
   let (after_ellipsis, ellipsis_subs) = preprocess_ellipsis preamble.p_pattern_body in
@@ -313,8 +321,7 @@ let parse_pattern ~language pattern_text =
     tree;
     source = transformed_source;
     original_source = preamble.p_pattern_body;
-    partial = preamble.p_partial;
-    field = preamble.p_field;
+    match_mode;
     on_var = preamble.p_on_var;
   }
 
@@ -474,17 +481,19 @@ and check_and_merge_bindings existing new_bindings =
 
 (** Match lists of children using arrays for O(n) sequence matching.
     Sequence metavars (marked with : sequence in preamble) can match 0 or more source children.
-    When partial=true, uses unordered subset matching (each pattern child finds any
-    matching source child, extras ignored).
-    When field=true, matches children by field name instead of position. *)
+    Match mode determines the matching strategy:
+    - Strict: exact positional matching, no extra children allowed
+    - Field: match by field name, extras in other fields ignored, ordered within fields
+    - Partial: unordered subset matching, extras ignored *)
 and match_children ~pattern ~pattern_source ~source ~substitutions
     pattern_node source_node pattern_children source_children =
-  if pattern.field then
+  match pattern.match_mode with
+  | Field ->
     match_children_field ~pattern ~pattern_source ~source ~substitutions
       pattern_node source_node
-  else if pattern.partial then
+  | Partial ->
     match_children_partial ~pattern ~pattern_source ~source ~substitutions pattern_children source_children
-  else
+  | Strict ->
     match_children_exact ~pattern ~pattern_source ~source ~substitutions pattern_children source_children
 
 (** Exact (ordered) child matching - original behavior *)
