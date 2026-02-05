@@ -1,29 +1,36 @@
 (** Internal OCaml tree representation for parsed source code *)
 
+(** Phantom type markers - these have no runtime representation.
+    We use unit as the representation since the type is never constructed. *)
+type src = unit
+type pat = unit
+type any = unit
+
 (** Position in source code *)
 type point = { row: int; column: int }
 
 (** A child node with optional field name *)
-type child = {
+type 'kind child = {
   field_name: string option;
-  node: t;
+  node: 'kind t;
 }
 
 (** A tree node with all data copied from tree-sitter *)
-and t = {
+and 'kind t = {
   node_type: string;
   is_named: bool;
   start_byte: int;
   end_byte: int;
   start_point: point;
   end_point: point;
-  children: child list;
-  named_children: t list;
+  children: 'kind child list;
+  named_children: 'kind t list;
 }
 
-(** A complete parsed tree with source *)
-type tree = {
-  root: t;
+(** A complete parsed tree with source.
+    The 'kind parameter is a phantom type - it's never used at runtime. *)
+type 'kind tree = {
+  root: 'kind t;
   source: string;
 }
 
@@ -201,10 +208,20 @@ let format_tree tree =
   format_node 0 tree.root;
   Buffer.contents buf
 
+(** {1 Phantom type conversion} *)
+
+(** Erase the source/pattern distinction on a node.
+    Safe because phantom types have identical runtime representation.
+    We use Obj.magic since all phantom types have the same runtime representation. *)
+let forget_node : 'a t -> any t = fun node -> Obj.magic node
+
+(** Erase the source/pattern distinction on a tree. *)
+let forget : 'a tree -> any tree = fun tree -> Obj.magic tree
+
 (** {1 Conversion from tree-sitter nodes} *)
 
-(** Convert a tree-sitter node to our internal representation. *)
-let rec of_ts_node source (ts_node : Node.t) : t =
+(** Convert a tree-sitter node to our internal representation (untyped). *)
+let rec of_ts_node_internal source (ts_node : Node.t) =
   let node_type = Node.node_type ts_node in
   let is_named = Node.is_named ts_node in
   let start_byte = Node.start_byte ts_node in
@@ -219,7 +236,7 @@ let rec of_ts_node source (ts_node : Node.t) : t =
   let children = List.init child_count (fun i ->
     let ts_child = Node.child ts_node i in
     let field_name = Node.field_name_for_child ts_node i in
-    { field_name; node = of_ts_node source ts_child }
+    { field_name; node = of_ts_node_internal source ts_child }
   ) in
 
   (* Extract named children *)
@@ -230,8 +247,12 @@ let rec of_ts_node source (ts_node : Node.t) : t =
   { node_type; is_named; start_byte; end_byte; start_point; end_point;
     children; named_children }
 
+(** Convert a tree-sitter node to source node *)
+let of_ts_node source ts_node : src t =
+  of_ts_node_internal source ts_node
+
 (** Convert a tree-sitter tree to our internal representation *)
-let of_ts_tree source (ts_tree : Node.tree) : tree =
+let of_ts_tree source (ts_tree : Node.tree) : src tree =
   let ts_root = Node.root ts_tree in
   let root = of_ts_node source ts_root in
   ignore(Sys.opaque_identity ts_tree);
@@ -239,8 +260,8 @@ let of_ts_tree source (ts_tree : Node.tree) : tree =
 
 (** {1 Parsing} *)
 
-(** Parse source code and return our internal tree representation *)
-let parse ~language source =
+(** Internal parsing function that returns an untyped tree record *)
+let parse_internal ~language source =
   let lang = Languages.get language in
   let parser = Tree_sitter_bindings.parser_new () in
 
@@ -254,9 +275,21 @@ let parse ~language source =
 
   let ts_tree = Node.parse parser source in
   Tree_sitter_bindings.parser_delete parser;
-  of_ts_tree source ts_tree
+  let ts_root = Node.root ts_tree in
+  let root = of_ts_node_internal source ts_root in
+  ignore(Sys.opaque_identity ts_tree);
+  { root; source }
+
+(** Parse source code and return our internal tree representation *)
+let parse ~language source : src tree =
+  parse_internal ~language source
 
 (** Parse a file and return our internal tree representation *)
-let parse_file ~language path =
+let parse_file ~language path : src tree =
   let source = In_channel.with_open_text path In_channel.input_all in
   parse ~language source
+
+(** Parse pattern code and return a pattern tree.
+    Identical parsing, but typed as a pattern tree. *)
+let parse_as_pattern ~language source : pat tree =
+  parse_internal ~language source

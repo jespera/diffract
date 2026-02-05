@@ -2,7 +2,7 @@
 
 (** Index for fast node lookup by type *)
 type ast_index = {
-  by_type: (string, Tree.t list) Hashtbl.t;
+  by_type: (string, Tree.src Tree.t list) Hashtbl.t;
 }
 
 (** Match mode for child matching *)
@@ -16,7 +16,7 @@ type pattern = {
   metavars: string list;  (** Original metavar names (e.g., ["$msg"; "$fn"]) *)
   sequence_metavars: string list;  (** Metavars that match sequences (declared with * suffix) *)
   substitutions: (string * string) list;  (** Maps original name -> placeholder *)
-  tree: Tree.tree;  (** Parsed pattern tree *)
+  tree: Tree.pat Tree.tree;  (** Parsed pattern tree (phantom-typed as pattern) *)
   source: string;  (** Transformed source (with placeholders) *)
   original_source: string;  (** Original pattern source (after preamble) *)
   match_mode: match_mode;  (** How to match children *)
@@ -25,33 +25,33 @@ type pattern = {
 
 (** A single match result *)
 type match_result = {
-  node: Tree.t;  (** The matched node *)
+  node: Tree.src Tree.t;  (** The matched source node *)
   bindings: (string * string) list;  (** Metavar name -> matched text *)
-  node_bindings: (string * Tree.t) list;  (** Metavar name -> matched node (for 'on $VAR') *)
-  sequence_node_bindings: (string * Tree.t list) list;  (** Metavar name -> matched nodes for sequences *)
+  node_bindings: (string * Tree.src Tree.t) list;  (** Metavar name -> matched node (for 'on $VAR') *)
+  sequence_node_bindings: (string * Tree.src Tree.t list) list;  (** Metavar name -> matched nodes for sequences *)
   start_point: Tree.point;
   end_point: Tree.point;
 }
 
 (** A context match for nested patterns *)
 type context_match = {
-  context_node: Tree.t;
+  context_node: Tree.src Tree.t;
   context_bindings: (string * string) list;
-  context_node_bindings: (string * Tree.t) list;
-  context_sequence_node_bindings: (string * Tree.t list) list;
+  context_node_bindings: (string * Tree.src Tree.t) list;
+  context_sequence_node_bindings: (string * Tree.src Tree.t list) list;
   context_start_point: Tree.point;
   context_end_point: Tree.point;
 }
 
 (** Result of nested pattern matching *)
 type nested_match_result = {
-  inner_node: Tree.t;
+  inner_node: Tree.src Tree.t;
   inner_bindings: (string * string) list;
-  inner_node_bindings: (string * Tree.t) list;
-  inner_sequence_node_bindings: (string * Tree.t list) list;
+  inner_node_bindings: (string * Tree.src Tree.t) list;
+  inner_sequence_node_bindings: (string * Tree.src Tree.t list) list;
   all_bindings: (string * string) list;
-  all_node_bindings: (string * Tree.t) list;
-  all_sequence_node_bindings: (string * Tree.t list) list;
+  all_node_bindings: (string * Tree.src Tree.t) list;
+  all_sequence_node_bindings: (string * Tree.src Tree.t list) list;
   contexts: context_match list;  (** outermost first *)
   start_point: Tree.point;
   end_point: Tree.point;
@@ -310,8 +310,8 @@ let parse_pattern ~language pattern_text =
   let all_substitutions = metavar_subs @ ellipsis_subs in
   (* Ellipsis var names (e.g., "..._0", "..._1") are sequence metavars *)
   let ellipsis_var_names = List.map fst ellipsis_subs in
-  (* Parse the transformed pattern with tree-sitter *)
-  let tree = Tree.parse ~language transformed_source in
+  (* Parse the transformed pattern with tree-sitter (typed as pattern tree) *)
+  let tree = Tree.parse_as_pattern ~language transformed_source in
   (* Add ellipsis var names to sequence_metavars *)
   let sequence_metavars = preamble.p_sequence_metavars @ ellipsis_var_names in
   {
@@ -365,10 +365,10 @@ let parse_nested_pattern ~language pattern_text =
   let patterns = List.map (parse_pattern ~language) sections in
   { patterns }
 
-(** Check if a node's text is a placeholder, return the original metavar name if so.
+(** Check if a pattern node's text is a placeholder, return the original metavar name if so.
     Also handles wrapper nodes (like expression_statement) that contain just a placeholder
     plus a trailing semicolon. This allows patterns like `$X;` in PHP to work. *)
-let is_placeholder substitutions source node =
+let is_placeholder substitutions source (node : Tree.pat Tree.t) =
   let text = Tree.text source node in
   (* First check if node's text directly matches *)
   match List.find_map (fun (var, placeholder) ->
@@ -391,17 +391,17 @@ let is_placeholder substitutions source node =
         None
     | _ -> None
 
-(** Check if a node's text is a placeholder for a sequence metavar *)
-let is_sequence_placeholder ~pattern substitutions source node =
+(** Check if a pattern node's text is a placeholder for a sequence metavar *)
+let is_sequence_placeholder ~pattern substitutions source (node : Tree.pat Tree.t) =
   match is_placeholder substitutions source node with
   | Some var_name -> List.mem var_name pattern.sequence_metavars
   | None -> false
 
-(** Match bindings: text bindings and node bindings *)
+(** Match bindings: text bindings and node bindings (from source) *)
 type match_bindings = {
   text_bindings: (string * string) list;
-  node_bindings: (string * Tree.t) list;
-  sequence_node_bindings: (string * Tree.t list) list;  (** For sequence metavars *)
+  node_bindings: (string * Tree.src Tree.t) list;
+  sequence_node_bindings: (string * Tree.src Tree.t list) list;  (** For sequence metavars *)
 }
 
 let empty_bindings = { text_bindings = []; node_bindings = []; sequence_node_bindings = [] }
@@ -409,7 +409,8 @@ let empty_bindings = { text_bindings = []; node_bindings = []; sequence_node_bin
 (** Try to match a pattern node against a source node.
     Returns Some bindings if match succeeds, None otherwise.
     Bindings include both text (for display/consistency) and nodes (for 'on $VAR'). *)
-let rec match_node ~pattern ~pattern_source ~source ~substitutions pattern_node source_node =
+let rec match_node ~pattern ~pattern_source ~source ~substitutions
+    (pattern_node : Tree.pat Tree.t) (source_node : Tree.src Tree.t) =
   (* Check if pattern node is a metavar placeholder *)
   match is_placeholder substitutions pattern_source pattern_node with
   | Some var_name ->
@@ -444,7 +445,7 @@ let rec match_node ~pattern ~pattern_source ~source ~substitutions pattern_node 
 
 (** Build index mapping node_type -> list of positions in array.
     Used to skip impossible split points when matching sequences. *)
-and build_type_index arr start len =
+and build_type_index (arr : Tree.src Tree.t array) start len =
   let index = Hashtbl.create 16 in
   for i = 0 to len - 1 do
     let node = arr.(start + i) in
@@ -458,7 +459,8 @@ and build_type_index arr start len =
 
 (** Get the node type of the next non-sequence pattern element after index pi.
     Returns None if no more pattern elements or next is also a sequence. *)
-and get_next_anchor_type ~pattern ~pattern_source ~substitutions pattern_arr pi =
+and get_next_anchor_type ~pattern ~pattern_source ~substitutions
+    (pattern_arr : Tree.pat Tree.t array) pi =
   let len = Array.length pattern_arr in
   if pi >= len then None
   else
@@ -469,7 +471,7 @@ and get_next_anchor_type ~pattern ~pattern_source ~substitutions pattern_arr pi 
 
 (** Precompute cumulative texts for all possible sequence lengths.
     cumulative_texts.(i) = text of children 0..i-1 (empty string for i=0) *)
-and precompute_cumulative_texts source arr start len =
+and precompute_cumulative_texts source (arr : Tree.src Tree.t array) start len =
   if len = 0 then [| "" |]
   else
     let result = Array.make (len + 1) "" in
@@ -511,7 +513,8 @@ and check_and_merge_bindings existing new_bindings =
     - Field: match by field name, extras in other fields ignored, ordered within fields
     - Partial: unordered subset matching, extras ignored *)
 and match_children ~pattern ~pattern_source ~source ~substitutions
-    pattern_node source_node pattern_children source_children =
+    (pattern_node : Tree.pat Tree.t) (source_node : Tree.src Tree.t)
+    (pattern_children : Tree.pat Tree.t list) (source_children : Tree.src Tree.t list) =
   match pattern.match_mode with
   | Field ->
     match_children_field ~pattern ~pattern_source ~source ~substitutions
@@ -524,7 +527,8 @@ and match_children ~pattern ~pattern_source ~source ~substitutions
 (** Exact (ordered) child matching with index-based optimization.
     When a sequence is followed by a concrete pattern element, we only
     try split points where that element's node type appears in source. *)
-and match_children_exact ~pattern ~pattern_source ~source ~substitutions pattern_children source_children =
+and match_children_exact ~pattern ~pattern_source ~source ~substitutions
+    (pattern_children : Tree.pat Tree.t list) (source_children : Tree.src Tree.t list) =
   (* Convert to arrays for efficient indexing *)
   let pattern_arr = Array.of_list pattern_children in
   let source_arr = Array.of_list source_children in
@@ -609,14 +613,15 @@ and match_children_exact ~pattern ~pattern_source ~source ~substitutions pattern
 (** Partial (unordered subset) child matching.
     Each pattern child must find a matching source child (any position, consumed once matched).
     Extra source children are ignored. Order doesn't matter. *)
-and match_children_partial ~pattern ~pattern_source ~source ~substitutions pattern_children source_children =
+and match_children_partial ~pattern ~pattern_source ~source ~substitutions
+    (pattern_children : Tree.pat Tree.t list) (source_children : Tree.src Tree.t list) =
   let source_arr = Array.of_list source_children in
   let source_len = Array.length source_arr in
   (* Track which source children have been consumed *)
   let used = Array.make source_len false in
 
   (* Try to find a matching source child for pattern child p *)
-  let find_match_for bindings p =
+  let find_match_for bindings (p : Tree.pat Tree.t) =
     let is_seq = is_sequence_placeholder ~pattern substitutions pattern_source p in
     if is_seq then
       (* Sequence metavars don't make sense in partial mode - treat as single *)
@@ -656,14 +661,13 @@ and match_children_partial ~pattern ~pattern_source ~source ~substitutions patte
     Extra source fields (not in pattern) are ignored.
     Children without field names are matched positionally within their group. *)
 and match_children_field ~pattern ~pattern_source ~source ~substitutions
-    pattern_node source_node =
+    (pattern_node : Tree.pat Tree.t) (source_node : Tree.src Tree.t) =
   let pattern_children = Tree.named_children_with_fields pattern_node in
   let source_children = Tree.named_children_with_fields source_node in
 
-  (* Group children by field name: returns (field_name option * node list) list *)
-  let group_by_field children =
-    let tbl = Hashtbl.create 8 in
-    (* Track insertion order for deterministic iteration *)
+  (* Group pattern children by field name *)
+  let group_by_field_pat children =
+    let tbl : (string option, Tree.pat Tree.t list) Hashtbl.t = Hashtbl.create 8 in
     let order = ref [] in
     List.iter (fun (field, node) ->
       let existing = Hashtbl.find_opt tbl field |> Option.value ~default:[] in
@@ -673,8 +677,20 @@ and match_children_field ~pattern ~pattern_source ~source ~substitutions
     List.rev_map (fun field -> (field, Hashtbl.find tbl field)) !order
   in
 
-  let pattern_grouped = group_by_field pattern_children in
-  let source_grouped = group_by_field source_children in
+  (* Group source children by field name *)
+  let group_by_field_src children =
+    let tbl : (string option, Tree.src Tree.t list) Hashtbl.t = Hashtbl.create 8 in
+    let order = ref [] in
+    List.iter (fun (field, node) ->
+      let existing = Hashtbl.find_opt tbl field |> Option.value ~default:[] in
+      if existing = [] then order := field :: !order;
+      Hashtbl.replace tbl field (existing @ [node])
+    ) children;
+    List.rev_map (fun field -> (field, Hashtbl.find tbl field)) !order
+  in
+
+  let pattern_grouped = group_by_field_pat pattern_children in
+  let source_grouped = group_by_field_src source_children in
 
   (* Match each field group from pattern against corresponding source field group *)
   let rec match_groups bindings = function
@@ -698,8 +714,8 @@ and match_children_field ~pattern ~pattern_source ~source ~substitutions
 (** Get the innermost meaningful node from a pattern.
     This unwraps program/module wrappers and expression_statement wrappers
     to get to the actual pattern content. *)
-let get_pattern_content pattern =
-  let rec unwrap node =
+let get_pattern_content pattern : Tree.pat Tree.t =
+  let rec unwrap (node : Tree.pat Tree.t) =
     let node_type = Tree.node_type node in
     let children = Tree.named_children node in
     match node_type, children with
@@ -752,7 +768,8 @@ let find_matches_in_file ~language ~pattern_text ~source_path =
 
 (** Find all matches of a pattern within a specific subtree.
     Checks inherited bindings for conflicts and merges them with new bindings. *)
-let find_matches_in_subtree ~pattern ~inherited_bindings ~source ~root_node =
+let find_matches_in_subtree ~pattern ~inherited_bindings ~source
+    ~(root_node : Tree.src Tree.t) =
   let pattern_node = get_pattern_content pattern in
   let results = ref [] in
   root_node |> Tree.traverse (fun source_node ->
@@ -783,7 +800,8 @@ let find_matches_in_subtree ~pattern ~inherited_bindings ~source ~root_node =
     If pattern has on_var, searches within the bound node(s).
     For single metavars, treats as a sequence of one node.
     Otherwise, traverses the subtree looking for matches. *)
-let find_pattern_matches ~pattern ~inherited_bindings ~source ~root_node =
+let find_pattern_matches ~pattern ~inherited_bindings ~source
+    ~(root_node : Tree.src Tree.t) =
   match pattern.on_var with
   | Some var_name ->
     (* 'on $VAR' mode: get the target node(s) to search within *)
@@ -808,7 +826,7 @@ let find_pattern_matches ~pattern ~inherited_bindings ~source ~root_node =
     then recurse into each match's subtree with remaining patterns.
     Respects 'on $VAR' directive for direct matching against bound nodes. *)
 let rec find_nested_matches_impl ~source ~inherited_bindings
-    ~accumulated_contexts ~root_node patterns =
+    ~accumulated_contexts ~(root_node : Tree.src Tree.t) patterns =
   match patterns with
   | [] -> []  (* No patterns *)
   | [target] ->
@@ -962,8 +980,8 @@ let format_nested_match source_text result =
   format_bindings (inner_indent + 3) result.inner_bindings;
   Buffer.contents buf
 
-(** Build an index from a tree root. O(n) where n is node count. *)
-let build_index root =
+(** Build an index from a source tree root. O(n) where n is node count. *)
+let build_index (root : Tree.src Tree.t) =
   let by_type = Hashtbl.create 64 in
   Tree.traverse (fun node ->
     let typ = Tree.node_type node in
@@ -974,7 +992,7 @@ let build_index root =
 
 (** Find matches using a pre-built index.
     Falls back to full traversal if pattern root is a metavar. *)
-let find_matches_with_index ~index ~pattern ~source ~source_root =
+let find_matches_with_index ~index ~pattern ~source ~(source_root : Tree.src Tree.t) =
   let pattern_node = get_pattern_content pattern in
   (* Check if pattern root is a metavar placeholder *)
   match is_placeholder pattern.substitutions pattern.source pattern_node with

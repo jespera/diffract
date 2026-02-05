@@ -31,10 +31,10 @@ and constraint_ =
   | Descendant of t
   (** Some descendant matches pattern *)
 
-(** Match result with captured nodes *)
+(** Match result with captured source nodes *)
 type match_result = {
-  node: Tree.t;
-  captures: (string * Tree.t) list;
+  node: Tree.src Tree.t;
+  captures: (string * Tree.src Tree.t) list;
 }
 
 (** {1 Pattern constructors} *)
@@ -72,7 +72,7 @@ let descendant pattern = Descendant pattern
 
 (** {1 Matching} *)
 
-let rec match_pattern source pattern node =
+let rec match_pattern source pattern (node : Tree.src Tree.t) =
   match pattern with
   | Any -> Some { node; captures = [] }
 
@@ -96,7 +96,7 @@ let rec match_pattern source pattern node =
      | Some _ -> None
      | None -> Some { node; captures = [] })
 
-and match_constraints source constraints node =
+and match_constraints source constraints (node : Tree.src Tree.t) =
   let rec go captures = function
     | [] -> Some { node; captures }
     | c :: rest ->
@@ -106,7 +106,7 @@ and match_constraints source constraints node =
   in
   go [] constraints
 
-and match_constraint source constraint_ node captures =
+and match_constraint source constraint_ (node : Tree.src Tree.t) captures =
   match constraint_ with
   | Field (name, pattern) ->
     (match Tree.field node name with
