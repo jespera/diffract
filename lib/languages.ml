@@ -66,6 +66,19 @@ let load_language lib_basename func_name =
     with exn ->
       failwith (Printf.sprintf "Failed to load symbol %s: %s" func_name (Printexc.to_string exn))
 
+let can_load_language lib_basename func_name =
+  match try_load_library lib_basename with
+  | None -> false
+  | Some lib ->
+    let ok =
+      try
+        let _ = Dl.dlsym ~handle:lib ~symbol:func_name in
+        true
+      with Dl.DL_error _ -> false
+    in
+    (try Dl.dlclose ~handle:lib with _ -> ());
+    ok
+
 let get name =
   let name_lower = String.lowercase_ascii name in
   match Hashtbl.find_opt loaded_languages name_lower with
@@ -83,11 +96,31 @@ let get name =
       failwith (Printf.sprintf "Unknown language: %s. Available: %s" name available_str)
 
 let list_available () =
-  (* Only list languages whose libraries are actually loadable, deduplicated by library *)
-  language_info
-  |> List.filter_map (fun (name, (lib_basename, _)) ->
-       match try_load_library lib_basename with
-       | Some _ -> Some (lib_basename, name)
-       | None -> None)
-  |> List.sort_uniq (fun (lib1, _) (lib2, _) -> String.compare lib1 lib2)
-  |> List.map snd
+  (* Group aliases by library and show canonical name with aliases. *)
+  let groups : (string, (string * string * string list)) Hashtbl.t = Hashtbl.create 16 in
+  let order = ref [] in
+  List.iter (fun (name, (lib_basename, func_name)) ->
+    match Hashtbl.find_opt groups lib_basename with
+    | None ->
+      Hashtbl.add groups lib_basename (func_name, name, []);
+      order := lib_basename :: !order
+    | Some (fn, canonical, aliases) ->
+      Hashtbl.replace groups lib_basename (fn, canonical, aliases @ [name])
+  ) language_info;
+  let order = List.rev !order in
+  order
+  |> List.filter_map (fun lib_basename ->
+       match Hashtbl.find_opt groups lib_basename with
+       | None -> None
+       | Some (func_name, canonical, aliases) ->
+         if can_load_language lib_basename func_name then
+           let label =
+             match aliases with
+             | [] -> canonical
+             | _ ->
+               Printf.sprintf "%s (aliases: %s)"
+                 canonical (String.concat ", " aliases)
+           in
+           Some label
+         else
+           None)
