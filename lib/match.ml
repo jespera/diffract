@@ -442,6 +442,31 @@ let rec match_node ~pattern ~pattern_source ~source ~substitutions pattern_node 
         match_children ~pattern ~pattern_source ~source ~substitutions
           pattern_node source_node pattern_children source_children
 
+(** Build index mapping node_type -> list of positions in array.
+    Used to skip impossible split points when matching sequences. *)
+and build_type_index arr start len =
+  let index = Hashtbl.create 16 in
+  for i = 0 to len - 1 do
+    let node = arr.(start + i) in
+    let typ = node.Tree.node_type in
+    let positions = try Hashtbl.find index typ with Not_found -> [] in
+    Hashtbl.replace index typ (i :: positions)
+  done;
+  (* Reverse lists so positions are in ascending order *)
+  Hashtbl.iter (fun k v -> Hashtbl.replace index k (List.rev v)) index;
+  index
+
+(** Get the node type of the next non-sequence pattern element after index pi.
+    Returns None if no more pattern elements or next is also a sequence. *)
+and get_next_anchor_type ~pattern ~pattern_source ~substitutions pattern_arr pi =
+  let len = Array.length pattern_arr in
+  if pi >= len then None
+  else
+    let p = pattern_arr.(pi) in
+    let is_seq = is_sequence_placeholder ~pattern substitutions pattern_source p in
+    if is_seq then None  (* Next element is also a sequence *)
+    else Some p.Tree.node_type
+
 (** Precompute cumulative texts for all possible sequence lengths.
     cumulative_texts.(i) = text of children 0..i-1 (empty string for i=0) *)
 and precompute_cumulative_texts source arr start len =
@@ -496,13 +521,18 @@ and match_children ~pattern ~pattern_source ~source ~substitutions
   | Strict ->
     match_children_exact ~pattern ~pattern_source ~source ~substitutions pattern_children source_children
 
-(** Exact (ordered) child matching - original behavior *)
+(** Exact (ordered) child matching with index-based optimization.
+    When a sequence is followed by a concrete pattern element, we only
+    try split points where that element's node type appears in source. *)
 and match_children_exact ~pattern ~pattern_source ~source ~substitutions pattern_children source_children =
   (* Convert to arrays for efficient indexing *)
   let pattern_arr = Array.of_list pattern_children in
   let source_arr = Array.of_list source_children in
   let pattern_len = Array.length pattern_arr in
   let source_len = Array.length source_arr in
+
+  (* Build type index once: node_type -> positions where that type appears *)
+  let type_index = build_type_index source_arr 0 source_len in
 
   (* Match starting from pattern index pi and source index si *)
   let rec match_from bindings pi si =
@@ -513,19 +543,41 @@ and match_children_exact ~pattern ~pattern_source ~source ~substitutions pattern
       let p = pattern_arr.(pi) in
       let is_seq = is_sequence_placeholder ~pattern substitutions pattern_source p in
       if is_seq then
-        (* Sequence metavar: try matching 0, 1, 2, ... source children *)
+        (* Sequence metavar: try matching source children *)
         match is_placeholder substitutions pattern_source p with
         | None -> None
         | Some var_name ->
-          (* Precompute all possible sequence texts once - O(n) *)
           let remaining = source_len - si in
           let cumulative = precompute_cumulative_texts source source_arr si remaining in
-          (* Try each split point with O(1) text lookup *)
-          let rec try_take n =
-            if n > remaining then None
-            else
+
+          (* Determine which positions to try based on what follows *)
+          let next_anchor_type = get_next_anchor_type ~pattern ~pattern_source
+              ~substitutions pattern_arr (pi + 1) in
+
+          let positions_to_try = match next_anchor_type with
+            | None ->
+              (* No anchor or next is also a sequence - must try all positions *)
+              List.init (remaining + 1) Fun.id
+            | Some anchor_type ->
+              (* Only try positions where anchor type appears, plus end position *)
+              let anchor_positions =
+                try Hashtbl.find type_index anchor_type with Not_found -> []
+              in
+              (* Filter to positions >= si and convert to offsets from si *)
+              let valid_offsets = List.filter_map (fun pos ->
+                if pos >= si then Some (pos - si) else None
+              ) anchor_positions in
+              (* Also try taking all remaining (sequence consumes everything) *)
+              let offsets = valid_offsets @ [remaining] in
+              (* Remove duplicates and sort *)
+              List.sort_uniq compare offsets
+          in
+
+          (* Try each candidate split point *)
+          let rec try_positions = function
+            | [] -> None
+            | n :: rest ->
               let seq_text = cumulative.(n) in
-              (* Collect the actual nodes matched by this sequence *)
               let seq_nodes = Array.to_list (Array.sub source_arr si n) in
               let seq_binding = {
                 text_bindings = [(var_name, seq_text)];
@@ -533,13 +585,13 @@ and match_children_exact ~pattern ~pattern_source ~source ~substitutions pattern
                 sequence_node_bindings = [(var_name, seq_nodes)]
               } in
               match check_and_merge_bindings bindings seq_binding with
-              | None -> try_take (n + 1)  (* Binding conflict *)
+              | None -> try_positions rest  (* Binding conflict *)
               | Some merged ->
                 match match_from merged (pi + 1) (si + n) with
                 | Some result -> Some result
-                | None -> try_take (n + 1)
+                | None -> try_positions rest
           in
-          try_take 0
+          try_positions positions_to_try
       else
         (* Regular metavar or structural match *)
         if si >= source_len then None

@@ -13,3 +13,7 @@
 (executable
  (name bench_index)
  (libraries diffract unix))
+
+(executable
+ (name bench_ellipsis)
+ (libraries diffract unix))
