@@ -14,8 +14,7 @@ dune build @runtest --force
 
 Test coverage:
 - **Node module**: Parsing, traversal, text extraction
-- **Diff module**: Change detection, node comparison, flattening
-- **Antiunify module**: Annotation generation, pattern extraction, cross-pattern unification
+- **Match module**: Pattern parsing, matching, and nested pattern search
 
 ## Benchmarks
 
@@ -29,6 +28,9 @@ dune exec benchmarks/bench_match.exe
 
 # Run index-based matching benchmarks
 dune exec benchmarks/bench_index.exe
+
+# Run ellipsis/sequence benchmarks
+dune exec benchmarks/bench_ellipsis.exe
 
 # Compare last two benchmark runs
 dune exec benchmarks/bench_compare.exe

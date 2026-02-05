@@ -11,8 +11,11 @@ diffract/
 │   ├── ts_helper.c         # C helper functions for tree-sitter
 │   ├── node.ml             # FFI-based tree traversal (internal)
 │   ├── languages.ml        # Dynamic grammar loading
-│   ├── match.ml            # Concrete syntax pattern matching
-│   └── pattern.ml          # Pattern matching DSL
+│   ├── match.ml            # Public match API (facade)
+│   ├── match_types.ml      # Match-related types
+│   ├── match_parse.ml      # Pattern parsing and preamble handling
+│   ├── match_engine.ml     # Core matching algorithm
+│   └── match_search.ml     # Search, indexing, and formatting helpers
 ├── bin/                    # CLI
 │   └── main.ml
 ├── grammars/               # Tree-sitter grammars
@@ -141,23 +144,36 @@ val find_by_type : string -> t -> t list
 val traverse : (t -> unit) -> t -> unit
 ```
 
-## Pattern Matching DSL (`lib/pattern.ml`)
+## Pattern Matching (`lib/match_*.ml`)
 
-A DSL for querying AST nodes (alternative to tree-sitter's query language):
+Pattern matching is implemented as a pipeline:
+
+1. **Parse**: `match_parse.ml` parses the `@@` preamble, validates metavars,
+   expands ellipsis (`...`) into sequence metavars, and parses the pattern with
+   tree-sitter (`Tree.parse_as_pattern`).
+2. **Match**: `match_engine.ml` performs structural matching with three modes
+   (`strict`, `field`, `partial`) and supports sequence metavars.
+3. **Search**: `match_search.ml` traverses trees, handles nested patterns, and
+   formats match results. `match.ml` re-exports the public API.
+
+Example (public API):
 
 ```ocaml
-(* Find all console.log calls *)
-let pattern = Pattern.(
-  node "call_expression" [
-    field "function" (node "member_expression" [
-      field "object" (node "identifier" [has_text "console"]);
-      field "property" (node "property_identifier" [has_text "log"]);
-    ]);
-    capture "args" (any_node ());
-  ]
-)
+let pattern_text = {|@@
+match: strict
+metavar $OBJ: single
+metavar $METHOD: single
+@@
+$OBJ.$METHOD()
+|} in
 
-let matches = Pattern.find_all pattern root
+let matches = Diffract.Match.find_matches
+  ~language:"typescript"
+  ~pattern_text
+  ~source_text:code in
+List.iter (fun m ->
+  Printf.printf "Match at line %d\n" (m.start_point.row + 1)
+) matches
 ```
 
 ## Index-Based Pattern Matching (`lib/match.ml`)
