@@ -1,53 +1,6 @@
 (** Pattern matching using concrete syntax with metavariables *)
 
-(** Index for efficient multi-pattern matching *)
-type ast_index
-
-(** A parsed pattern with metavariable information *)
-type pattern
-
-(** A single match result *)
-type match_result = {
-  node: Tree.src Tree.t;  (** The matched source node *)
-  bindings: (string * string) list;  (** Metavar name -> matched text *)
-  node_bindings: (string * Tree.src Tree.t) list;  (** Metavar name -> matched node (for 'on $VAR') *)
-  sequence_node_bindings: (string * Tree.src Tree.t list) list;  (** Metavar name -> matched nodes for sequences *)
-  start_point: Tree.point;
-  end_point: Tree.point;
-}
-
-(** A context match for nested patterns *)
-type context_match = {
-  context_node: Tree.src Tree.t;
-  context_bindings: (string * string) list;
-  context_node_bindings: (string * Tree.src Tree.t) list;
-  context_sequence_node_bindings: (string * Tree.src Tree.t list) list;
-  context_start_point: Tree.point;
-  context_end_point: Tree.point;
-}
-
-(** Result of nested pattern matching *)
-type nested_match_result = {
-  inner_node: Tree.src Tree.t;
-  inner_bindings: (string * string) list;
-  inner_node_bindings: (string * Tree.src Tree.t) list;
-  inner_sequence_node_bindings: (string * Tree.src Tree.t list) list;
-  all_bindings: (string * string) list;
-  all_node_bindings: (string * Tree.src Tree.t) list;
-  all_sequence_node_bindings: (string * Tree.src Tree.t list) list;
-  contexts: context_match list;  (** outermost first *)
-  start_point: Tree.point;
-  end_point: Tree.point;
-}
-
-(** Result of matching with parse information *)
-type match_search_result = {
-  matches: nested_match_result list;
-  parse_error_count: int;  (** Number of ERROR nodes in source *)
-}
-
-(** A nested pattern with multiple sections *)
-type nested_pattern
+include (module type of Match_types)
 
 (** {1 Pattern parsing} *)
 
