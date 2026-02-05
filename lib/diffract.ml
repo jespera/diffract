@@ -2,7 +2,6 @@
 
 module Bindings = Tree_sitter_bindings
 module Tree = Tree
-module Pattern = Pattern
 module Match = Match
 
 (** Parse source code and return the tree representation *)
