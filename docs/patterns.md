@@ -181,16 +181,6 @@ Diffract.Tree.traverse (fun node ->
     (Diffract.Tree.text tree.source node)
 ) tree.root
 
-(* Compute diff *)
-let result = Diffract.diff ~language:"typescript" ~before ~after in
-List.iter (fun change ->
-  Printf.printf "%s\n" (Diffract.Diff.change_node_type change)
-) (Diffract.Diff.flatten_changes result.changes)
-
-(* Anti-unify to find what changed *)
-let ann = Diffract.Antiunify.antiunify_change result change in
-Printf.printf "%s\n" (Diffract.Antiunify.to_string ann)
-
 (* Pattern matching with concrete syntax *)
 let pattern_text = {|@@
 match: strict

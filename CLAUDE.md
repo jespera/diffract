@@ -26,10 +26,8 @@ dune exec tests/test_runner.exe -- test Match "simple expression match"
 
 ## Project Overview
 
-diffract is an OCaml library and CLI for parsing source files with tree-sitter and computing structural diffs. Key capabilities:
+diffract is an OCaml library and CLI for parsing source files with tree-sitter and pattern matching. Key capabilities:
 - Parse source to S-expressions using tree-sitter grammars
-- Compute structural diffs between files
-- Anti-unify changes to find common transformation patterns
 - Pattern matching with concrete syntax and metavariables
 
 ## Architecture
@@ -41,8 +39,6 @@ diffract is an OCaml library and CLI for parsing source files with tree-sitter a
 - `ts_helper.c` - C helper layer wrapping TSNode in OCaml custom blocks (libffi can't handle 32-byte structs by value)
 - `node.ml` - FFI-based tree traversal (internal, used during parsing)
 - `languages.ml` - Dynamic grammar loading via dlopen
-- `diff.ml` - Tree diff algorithm (recursive comparison with greedy child matching)
-- `antiunify.ml` - Anti-unification for finding what differs between before/after
 - `match.ml` - Index-based pattern matching with concrete syntax
 - `pattern.ml` - Pattern matching DSL
 

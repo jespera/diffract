@@ -1,11 +1,8 @@
-(** Diffract - structural diff and pattern inference for source code *)
+(** Diffract - structural pattern matching for source code *)
 
 (** Re-export modules for convenient access *)
 module Tree = Tree
 module Pattern = Pattern
-module Diff = Diff
-module Abstract = Abstract
-module Antiunify = Antiunify
 module Match = Match
 
 (** {1 Parsing} *)
@@ -28,11 +25,3 @@ val parse_file_to_sexp : language:string -> string -> string
 
 val available_languages : unit -> string list
 (** Returns a list of available language names. *)
-
-(** {1 Diff} *)
-
-val diff : language:string -> before:string -> after:string -> Diff.diff_result
-(** [diff ~language ~before ~after] parses both sources and computes their difference. *)
-
-val diff_files : language:string -> before_path:string -> after_path:string -> Diff.diff_result
-(** [diff_files ~language ~before_path ~after_path] diffs two files. *)

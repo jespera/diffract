@@ -1,12 +1,10 @@
 # diffract
 
-An OCaml library and CLI tool for parsing source files using [tree-sitter](https://tree-sitter.github.io/tree-sitter/) and computing structural diffs between them.
+An OCaml library and CLI tool for parsing source files using [tree-sitter](https://tree-sitter.github.io/tree-sitter/) and pattern matching with concrete syntax.
 
 ## Features
 
 - Parse source files to S-expressions using tree-sitter grammars
-- Compute structural diffs between two source files
-- Anti-unify changes to find common transformation patterns across multiple files
 - Pattern matching with concrete syntax and metavariables
 - Support for TypeScript, Kotlin, and other languages (extensible)
 
@@ -60,15 +58,6 @@ diffract example.ts
 
 # Parse with explicit language
 diffract --language kotlin example.kt
-
-# Diff two files
-diffract --diff before.ts after.ts
-
-# Diff with flat output (one change per line)
-diffract --diff --flat before.ts after.ts
-
-# Diff with anti-unified output (shows [before → after] for changes)
-diffract --diff --antiunify before.ts after.ts
 
 # Match a pattern against a single file
 diffract --match pattern.txt source.ts
