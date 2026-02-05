@@ -293,9 +293,10 @@ and match_children_field ~pattern ~pattern_source ~source ~substitutions
   let pattern_children = Tree.named_children_with_fields pattern_node in
   let source_children = Tree.named_children_with_fields source_node in
 
-  (* Group pattern children by field name *)
-  let group_by_field_pat children =
-    let tbl : (string option, Tree.pat Tree.t list) Hashtbl.t = Hashtbl.create 8 in
+  (* Group children by field name *)
+  let group_by_field children =
+    (* let tbl : (string option, Tree.pat Tree.t list) Hashtbl.t = Hashtbl.create 8 in *)
+    let tbl = Hashtbl.create 8 in
     let order = ref [] in
     List.iter (fun (field, node) ->
       let existing = Hashtbl.find_opt tbl field |> Option.value ~default:[] in
@@ -305,20 +306,8 @@ and match_children_field ~pattern ~pattern_source ~source ~substitutions
     List.rev_map (fun field -> (field, Hashtbl.find tbl field)) !order
   in
 
-  (* Group source children by field name *)
-  let group_by_field_src children =
-    let tbl : (string option, Tree.src Tree.t list) Hashtbl.t = Hashtbl.create 8 in
-    let order = ref [] in
-    List.iter (fun (field, node) ->
-      let existing = Hashtbl.find_opt tbl field |> Option.value ~default:[] in
-      if existing = [] then order := field :: !order;
-      Hashtbl.replace tbl field (existing @ [node])
-    ) children;
-    List.rev_map (fun field -> (field, Hashtbl.find tbl field)) !order
-  in
-
-  let pattern_grouped = group_by_field_pat pattern_children in
-  let source_grouped = group_by_field_src source_children in
+  let pattern_grouped = group_by_field pattern_children in
+  let source_grouped = group_by_field source_children in
 
   (* Match each field group from pattern against corresponding source field group *)
   let rec match_groups bindings = function
