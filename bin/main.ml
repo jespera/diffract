@@ -123,7 +123,6 @@ let scan_directory ~language ~pattern_text ~include_pattern ~exclude_dirs dir_pa
   let errors = ref [] in
 
   List.iter (fun file_path ->
-    Gc.full_major ();  (* Help with tree-sitter memory *)
     let result = match_file ~language ~pattern_text file_path in
     match result.error with
     | Some msg ->
