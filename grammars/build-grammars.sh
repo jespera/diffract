@@ -37,5 +37,12 @@ cc -shared -fPIC -o lib/libtree-sitter-php.so \
   node_modules/tree-sitter-php/php/src/parser.c \
   node_modules/tree-sitter-php/php/src/scanner.c
 
+# Build Scala grammar
+echo "Building Scala grammar..."
+cc -shared -fPIC -o lib/libtree-sitter-scala.so \
+  -I node_modules/tree-sitter-scala/src \
+  node_modules/tree-sitter-scala/src/parser.c \
+  node_modules/tree-sitter-scala/src/scanner.c
+
 echo "Grammar libraries built in grammars/lib/"
 ls -la lib/
