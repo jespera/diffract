@@ -2,7 +2,6 @@
 
 (** Re-export modules for convenient access *)
 module Tree = Tree
-module Pattern = Pattern
 module Match = Match
 
 (** {1 Parsing} *)
