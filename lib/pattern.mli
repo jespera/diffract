@@ -10,8 +10,8 @@ type constraint_
 
 (** Result of a successful match, with captured nodes *)
 type match_result = {
-  node: Tree.t;
-  captures: (string * Tree.t) list;
+  node: Tree.src Tree.t;
+  captures: (string * Tree.src Tree.t) list;
 }
 
 (** {1 Pattern constructors} *)
@@ -60,19 +60,19 @@ val descendant : t -> constraint_
 
 (** {1 Matching functions} *)
 
-val matches : string -> t -> Tree.t -> bool
+val matches : string -> t -> Tree.src Tree.t -> bool
 (** [matches source pattern node] tests if the node matches the pattern. *)
 
-val match_node : string -> t -> Tree.t -> match_result option
+val match_node : string -> t -> Tree.src Tree.t -> match_result option
 (** [match_node source pattern node] attempts to match, returning captures. *)
 
-val find_all : string -> t -> Tree.t -> match_result list
+val find_all : string -> t -> Tree.src Tree.t -> match_result list
 (** [find_all source pattern root] finds all nodes matching the pattern. *)
 
-val get_capture : string -> match_result -> Tree.t option
+val get_capture : string -> match_result -> Tree.src Tree.t option
 (** [get_capture name result] retrieves a captured node by name. *)
 
-val get_captures : string -> match_result -> Tree.t list
+val get_captures : string -> match_result -> Tree.src Tree.t list
 (** [get_captures name result] retrieves all nodes captured with [name]. *)
 
 (** {1 Convenience patterns} *)

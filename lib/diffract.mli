@@ -7,10 +7,10 @@ module Match = Match
 
 (** {1 Parsing} *)
 
-val parse_tree : language:string -> string -> Tree.tree
+val parse_tree : language:string -> string -> Tree.src Tree.tree
 (** [parse_tree ~language source] parses source and returns the tree representation. *)
 
-val parse_file_tree : language:string -> string -> Tree.tree
+val parse_file_tree : language:string -> string -> Tree.src Tree.tree
 (** [parse_file_tree ~language path] parses a file and returns the tree representation. *)
 
 (** {1 S-expression output} *)

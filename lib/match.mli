@@ -8,33 +8,33 @@ type pattern
 
 (** A single match result *)
 type match_result = {
-  node: Tree.t;  (** The matched node *)
+  node: Tree.src Tree.t;  (** The matched source node *)
   bindings: (string * string) list;  (** Metavar name -> matched text *)
-  node_bindings: (string * Tree.t) list;  (** Metavar name -> matched node (for 'on $VAR') *)
-  sequence_node_bindings: (string * Tree.t list) list;  (** Metavar name -> matched nodes for sequences *)
+  node_bindings: (string * Tree.src Tree.t) list;  (** Metavar name -> matched node (for 'on $VAR') *)
+  sequence_node_bindings: (string * Tree.src Tree.t list) list;  (** Metavar name -> matched nodes for sequences *)
   start_point: Tree.point;
   end_point: Tree.point;
 }
 
 (** A context match for nested patterns *)
 type context_match = {
-  context_node: Tree.t;
+  context_node: Tree.src Tree.t;
   context_bindings: (string * string) list;
-  context_node_bindings: (string * Tree.t) list;
-  context_sequence_node_bindings: (string * Tree.t list) list;
+  context_node_bindings: (string * Tree.src Tree.t) list;
+  context_sequence_node_bindings: (string * Tree.src Tree.t list) list;
   context_start_point: Tree.point;
   context_end_point: Tree.point;
 }
 
 (** Result of nested pattern matching *)
 type nested_match_result = {
-  inner_node: Tree.t;
+  inner_node: Tree.src Tree.t;
   inner_bindings: (string * string) list;
-  inner_node_bindings: (string * Tree.t) list;
-  inner_sequence_node_bindings: (string * Tree.t list) list;
+  inner_node_bindings: (string * Tree.src Tree.t) list;
+  inner_sequence_node_bindings: (string * Tree.src Tree.t list) list;
   all_bindings: (string * string) list;
-  all_node_bindings: (string * Tree.t) list;
-  all_sequence_node_bindings: (string * Tree.t list) list;
+  all_node_bindings: (string * Tree.src Tree.t) list;
+  all_sequence_node_bindings: (string * Tree.src Tree.t list) list;
   contexts: context_match list;  (** outermost first *)
   start_point: Tree.point;
   end_point: Tree.point;
@@ -191,8 +191,8 @@ val format_nested_match : string -> nested_match_result -> string
 
 (** {1 Index-based matching} *)
 
-val build_index : Tree.t -> ast_index
-(** [build_index root] builds an index from a parsed tree.
+val build_index : Tree.src Tree.t -> ast_index
+(** [build_index root] builds an index from a parsed source tree.
     O(n) where n is the number of nodes.
     Use this when matching multiple patterns against the same source. *)
 
@@ -200,7 +200,7 @@ val find_matches_with_index :
   index:ast_index ->
   pattern:pattern ->
   source:string ->
-  source_root:Tree.t ->
+  source_root:Tree.src Tree.t ->
   match_result list
 (** [find_matches_with_index ~index ~pattern ~source ~source_root] finds matches
     using a pre-built index. Queries the index for candidate nodes by type,
