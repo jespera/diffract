@@ -59,30 +59,10 @@ let find_pattern_matches ~pattern ~inherited_bindings ~source
 let find_matches ~language ~pattern_text ~source_text =
   let pattern = Match_parse.parse_pattern ~language pattern_text in
   let source_tree = Tree.parse ~language source_text in
-  let source = source_tree.source in
-  let pattern_node = Match_engine.get_pattern_content pattern in
-  let source_root = source_tree.root in
-  let results = ref [] in
-  (* Traverse source tree, trying to match at each node *)
-  Tree.traverse (fun source_node ->
-    match Match_engine.match_node
-            ~pattern
-            ~pattern_source:pattern.source
-            ~source
-            ~substitutions:pattern.substitutions
-            pattern_node source_node with
-    | Some mb ->
-      results := {
-        node = source_node;
-        bindings = mb.text_bindings;
-        node_bindings = mb.node_bindings;
-        sequence_node_bindings = mb.sequence_node_bindings;
-        start_point = Tree.start_point source_node;
-        end_point = Tree.end_point source_node;
-      } :: !results
-    | None -> ()
-  ) source_root;
-  List.rev !results
+  find_matches_in_subtree ~pattern
+    ~inherited_bindings:Match_engine.empty_bindings
+    ~source:source_tree.source
+    ~root_node:source_tree.root
 
 (** Find matches in a file *)
 let find_matches_in_file ~language ~pattern_text ~source_path =
