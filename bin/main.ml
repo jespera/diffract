@@ -9,18 +9,6 @@ let list_languages =
   let doc = "List available languages and exit." in
   Arg.(value & flag & info ["list-languages"] ~doc)
 
-let diff_mode =
-  let doc = "Diff mode: compare two source files." in
-  Arg.(value & flag & info ["diff"; "d"] ~doc)
-
-let flat_diff =
-  let doc = "Show flattened diff (one change per line). Implies --diff." in
-  Arg.(value & flag & info ["flat"] ~doc)
-
-let antiunify_diff =
-  let doc = "Show anti-unified changes ([before -> after]). Implies --diff." in
-  Arg.(value & flag & info ["antiunify"; "a"] ~doc)
-
 let match_pattern =
   let doc = "Pattern file for matching. Uses @@ delimiters with metavar \
              declarations. See README for pattern format." in
@@ -174,50 +162,7 @@ let scan_directory ~language ~pattern_text ~include_pattern ~exclude_dirs dir_pa
     ) (List.rev !errors)
   end
 
-(* Run diff between two files *)
-let run_diff ~language ~flat_diff ~antiunify_diff ~before_path ~after_path =
-  try
-    let result = Diffract.diff_files ~language ~before_path ~after_path in
-    let flat = Diffract.Diff.flatten_changes result.changes in
-    if flat = [] then
-      print_endline "No changes"
-    else if antiunify_diff then begin
-      (* Show anti-unified changes - concrete with [before → after] for diffs *)
-      List.iter (fun change ->
-        let open Diffract.Diff in
-        let ctx = change_context change in
-        let node_type = change_node_type change in
-        let parent = match ctx.parent_type with Some p -> p | None -> "root" in
-        let ann = Diffract.Antiunify.antiunify_change result change in
-        Printf.printf "%s in %s:\n" node_type parent;
-        Printf.printf "  %s\n" (Diffract.Antiunify.to_string ann)
-      ) flat
-    end else if flat_diff then begin
-      List.iter (fun change ->
-        let open Diffract.Diff in
-        let ctx = change_context change in
-        let node_type = change_node_type change in
-        let parent = match ctx.parent_type with Some p -> p | None -> "root" in
-        let before_text = change_text_before result change in
-        let after_text = change_text_after result change in
-        Printf.printf "%s in %s:\n" node_type parent;
-        (match before_text with
-         | Some t -> Printf.printf "  - %s\n" (String.escaped t)
-         | None -> ());
-        (match after_text with
-         | Some t -> Printf.printf "  + %s\n" (String.escaped t)
-         | None -> ())
-      ) flat
-    end else
-      print_endline (Diffract.Diff.to_string result);
-    `Ok ()
-  with
-  | Sys_error msg ->
-    `Error (false, Printf.sprintf "Error reading file: %s" msg)
-  | Failure msg ->
-    `Error (false, msg)
-
-let run file1 file2 language list_languages diff_mode flat_diff antiunify_diff match_pattern include_pattern exclude_patterns =
+let run file1 language list_languages match_pattern include_pattern exclude_patterns =
   if list_languages then begin
     let langs = Diffract.available_languages () in
     print_endline "Available languages:";
@@ -228,11 +173,9 @@ let run file1 file2 language list_languages diff_mode flat_diff antiunify_diff m
       if exclude_patterns = [] then default_excludes
       else exclude_patterns
     in
-    (* --flat and --antiunify imply --diff *)
-    let diff_mode = diff_mode || flat_diff || antiunify_diff in
-    match match_pattern, diff_mode, file1, file2 with
+    match match_pattern, file1 with
     (* Pattern matching mode *)
-    | Some pattern_path, false, Some source_path, None ->
+    | Some pattern_path, Some source_path ->
       (try
         let pattern_text = In_channel.with_open_text pattern_path In_channel.input_all in
         if Sys.is_directory source_path then begin
@@ -273,23 +216,11 @@ let run file1 file2 language list_languages diff_mode flat_diff antiunify_diff m
         `Error (false, Printf.sprintf "Error reading file: %s" msg)
       | Failure msg ->
         `Error (false, msg))
-    | Some _, false, None, _ ->
+    | Some _, None ->
       `Error (true, "Pattern matching requires a source file or directory")
-    | Some _, false, Some _, Some _ ->
-      `Error (true, "Pattern matching only takes one source file or directory")
-    | Some _, true, _, _ ->
-      `Error (true, "Cannot use --match with --diff")
-
-    (* Diff mode (explicit) *)
-    | None, true, Some before_path, Some after_path ->
-      run_diff ~language ~flat_diff ~antiunify_diff ~before_path ~after_path
-    | None, true, None, _ ->
-      `Error (true, "--diff requires two files: BEFORE AFTER")
-    | None, true, Some _, None ->
-      `Error (true, "--diff requires two files: BEFORE AFTER")
 
     (* Parse mode (single file, no flags) *)
-    | None, false, Some path, None ->
+    | None, Some path ->
       (try
         let tree = Diffract.parse_file_tree ~language path in
         print_string (Diffract.Tree.format_tree tree);
@@ -303,37 +234,26 @@ let run file1 file2 language list_languages diff_mode flat_diff antiunify_diff m
       | Failure msg ->
         `Error (false, msg))
 
-    (* Implicit diff mode (two files, no --diff flag) - backward compatible *)
-    | None, false, Some before_path, Some after_path ->
-      run_diff ~language ~flat_diff ~antiunify_diff ~before_path ~after_path
-
     (* No arguments *)
-    | None, false, None, _ ->
+    | None, None ->
       `Error (true, "Missing required argument FILE")
 
 let run_term =
   let file1 = Arg.(value & pos 0 (some string) None &
-                   info [] ~docv:"FILE" ~doc:"Source file/directory, or BEFORE file for diff.") in
-  let file2 = Arg.(value & pos 1 (some file) None &
-                   info [] ~docv:"FILE2" ~doc:"AFTER file for diff.") in
-  Term.(ret (const run $ file1 $ file2 $ language $ list_languages $ diff_mode $ flat_diff $ antiunify_diff $ match_pattern $ include_pattern $ exclude_patterns))
+                   info [] ~docv:"FILE" ~doc:"Source file or directory to process.") in
+  Term.(ret (const run $ file1 $ language $ list_languages $ match_pattern $ include_pattern $ exclude_patterns))
 
 let cmd =
-  let doc = "Parse, diff, and search source files using tree-sitter" in
+  let doc = "Parse and search source files using tree-sitter" in
   let man = [
     `S Manpage.s_description;
     `P "$(tname) is a tool for working with source code syntax trees. It can:";
     `I ("Parsing", "Output the concrete syntax tree (CST) as S-expressions.");
-    `I ("Diffing", "Compute structural differences between two files.");
     `I ("Matching", "Find code patterns using concrete syntax with metavariables.");
     `S Manpage.s_examples;
     `P "$(b,Parsing:)";
     `Pre "  $(tname) example.ts";
     `Pre "  $(tname) --language kotlin example.kt";
-    `P "$(b,Diffing:)";
-    `Pre "  $(tname) --diff before.ts after.ts";
-    `Pre "  $(tname) --diff --flat before.ts after.ts";
-    `Pre "  $(tname) --diff --antiunify before.ts after.ts";
     `P "$(b,Pattern matching:)";
     `Pre "  $(tname) --match pattern.txt source.ts";
     `Pre "  $(tname) --match pattern.txt --include '*.ts' src/";

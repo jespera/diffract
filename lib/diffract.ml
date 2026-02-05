@@ -1,11 +1,8 @@
-(** Diffract - structural diff and pattern inference for source code *)
+(** Diffract - structural pattern matching for source code *)
 
 module Bindings = Tree_sitter_bindings
 module Tree = Tree
 module Pattern = Pattern
-module Diff = Diff
-module Abstract = Abstract
-module Antiunify = Antiunify
 module Match = Match
 
 (** Parse source code and return the tree representation *)
@@ -46,16 +43,3 @@ let parse_file_to_sexp ~language path =
   parse_to_sexp ~language source
 
 let available_languages () = Languages.list_available ()
-
-(** Diff two source strings *)
-let diff ~language ~before ~after =
-  let before_tree = Tree.parse ~language before in
-  let after_tree = Tree.parse ~language after in
-  Diff.diff ~before_source:before_tree.source ~before_root:before_tree.root
-            ~after_source:after_tree.source ~after_root:after_tree.root
-
-(** Diff two files *)
-let diff_files ~language ~before_path ~after_path =
-  let before = In_channel.with_open_text before_path In_channel.input_all in
-  let after = In_channel.with_open_text after_path In_channel.input_all in
-  diff ~language ~before ~after
