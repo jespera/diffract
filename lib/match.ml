@@ -719,8 +719,8 @@ let get_pattern_content pattern : Tree.pat Tree.t =
     let node_type = Tree.node_type node in
     let children = Tree.named_children node in
     match node_type, children with
-    (* Unwrap program/module/source_file with single child *)
-    | ("program" | "module" | "source_file"), [child] -> unwrap child
+    (* Unwrap program/module/source_file/compilation_unit with single child *)
+    | ("program" | "module" | "source_file" | "compilation_unit"), [child] -> unwrap child
     (* Unwrap expression_statement with single child *)
     | "expression_statement", [child] -> unwrap child
     (* PHP: skip php_tag prefix in program node *)

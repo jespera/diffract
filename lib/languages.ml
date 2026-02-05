@@ -15,6 +15,7 @@ let language_info = [
   ("kotlin", ("tree-sitter-kotlin", "tree_sitter_kotlin"));
   ("kt", ("tree-sitter-kotlin", "tree_sitter_kotlin"));
   ("php", ("tree-sitter-php", "tree_sitter_php"));
+  ("scala", ("tree-sitter-scala", "tree_sitter_scala"));
 ]
 
 (* Search paths for grammar libraries *)

@@ -1887,3 +1887,519 @@ let ellipsis_tests = [
   Alcotest.test_case "ellipsis tsx arrow" `Quick test_ellipsis_tsx_arrow;
   Alcotest.test_case "ellipsis typescript spread" `Quick test_ellipsis_typescript_spread;
 ]
+
+(* === Scala-specific tests === *)
+
+(* Test: basic Scala println pattern *)
+let test_scala_println () =
+  let pattern_text = {|@@
+match: strict
+metavar $MSG: single
+@@
+println($MSG)|} in
+  let source_text = {|
+object Main {
+  def main(args: Array[String]): Unit = {
+    println("hello")
+    println("world")
+  }
+}
+|} in
+  let results = Match.find_matches
+    ~language:"scala"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found two println matches" 2 (List.length results);
+  let msgs = List.map (fun (r : Match.match_result) ->
+    List.assoc "$MSG" r.bindings
+  ) results in
+  Alcotest.(check bool) "found hello" true (List.mem {|"hello"|} msgs);
+  Alcotest.(check bool) "found world" true (List.mem {|"world"|} msgs)
+
+(* Test: Scala val declaration pattern *)
+let test_scala_val_declaration () =
+  let pattern_text = {|@@
+match: strict
+metavar $VAR: single
+metavar $EXPR: single
+@@
+val $VAR = $EXPR|} in
+  let source_text = {|
+object Test {
+  val x = 42
+  val name = "Alice"
+  var count = 0
+}
+|} in
+  let results = Match.find_matches
+    ~language:"scala"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found two val declarations" 2 (List.length results);
+  let first = List.hd results in
+  Alcotest.(check string) "$VAR" "x" (List.assoc "$VAR" first.bindings);
+  Alcotest.(check string) "$EXPR" "42" (List.assoc "$EXPR" first.bindings)
+
+(* Test: Scala var declaration pattern *)
+let test_scala_var_declaration () =
+  let pattern_text = {|@@
+match: strict
+metavar $VAR: single
+metavar $EXPR: single
+@@
+var $VAR = $EXPR|} in
+  let source_text = {|
+object Test {
+  val x = 42
+  var count = 0
+  var name = "Bob"
+}
+|} in
+  let results = Match.find_matches
+    ~language:"scala"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found two var declarations" 2 (List.length results);
+  let first = List.hd results in
+  Alcotest.(check string) "$VAR" "count" (List.assoc "$VAR" first.bindings)
+
+(* Test: Scala function call with sequence metavar *)
+let test_scala_function_call_sequence () =
+  let pattern_text = {|@@
+match: strict
+metavar $FUNC: single
+metavar $ARGS: sequence
+@@
+$FUNC($ARGS)|} in
+  let source_text = {|
+object Main {
+  def main(args: Array[String]): Unit = {
+    val user = User("Alice", 25)
+    processUser(user)
+    println(result)
+  }
+}
+|} in
+  let results = Match.find_matches
+    ~language:"scala"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found three function calls" 3 (List.length results);
+  let user_call = List.find (fun (r : Match.match_result) ->
+    List.assoc "$FUNC" r.bindings = "User"
+  ) results in
+  let args = List.assoc "$ARGS" user_call.bindings in
+  Alcotest.(check bool) "args contains Alice" true (string_contains ~needle:"Alice" args);
+  Alcotest.(check bool) "args contains 25" true (string_contains ~needle:"25" args)
+
+(* Test: Scala method call pattern *)
+let test_scala_method_call () =
+  let pattern_text = {|@@
+match: strict
+metavar $OBJ: single
+metavar $METHOD: single
+metavar $ARGS: sequence
+@@
+$OBJ.$METHOD($ARGS)|} in
+  let source_text = {|
+object Main {
+  def main(args: Array[String]): Unit = {
+    list.map(x => x * 2)
+    string.toLowerCase()
+    data.filter(p => p > 0)
+  }
+}
+|} in
+  let results = Match.find_matches
+    ~language:"scala"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found three method calls" 3 (List.length results);
+  let methods = List.map (fun (r : Match.match_result) ->
+    List.assoc "$METHOD" r.bindings
+  ) results in
+  Alcotest.(check bool) "found map" true (List.mem "map" methods);
+  Alcotest.(check bool) "found toLowerCase" true (List.mem "toLowerCase" methods);
+  Alcotest.(check bool) "found filter" true (List.mem "filter" methods)
+
+(* Test: Scala object definition *)
+let test_scala_object_definition () =
+  let pattern_text = {|@@
+match: strict
+metavar $NAME: single
+metavar $BODY: sequence
+@@
+object $NAME { $BODY }|} in
+  let source_text = {|
+object Main {
+  def greet(): Unit = println("Hello")
+}
+
+object Utils {
+  def helper(): Int = 42
+}
+|} in
+  let results = Match.find_matches
+    ~language:"scala"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found two objects" 2 (List.length results);
+  let names = List.map (fun (r : Match.match_result) ->
+    List.assoc "$NAME" r.bindings
+  ) results in
+  Alcotest.(check bool) "found Main" true (List.mem "Main" names);
+  Alcotest.(check bool) "found Utils" true (List.mem "Utils" names)
+
+(* Test: Scala class definition *)
+let test_scala_class_definition () =
+  let pattern_text = {|@@
+match: strict
+metavar $NAME: single
+metavar $BODY: sequence
+@@
+class $NAME { $BODY }|} in
+  let source_text = {|
+class User {
+  def getName(): String = name
+}
+
+class Service {
+  def process(): Unit = {}
+}
+|} in
+  let results = Match.find_matches
+    ~language:"scala"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found two classes" 2 (List.length results);
+  let names = List.map (fun (r : Match.match_result) ->
+    List.assoc "$NAME" r.bindings
+  ) results in
+  Alcotest.(check bool) "found User" true (List.mem "User" names);
+  Alcotest.(check bool) "found Service" true (List.mem "Service" names)
+
+(* Test: Scala class with parameters pattern
+   Note: Scala tree-sitter grammar treats both 'case class' and 'class' as
+   class_definition nodes, so the pattern matches any class with parameters. *)
+let test_scala_class_with_params () =
+  let pattern_text = {|@@
+match: strict
+metavar $NAME: single
+metavar $PARAMS: sequence
+@@
+class $NAME($PARAMS)|} in
+  let source_text = {|
+class User(name: String, age: Int)
+class Point(x: Double, y: Double)
+|} in
+  let results = Match.find_matches
+    ~language:"scala"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found two classes with params" 2 (List.length results);
+  let names = List.map (fun (r : Match.match_result) ->
+    List.assoc "$NAME" r.bindings
+  ) results in
+  Alcotest.(check bool) "found User" true (List.mem "User" names);
+  Alcotest.(check bool) "found Point" true (List.mem "Point" names)
+
+(* Test: Scala def with return type *)
+let test_scala_def_with_return_type () =
+  let pattern_text = {|@@
+match: strict
+metavar $NAME: single
+metavar $PARAMS: sequence
+metavar $RET: single
+metavar $BODY: single
+@@
+def $NAME($PARAMS): $RET = $BODY|} in
+  let source_text = {|
+object Utils {
+  def add(a: Int, b: Int): Int = a + b
+  def greet(name: String): String = "Hello " + name
+}
+|} in
+  let results = Match.find_matches
+    ~language:"scala"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found two defs" 2 (List.length results);
+  let first = List.hd results in
+  Alcotest.(check string) "$NAME" "add" (List.assoc "$NAME" first.bindings);
+  Alcotest.(check string) "$RET" "Int" (List.assoc "$RET" first.bindings)
+
+(* Test: Scala if expression *)
+let test_scala_if_expression () =
+  let pattern_text = {|@@
+match: strict
+metavar $COND: single
+metavar $THEN: single
+metavar $ELSE: single
+@@
+if ($COND) $THEN else $ELSE|} in
+  let source_text = {|
+object Main {
+  def max(a: Int, b: Int): Int = if (a > b) a else b
+}
+|} in
+  let results = Match.find_matches
+    ~language:"scala"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found if expression" 1 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check string) "$COND" "a > b" (List.assoc "$COND" result.bindings);
+  Alcotest.(check string) "$THEN" "a" (List.assoc "$THEN" result.bindings);
+  Alcotest.(check string) "$ELSE" "b" (List.assoc "$ELSE" result.bindings)
+
+(* Test: Scala match expression - matching the whole expression *)
+let test_scala_match_expression () =
+  let pattern_text = {|@@
+match: strict
+metavar $EXPR: single
+metavar $CASES: sequence
+@@
+$EXPR match { $CASES }|} in
+  let source_text = {|
+object Main {
+  def describe(x: Int): String = x match {
+    case 1 => "one"
+    case 2 => "two"
+    case _ => "other"
+  }
+}
+|} in
+  let results = Match.find_matches
+    ~language:"scala"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found match expression" 1 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check string) "$EXPR" "x" (List.assoc "$EXPR" result.bindings);
+  let cases = List.assoc "$CASES" result.bindings in
+  Alcotest.(check bool) "cases contains one" true (string_contains ~needle:"one" cases);
+  Alcotest.(check bool) "cases contains other" true (string_contains ~needle:"other" cases)
+
+(* Test: Scala for comprehension *)
+let test_scala_for_comprehension () =
+  let pattern_text = {|@@
+match: strict
+metavar $VAR: single
+metavar $ITER: single
+metavar $BODY: single
+@@
+for ($VAR <- $ITER) $BODY|} in
+  let source_text = {|
+object Main {
+  def process(items: List[Int]): Unit = {
+    for (item <- items) println(item)
+  }
+}
+|} in
+  let results = Match.find_matches
+    ~language:"scala"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found for comprehension" 1 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check string) "$VAR" "item" (List.assoc "$VAR" result.bindings);
+  Alcotest.(check string) "$ITER" "items" (List.assoc "$ITER" result.bindings)
+
+(* Test: Scala lambda expression *)
+let test_scala_lambda () =
+  let pattern_text = {|@@
+match: strict
+metavar $PARAM: single
+metavar $BODY: single
+@@
+$PARAM => $BODY|} in
+  let source_text = {|
+object Main {
+  val doubled = list.map(x => x * 2)
+  val squared = list.map(n => n * n)
+}
+|} in
+  let results = Match.find_matches
+    ~language:"scala"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found lambdas" 2 (List.length results);
+  let params = List.map (fun (r : Match.match_result) ->
+    List.assoc "$PARAM" r.bindings
+  ) results in
+  Alcotest.(check bool) "found x" true (List.mem "x" params);
+  Alcotest.(check bool) "found n" true (List.mem "n" params)
+
+(* Test: Scala method call on list - common idiom *)
+let test_scala_list_method () =
+  let pattern_text = {|@@
+match: strict
+metavar $LIST: single
+metavar $PRED: single
+@@
+$LIST.filter($PRED)|} in
+  let source_text = {|
+object Main {
+  val evens = numbers.filter(x => x % 2 == 0)
+  val positives = data.filter(n => n > 0)
+}
+|} in
+  let results = Match.find_matches
+    ~language:"scala"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found filter calls" 2 (List.length results);
+  let lists = List.map (fun (r : Match.match_result) ->
+    List.assoc "$LIST" r.bindings
+  ) results in
+  Alcotest.(check bool) "found numbers" true (List.mem "numbers" lists);
+  Alcotest.(check bool) "found data" true (List.mem "data" lists)
+
+(* Test: Scala nested pattern - find println inside objects *)
+let test_scala_nested_in_object () =
+  let pattern_text = {|@@
+match: strict
+metavar $OBJ: single
+metavar $BODY: sequence
+@@
+object $OBJ { $BODY }
+
+@@
+match: strict
+metavar $MSG: single
+@@
+println($MSG)|} in
+  let source_text = {|
+object Logger {
+  def log(msg: String): Unit = {
+    println("Logging: " + msg)
+  }
+}
+
+def standalone(): Unit = {
+  println("Outside object")
+}
+|} in
+  let results = Match.find_nested_matches
+    ~language:"scala"
+    ~pattern_text
+    ~source_text in
+  (* Should only find println inside the object, not the standalone one *)
+  Alcotest.(check int) "found one nested match" 1 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check string) "$OBJ" "Logger"
+    (List.assoc "$OBJ" (List.hd result.contexts).context_bindings);
+  let msg = List.assoc "$MSG" result.inner_bindings in
+  Alcotest.(check bool) "msg contains Logging" true (string_contains ~needle:"Logging" msg)
+
+(* Test: Scala Option.getOrElse pattern *)
+let test_scala_option_get_or_else () =
+  let pattern_text = {|@@
+match: strict
+metavar $OPT: single
+metavar $DEFAULT: single
+@@
+$OPT.getOrElse($DEFAULT)|} in
+  let source_text = {|
+object Main {
+  def getName(user: Option[User]): String = {
+    user.map(_.name).getOrElse("Guest")
+  }
+  def getPort(config: Option[Int]): Int = {
+    config.getOrElse(8080)
+  }
+}
+|} in
+  let results = Match.find_matches
+    ~language:"scala"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found getOrElse calls" 2 (List.length results)
+
+(* Test: Scala chained method calls *)
+let test_scala_chained_calls () =
+  let pattern_text = {|@@
+match: strict
+metavar $OBJ: single
+metavar $M1: single
+metavar $M2: single
+@@
+$OBJ.$M1().$M2()|} in
+  let source_text = {|
+object Main {
+  def process(text: String): String = {
+    text.trim().toLowerCase()
+  }
+}
+|} in
+  let results = Match.find_matches
+    ~language:"scala"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found chained call" 1 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check string) "$OBJ" "text" (List.assoc "$OBJ" result.bindings);
+  Alcotest.(check string) "$M1" "trim" (List.assoc "$M1" result.bindings);
+  Alcotest.(check string) "$M2" "toLowerCase" (List.assoc "$M2" result.bindings)
+
+(* Test: Scala binary operators *)
+let test_scala_binary_operator () =
+  let pattern_text = {|@@
+match: strict
+metavar $LEFT: single
+metavar $RIGHT: single
+@@
+$LEFT + $RIGHT|} in
+  let source_text = {|
+object Main {
+  val sum = a + b
+  val concat = "Hello" + name
+}
+|} in
+  let results = Match.find_matches
+    ~language:"scala"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found additions" 2 (List.length results)
+
+(* Test: Scala comparison operators *)
+let test_scala_comparison () =
+  let pattern_text = {|@@
+match: strict
+metavar $LEFT: single
+metavar $RIGHT: single
+@@
+$LEFT > $RIGHT|} in
+  let source_text = {|
+object Main {
+  val bigger = a > b
+  val check = x > 0
+}
+|} in
+  let results = Match.find_matches
+    ~language:"scala"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found comparisons" 2 (List.length results)
+
+let scala_tests = [
+  Alcotest.test_case "scala println" `Quick test_scala_println;
+  Alcotest.test_case "scala val declaration" `Quick test_scala_val_declaration;
+  Alcotest.test_case "scala var declaration" `Quick test_scala_var_declaration;
+  Alcotest.test_case "scala function call sequence" `Quick test_scala_function_call_sequence;
+  Alcotest.test_case "scala method call" `Quick test_scala_method_call;
+  Alcotest.test_case "scala object definition" `Quick test_scala_object_definition;
+  Alcotest.test_case "scala class definition" `Quick test_scala_class_definition;
+  Alcotest.test_case "scala class with params" `Quick test_scala_class_with_params;
+  Alcotest.test_case "scala def with return type" `Quick test_scala_def_with_return_type;
+  Alcotest.test_case "scala if expression" `Quick test_scala_if_expression;
+  Alcotest.test_case "scala match expression" `Quick test_scala_match_expression;
+  Alcotest.test_case "scala for comprehension" `Quick test_scala_for_comprehension;
+  Alcotest.test_case "scala lambda" `Quick test_scala_lambda;
+  Alcotest.test_case "scala list method" `Quick test_scala_list_method;
+  Alcotest.test_case "scala nested in object" `Quick test_scala_nested_in_object;
+  Alcotest.test_case "scala option getOrElse" `Quick test_scala_option_get_or_else;
+  Alcotest.test_case "scala chained calls" `Quick test_scala_chained_calls;
+  Alcotest.test_case "scala binary operator" `Quick test_scala_binary_operator;
+  Alcotest.test_case "scala comparison" `Quick test_scala_comparison;
+]
