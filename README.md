@@ -79,7 +79,7 @@ When the target is a directory, use `--include` to specify which files to scan:
 | Option | Description |
 |--------|-------------|
 | `--include GLOB` / `-i` | Glob pattern for files (e.g., `*.ts`, `*.py`). Required for directories. |
-| `--exclude DIR` / `-e` | Directory names to skip (repeatable). Defaults: `node_modules`, `.git`, `_build`, `target`, `__pycache__` |
+| `--exclude DIR` / `-e` | Directory names to skip (repeatable). Defaults: `node_modules`, `.git`, `_build`, `target`, `__pycache__`, `.hg`, `.svn` |
 
 Supported glob patterns:
 - `*.ts` - files ending with `.ts`
@@ -102,6 +102,15 @@ Found 2 match(es) in 2 file(s) (scanned 47 files)
 - [Pattern format and library API](docs/patterns.md)
 - [Architecture and internals](docs/internals.md)
 - [Testing and benchmarks](docs/benchmarks.md)
+
+## Match Architecture (Quick Overview)
+
+The matching pipeline is split into focused modules:
+
+- `match_parse` handles `@@` preambles, metavars, and ellipsis expansion, then parses with tree-sitter.
+- `match_engine` performs the structural matching (`strict`, `field`, `partial`) and sequence metavars.
+- `match_search` drives traversal, nested pattern contexts, indexing, and formatting.
+- `match` exposes the public API surface.
 
 ## License
 

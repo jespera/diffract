@@ -84,6 +84,26 @@ class $class_name { $body }
 
 This matches a class with any number of members, binding `$body` to all children.
 
+All metavariables used in the pattern body should be declared in the preamble.
+The parser validates undeclared metavars for tokens like `$NAME` (uppercase after `$`).
+
+### Ellipsis (`...`) as Sequence Metavar
+
+You can use `...` as a shorthand for an anonymous sequence metavariable. Each
+ellipsis is treated as its own sequence binding internally:
+
+```
+@@
+match: strict
+metavar $NAME: single
+@@
+function $NAME(...) { ... }
+```
+
+Notes:
+- Each `...` matches zero or more nodes.
+- Ellipsis is not replaced when it looks like a spread operator (e.g., `...$x` or `...args`).
+
 ## Partial Matching
 
 Use `match: partial` to enable subset matching for children. Each pattern child finds any matching source child (unordered), and extra source children are ignored:
