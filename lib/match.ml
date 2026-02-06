@@ -23,3 +23,13 @@ let build_index = Match_search.build_index
 let find_matches_with_index = Match_search.find_matches_with_index
 
 let find_matches_multi = Match_search.find_matches_multi
+
+let transform = Match_transform.transform
+
+let transform_file = Match_transform.transform_file
+
+let generate_diff = Match_transform.generate_diff
+
+let apply_edits = Match_transform.apply_edits
+
+let classify_spatch_lines = Match_parse.classify_spatch_lines

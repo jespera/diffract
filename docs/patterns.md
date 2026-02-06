@@ -190,6 +190,192 @@ line 12: Math.floor(x + 1)
 
 Metavariables are pre-processed before parsing, so they work across all supported languages regardless of whether `$name` is valid syntax in that language.
 
+## Transforms (Semantic Patches)
+
+Patterns can describe code transformations using `-`/`+` line prefixes, similar
+to unified diff syntax. Lines prefixed with `- ` appear only in the match; lines
+with `+ ` appear only in the replacement. Unprefixed lines (or lines with a
+leading space) are **context** that appears in both.
+
+### Basic example
+
+Rename a function call:
+
+```
+@@
+match: strict
+metavar $MSG: single
+@@
+- console.log($MSG)
++ logger.info($MSG)
+```
+
+Applied to `console.log("hello")`, this produces `logger.info("hello")`.
+Metavariables carry their bound values from the match side to the replace side.
+
+### Multi-line patterns
+
+Context lines anchor the match while `-`/`+` lines describe the change:
+
+```
+@@
+match: strict
+metavar $NAME: single
+metavar $BODY: sequence
+@@
+- function $NAME() {
+-     $BODY
+- }
++ const $NAME = () => {
++     $BODY
++ }
+```
+
+This converts traditional function declarations into arrow functions.
+
+### CLI usage
+
+```bash
+# Preview the diff (no file changes)
+diffract --apply --match patch.txt source.ts
+
+# Apply changes in place
+diffract --apply --in-place --match patch.txt source.ts
+
+# Apply across a directory
+diffract --apply --in-place --match patch.txt --include '*.ts' src/
+```
+
+### Strict-mode transforms
+
+With `match: strict`, the entire matched node is replaced with the instantiated
+template. This is the simplest mode and works well for renaming function calls,
+swapping arguments, or restructuring expressions.
+
+**Swap arguments:**
+```
+@@
+match: strict
+metavar $A: single
+metavar $B: single
+@@
+- assertEqual($A, $B)
++ assertEqual($B, $A)
+```
+
+### Partial-mode transforms
+
+With `match: partial`, only the matched subset of children is affected. Source
+children not mentioned in the pattern are preserved. This is useful for modifying
+individual properties in object literals.
+
+**Rename a property:**
+```
+@@
+match: partial
+metavar $V: single
+@@
+- { color: $V }
++ { colour: $V }
+```
+
+Source `{ color: "red", size: 10 }` becomes `{ colour: "red", size: 10 }` -
+the `size` property is untouched.
+
+**Add a property:**
+```
+@@
+match: partial
+metavar $V: single
+@@
+- { name: $V }
++ { name: $V, id: 0 }
+```
+
+Every object that has a `name` property gets an `id: 0` added. Objects without
+`name` are left alone.
+
+**Remove a property:**
+```
+@@
+match: partial
+metavar $V: single
+@@
+- { name: $V, deprecated: true }
++ { name: $V }
+```
+
+Removes the `deprecated` property from objects that have both `name` and
+`deprecated: true`.
+
+### Field-mode transforms
+
+With `match: field`, children are matched by tree-sitter field name. Fields not
+mentioned in the pattern are preserved, while changes are applied to the
+specific fields that appear in `-`/`+` lines.
+
+**Modify an attribute (same field set):**
+```
+@@
+match: field
+@@
+<?php
+- #[deprecated]
++ #[deprecated(note = "use new API")]
+function test() {
+    echo "hi";
+}
+```
+
+This changes the `#[deprecated]` attribute while leaving the function name,
+parameters, and body untouched.
+
+**Add a new field (e.g., return type):**
+```
+@@
+match: field
+metavar $NAME: single
+metavar $BODY: sequence
+@@
+<?php
+- function $NAME() { $BODY }
++ function $NAME(): void { $BODY }
+```
+
+This adds a return type to PHP functions. Because this uses field mode, source
+attributes (like `#[Route("/")]`) are preserved even though the pattern doesn't
+mention them:
+
+```diff
+ <?php
+ #[Route("/")]
+-function foo() { return 1; }
++function foo(): void { return 1; }
+```
+
+### How match modes affect transforms
+
+| Mode | What gets replaced | Unmentioned source children |
+|------|-------------------|----------------------------|
+| `strict` | The entire matched node | N/A (all children must match) |
+| `partial` | Individual matched children | Preserved |
+| `field` | Children within matched fields | Preserved (other fields kept) |
+
+### Rules
+
+- Every metavariable used on the `+` side must also appear on the `-` or
+  context side (so it has a value to substitute).
+- Ellipsis (`...`) is only allowed on context or `-` lines so it is bound on
+  the match side. Using `...` in a `+`-only line is an error.
+- Use `- ...` only with strong anchors on surrounding context lines; otherwise
+  it can match too broadly (including empty sequences) and remove more than
+  intended.
+- Patterns without any `-`/`+` lines are plain search patterns; `transform`
+  returns the source unchanged.
+- When multiple matches occur in the same file, edits are applied bottom-to-top
+  to avoid offset invalidation. Overlapping edits are filtered (first in
+  document order wins; ties by start position keep the longest edit).
+
 ## Library API
 
 ```ocaml
@@ -218,4 +404,23 @@ List.iter (fun m ->
     Printf.printf "  %s = %s\n" var value
   ) m.bindings
 ) matches
+
+(* Apply a semantic patch *)
+let patch = {|@@
+match: strict
+metavar $MSG: single
+@@
+- console.log($MSG)
++ logger.info($MSG)|} in
+let result = Diffract.Match.transform
+  ~language:"typescript"
+  ~pattern_text:patch
+  ~source_text:code in
+if result.edits <> [] then begin
+  let diff = Diffract.Match.generate_diff
+    ~file_path:"source.ts"
+    ~original:result.original_source
+    ~transformed:result.transformed_source in
+  print_string diff
+end
 ```

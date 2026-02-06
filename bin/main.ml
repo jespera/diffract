@@ -24,6 +24,14 @@ let exclude_patterns =
              Defaults to: node_modules, .git, _build, target" in
   Arg.(value & opt_all string [] & info ["exclude"; "e"] ~docv:"DIR" ~doc)
 
+let apply_flag =
+  let doc = "Enable transform mode: apply semantic patch and output unified diff." in
+  Arg.(value & flag & info ["apply"; "a"] ~doc)
+
+let in_place_flag =
+  let doc = "Write changes directly to files (requires --apply)." in
+  Arg.(value & flag & info ["in-place"] ~doc)
+
 (* Default directories to skip *)
 let default_excludes = ["node_modules"; ".git"; "_build"; "target"; "__pycache__"; ".hg"; ".svn"]
 
@@ -161,13 +169,61 @@ let scan_directory ~language ~pattern_text ~include_pattern ~exclude_dirs dir_pa
     ) (List.rev !errors)
   end
 
-let run file1 language list_languages match_pattern include_pattern exclude_patterns =
+(* Transform a single file and return (had_changes, diff_text) *)
+let transform_file ~language ~pattern_text ~in_place file_path =
+  let result = Diffract.Match.transform_file ~language ~pattern_text ~source_path:file_path in
+  if result.edits = [] then (false, "")
+  else
+    let diff = Diffract.Match.generate_diff ~file_path
+      ~original:result.original_source ~transformed:result.transformed_source in
+    if in_place then
+      Out_channel.with_open_text file_path (fun oc ->
+        output_string oc result.transformed_source);
+    (true, diff)
+
+(* Scan a directory for transforms *)
+let scan_directory_transform ~language ~pattern_text ~include_pattern ~exclude_dirs ~in_place dir_path =
+  let files = find_files ~pattern:include_pattern ~exclude_dirs dir_path in
+  let total_files = List.length files in
+  let total_edits = ref 0 in
+  let files_changed = ref 0 in
+  let errors = ref [] in
+  List.iter (fun file_path ->
+    try
+      let result = Diffract.Match.transform_file ~language ~pattern_text ~source_path:file_path in
+      if result.edits <> [] then begin
+        incr files_changed;
+        total_edits := !total_edits + List.length result.edits;
+        let diff = Diffract.Match.generate_diff ~file_path
+          ~original:result.original_source ~transformed:result.transformed_source in
+        if not in_place then
+          print_string diff
+        else
+          Out_channel.with_open_text file_path (fun oc ->
+            output_string oc result.transformed_source)
+      end
+    with
+    | Failure msg -> errors := (file_path, msg) :: !errors
+    | Sys_error msg -> errors := (file_path, msg) :: !errors
+  ) files;
+  Printf.printf "Transformed %d match(es) in %d file(s) (scanned %d files)\n"
+    !total_edits !files_changed total_files;
+  if !errors <> [] then begin
+    Printf.printf "\nErrors (%d files):\n" (List.length !errors);
+    List.iter (fun (path, msg) ->
+      Printf.printf "  %s: %s\n" path msg
+    ) (List.rev !errors)
+  end
+
+let run file1 language list_languages match_pattern include_pattern exclude_patterns apply in_place =
   if list_languages then begin
     let langs = Diffract.available_languages () in
     print_endline "Available languages:";
     List.iter (fun l -> print_endline ("  " ^ l)) langs;
     `Ok ()
-  end else
+  end else if in_place && not apply then
+    `Error (true, "--in-place requires --apply")
+  else
     let exclude_dirs =
       if exclude_patterns = [] then default_excludes
       else exclude_patterns
@@ -177,7 +233,25 @@ let run file1 language list_languages match_pattern include_pattern exclude_patt
     | Some pattern_path, Some source_path ->
       (try
         let pattern_text = In_channel.with_open_text pattern_path In_channel.input_all in
-        if Sys.is_directory source_path then begin
+        if apply then begin
+          (* Transform mode *)
+          if Sys.is_directory source_path then begin
+            match include_pattern with
+            | None ->
+              `Error (true, "Directory scanning requires --include pattern (e.g., --include '*.ts')")
+            | Some glob ->
+              scan_directory_transform ~language ~pattern_text ~include_pattern:glob
+                ~exclude_dirs ~in_place source_path;
+              `Ok ()
+          end else begin
+            let (changed, diff) = transform_file ~language ~pattern_text ~in_place source_path in
+            if not changed then
+              print_endline "No matches found"
+            else if not in_place then
+              print_string diff;
+            `Ok ()
+          end
+        end else if Sys.is_directory source_path then begin
           (* Directory scanning mode *)
           match include_pattern with
           | None ->
@@ -240,7 +314,7 @@ let run file1 language list_languages match_pattern include_pattern exclude_patt
 let run_term =
   let file1 = Arg.(value & pos 0 (some string) None &
                    info [] ~docv:"FILE" ~doc:"Source file or directory to process.") in
-  Term.(ret (const run $ file1 $ language $ list_languages $ match_pattern $ include_pattern $ exclude_patterns))
+  Term.(ret (const run $ file1 $ language $ list_languages $ match_pattern $ include_pattern $ exclude_patterns $ apply_flag $ in_place_flag))
 
 let cmd =
   let doc = "Parse and search source files using tree-sitter" in
@@ -257,6 +331,9 @@ let cmd =
     `Pre "  $(tname) --match pattern.txt source.ts";
     `Pre "  $(tname) --match pattern.txt --include '*.ts' src/";
     `Pre "  $(tname) --match pattern.txt --include '*.ts' -e vendor src/";
+    `P "$(b,Transform (semantic patch):)";
+    `Pre "  $(tname) --apply --match patch.txt source.ts";
+    `Pre "  $(tname) --apply --in-place --match patch.txt --include '*.ts' src/";
     `S "PATTERN FORMAT";
     `P "Pattern files use @@ delimiters with metavariable declarations:";
     `Pre "  @@\n  metavar OBJ: single\n  metavar METHOD: single\n  @@\n  OBJ.METHOD()";

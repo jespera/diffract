@@ -11,6 +11,33 @@ type match_mode =
   | Field    (** Match by field name - extras in other fields ignored, ordered within fields *)
   | Partial  (** Unordered subset matching - extras ignored, order doesn't matter *)
 
+(** Semantic patch body: split from pattern text using -/+ prefixes *)
+type spatch_body = {
+  match_text: string;  (** Lines to match (context + minus lines) *)
+  replace_template: string;  (** Lines for replacement (context + plus lines) *)
+  is_transform: bool;  (** Whether any -/+ lines were found *)
+}
+
+(** A correspondence between a pattern child index and a source child index *)
+type child_correspondence = {
+  pattern_index: int;
+  source_index: int;
+}
+
+(** A text edit: replace bytes [start_byte, end_byte) with replacement *)
+type text_edit = {
+  start_byte: int;
+  end_byte: int;
+  replacement: string;
+}
+
+(** Result of applying transforms *)
+type transform_result = {
+  edits: text_edit list;
+  original_source: string;
+  transformed_source: string;
+}
+
 (** A parsed pattern with metavariable information *)
 type pattern = {
   metavars: string list;  (** Original metavar names (e.g., ["$msg"; "$fn"]) *)
@@ -21,6 +48,9 @@ type pattern = {
   original_source: string;  (** Original pattern source (after preamble) *)
   match_mode: match_mode;  (** How to match children *)
   on_var: string option;  (** If set, match against the node bound to this var instead of traversing *)
+  spatch: spatch_body;  (** Semantic patch info (match/replace split) *)
+  replace_tree: Tree.pat Tree.tree option;  (** Parsed replacement tree, if is_transform *)
+  replace_source: string;  (** Transformed replacement source (with placeholders) *)
 }
 
 (** A single match result *)
@@ -29,6 +59,7 @@ type match_result = {
   bindings: (string * string) list;  (** Metavar name -> matched text *)
   node_bindings: (string * Tree.src Tree.t) list;  (** Metavar name -> matched node (for 'on $VAR') *)
   sequence_node_bindings: (string * Tree.src Tree.t list) list;  (** Metavar name -> matched nodes for sequences *)
+  correspondences: child_correspondence list;  (** Pattern-to-source child index mapping *)
   start_point: Tree.point;
   end_point: Tree.point;
 }
@@ -88,4 +119,5 @@ type match_bindings = {
   text_bindings: (string * string) list;
   node_bindings: (string * Tree.src Tree.t) list;
   sequence_node_bindings: (string * Tree.src Tree.t list) list;  (** For sequence metavars *)
+  correspondences: child_correspondence list;  (** Pattern-to-source child index mapping *)
 }

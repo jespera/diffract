@@ -22,6 +22,7 @@ let find_matches_in_subtree ~pattern ~inherited_bindings ~source
            bindings = merged.text_bindings;
            node_bindings = merged.node_bindings;
            sequence_node_bindings = merged.sequence_node_bindings;
+           correspondences = merged.correspondences;
            start_point = Tree.start_point source_node;
            end_point = Tree.end_point source_node;
          } :: !results
@@ -116,6 +117,7 @@ let rec find_nested_matches_impl ~source ~inherited_bindings
         text_bindings = ctx_match.bindings;
         node_bindings = ctx_match.node_bindings;
         sequence_node_bindings = ctx_match.sequence_node_bindings;
+        correspondences = ctx_match.correspondences;
       } in
       find_nested_matches_impl
         ~source
@@ -212,6 +214,7 @@ let find_matches_with_index ~index ~pattern ~source ~(source_root : Tree.src Tre
           bindings = mb.text_bindings;
           node_bindings = mb.node_bindings;
           sequence_node_bindings = mb.sequence_node_bindings;
+          correspondences = mb.correspondences;
           start_point = Tree.start_point source_node;
           end_point = Tree.end_point source_node;
         }

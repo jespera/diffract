@@ -168,3 +168,39 @@ val find_matches_multi :
 (** [find_matches_multi ~language ~patterns ~source_text] matches multiple
     patterns against source, building the index once.
     Returns list of (pattern_index, match_result) pairs. *)
+
+(** {1 Semantic patch transforms} *)
+
+val classify_spatch_lines : string -> spatch_body
+(** [classify_spatch_lines body] splits a pattern body into match and replace parts.
+    Lines prefixed with [- ] are match-only, [+ ] are replace-only,
+    other lines are context (appear in both). *)
+
+val transform :
+  language:string ->
+  pattern_text:string ->
+  source_text:string ->
+  transform_result
+(** [transform ~language ~pattern_text ~source_text] applies a semantic patch
+    to the source. Patterns with [-]/[+] prefixed lines produce edits;
+    patterns without them return the source unchanged. *)
+
+val transform_file :
+  language:string ->
+  pattern_text:string ->
+  source_path:string ->
+  transform_result
+(** [transform_file ~language ~pattern_text ~source_path] applies a semantic
+    patch to a file. *)
+
+val generate_diff :
+  file_path:string ->
+  original:string ->
+  transformed:string ->
+  string
+(** [generate_diff ~file_path ~original ~transformed] produces a unified diff
+    string between original and transformed text. Returns empty string if equal. *)
+
+val apply_edits : string -> text_edit list -> string
+(** [apply_edits source edits] applies text edits to source, processing
+    bottom-to-top to avoid offset invalidation. Filters overlapping edits. *)
