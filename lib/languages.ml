@@ -3,9 +3,6 @@
 open Ctypes
 open Foreign
 
-(* Cache for loaded languages *)
-let loaded_languages : (string, nativeint) Hashtbl.t = Hashtbl.create 16
-
 (* Map of language names to library base names and function names.
    Only includes languages with grammars built in grammars/lib/. *)
 let language_info = [
@@ -79,15 +76,15 @@ let can_load_language lib_basename func_name =
     (try Dl.dlclose ~handle:lib with _ -> ());
     ok
 
-let get name =
+let get (ctx : Context.t) name =
   let name_lower = String.lowercase_ascii name in
-  match Hashtbl.find_opt loaded_languages name_lower with
+  match Hashtbl.find_opt ctx.lang_cache name_lower with
   | Some lang -> lang
   | None ->
     match List.assoc_opt name_lower language_info with
     | Some (lib_basename, func_name) ->
       let lang = load_language lib_basename func_name in
-      Hashtbl.add loaded_languages name_lower lang;
+      Hashtbl.add ctx.lang_cache name_lower lang;
       lang
     | None ->
       let available = List.map fst language_info

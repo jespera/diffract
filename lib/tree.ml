@@ -261,8 +261,8 @@ let of_ts_tree source (ts_tree : Node.tree) : src tree =
 (** {1 Parsing} *)
 
 (** Internal parsing function that returns an untyped tree record *)
-let parse_internal ~language source =
-  let lang = Languages.get language in
+let parse_internal ~ctx ~language source =
+  let lang = Languages.get ctx language in
   let parser = Tree_sitter_bindings.parser_new () in
 
   if parser = 0n then
@@ -281,15 +281,15 @@ let parse_internal ~language source =
   { root; source }
 
 (** Parse source code and return our internal tree representation *)
-let parse ~language source : src tree =
-  parse_internal ~language source
+let parse ~ctx ~language source : src tree =
+  parse_internal ~ctx ~language source
 
 (** Parse a file and return our internal tree representation *)
-let parse_file ~language path : src tree =
+let parse_file ~ctx ~language path : src tree =
   let source = In_channel.with_open_text path In_channel.input_all in
-  parse ~language source
+  parse ~ctx ~language source
 
 (** Parse pattern code and return a pattern tree.
     Identical parsing, but typed as a pattern tree. *)
-let parse_as_pattern ~language source : pat tree =
-  parse_internal ~language source
+let parse_as_pattern ~ctx ~language source : pat tree =
+  parse_internal ~ctx ~language source

@@ -3,6 +3,8 @@
 open Bechamel
 open Toolkit
 
+let ctx = Diffract.Context.create ()
+
 (* Generate source code with N methods in a class *)
 let generate_class_source n =
   let methods = List.init n (fun i ->
@@ -61,7 +63,7 @@ let bench_simple =
   Test.make ~name:"simple_pattern"
     (Staged.stage (fun () ->
       ignore (Diffract.Match.find_matches
-        ~language:"typescript"
+        ~ctx ~language:"typescript"
         ~pattern_text:simple_pattern
         ~source_text:simple_source);
       maybe_gc ()))
@@ -72,7 +74,7 @@ let bench_sequence n =
   Test.make ~name:(Printf.sprintf "sequence_%02d_children" n)
     (Staged.stage (fun () ->
       ignore (Diffract.Match.find_matches
-        ~language:"typescript"
+        ~ctx ~language:"typescript"
         ~pattern_text:sequence_pattern
         ~source_text:source);
       maybe_gc ()))
@@ -83,7 +85,7 @@ let bench_nested_sequence n =
   Test.make ~name:(Printf.sprintf "nested_seq_%02d_children" n)
     (Staged.stage (fun () ->
       ignore (Diffract.Match.find_nested_matches
-        ~language:"typescript"
+        ~ctx ~language:"typescript"
         ~pattern_text:nested_sequence_pattern
         ~source_text:source);
       maybe_gc ()))

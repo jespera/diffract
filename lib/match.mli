@@ -4,8 +4,8 @@ include (module type of Match_types)
 
 (** {1 Pattern parsing} *)
 
-val parse_pattern : language:string -> string -> pattern
-(** [parse_pattern ~language pattern_text] parses a pattern file.
+val parse_pattern : ctx:Context.t -> language:string -> string -> pattern
+(** [parse_pattern ~ctx ~language pattern_text] parses a pattern file.
     Pattern format:
     {v
     @@
@@ -70,8 +70,8 @@ val parse_pattern : language:string -> string -> pattern
 
     Section 2 matches directly against the node bound to [$OBJ], not its subtree. *)
 
-val parse_nested_pattern : language:string -> string -> nested_pattern
-(** [parse_nested_pattern ~language pattern_text] parses a pattern with
+val parse_nested_pattern : ctx:Context.t -> language:string -> string -> nested_pattern
+(** [parse_nested_pattern ~ctx ~language pattern_text] parses a pattern with
     multiple @@ sections for nested/scoped matching.
 
     Pattern format for nested matching:
@@ -96,16 +96,16 @@ val parse_nested_pattern : language:string -> string -> nested_pattern
 
 (** {1 Matching} *)
 
-val find_matches : language:string -> pattern_text:string -> source_text:string -> match_result list
-(** [find_matches ~language ~pattern_text ~source_text] finds all occurrences
+val find_matches : ctx:Context.t -> language:string -> pattern_text:string -> source_text:string -> match_result list
+(** [find_matches ~ctx ~language ~pattern_text ~source_text] finds all occurrences
     of the pattern in the source code. Returns a list of matches with bindings
     for each metavariable. *)
 
-val find_matches_in_file : language:string -> pattern_text:string -> source_path:string -> match_result list
-(** [find_matches_in_file ~language ~pattern_text ~source_path] finds matches in a file. *)
+val find_matches_in_file : ctx:Context.t -> language:string -> pattern_text:string -> source_path:string -> match_result list
+(** [find_matches_in_file ~ctx ~language ~pattern_text ~source_path] finds matches in a file. *)
 
-val find_nested_matches : language:string -> pattern_text:string -> source_text:string -> nested_match_result list
-(** [find_nested_matches ~language ~pattern_text ~source_text] finds matches
+val find_nested_matches : ctx:Context.t -> language:string -> pattern_text:string -> source_text:string -> nested_match_result list
+(** [find_nested_matches ~ctx ~language ~pattern_text ~source_text] finds matches
     using nested/scoped pattern matching.
 
     Auto-detects single vs. multi-section patterns:
@@ -115,8 +115,8 @@ val find_nested_matches : language:string -> pattern_text:string -> source_text:
 
     Returns matches with context chain showing how each match was scoped. *)
 
-val search : language:string -> pattern_text:string -> source_text:string -> match_search_result
-(** [search ~language ~pattern_text ~source_text] finds matches and returns
+val search : ctx:Context.t -> language:string -> pattern_text:string -> source_text:string -> match_search_result
+(** [search ~ctx ~language ~pattern_text ~source_text] finds matches and returns
     parse information.
 
     Like [find_nested_matches] but also returns [parse_error_count] indicating
@@ -161,11 +161,12 @@ val find_matches_with_index :
     Falls back to full traversal if pattern root is a metavar. *)
 
 val find_matches_multi :
+  ctx:Context.t ->
   language:string ->
   patterns:string list ->
   source_text:string ->
   (int * match_result) list
-(** [find_matches_multi ~language ~patterns ~source_text] matches multiple
+(** [find_matches_multi ~ctx ~language ~patterns ~source_text] matches multiple
     patterns against source, building the index once.
     Returns list of (pattern_index, match_result) pairs. *)
 
@@ -177,20 +178,22 @@ val classify_spatch_lines : string -> spatch_body
     other lines are context (appear in both). *)
 
 val transform :
+  ctx:Context.t ->
   language:string ->
   pattern_text:string ->
   source_text:string ->
   transform_result
-(** [transform ~language ~pattern_text ~source_text] applies a semantic patch
+(** [transform ~ctx ~language ~pattern_text ~source_text] applies a semantic patch
     to the source. Patterns with [-]/[+] prefixed lines produce edits;
     patterns without them return the source unchanged. *)
 
 val transform_file :
+  ctx:Context.t ->
   language:string ->
   pattern_text:string ->
   source_path:string ->
   transform_result
-(** [transform_file ~language ~pattern_text ~source_path] applies a semantic
+(** [transform_file ~ctx ~language ~pattern_text ~source_path] applies a semantic
     patch to a file. *)
 
 val generate_diff :

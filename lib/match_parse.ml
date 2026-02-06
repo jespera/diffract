@@ -341,7 +341,7 @@ let preprocess_spatch_ellipsis body =
   (match_text, replace_template, List.rev !substitutions)
 
 (** Parse a pattern file/string into a pattern structure *)
-let parse_pattern ~language pattern_text =
+let parse_pattern ~ctx ~language pattern_text =
   let preamble = parse_preamble pattern_text in
   (* Require explicit match mode *)
   let match_mode = match preamble.p_match_mode with
@@ -360,7 +360,7 @@ let parse_pattern ~language pattern_text =
   (* Ellipsis var names (e.g., "..._0", "..._1") are sequence metavars *)
   let ellipsis_var_names = List.map fst ellipsis_subs in
   (* Parse the transformed pattern with tree-sitter (typed as pattern tree) *)
-  let tree = Tree.parse_as_pattern ~language transformed_source in
+  let tree = Tree.parse_as_pattern ~ctx ~language transformed_source in
   (* Add ellipsis var names to sequence_metavars *)
   let sequence_metavars = preamble.p_sequence_metavars @ ellipsis_var_names in
   (* Handle replacement template if this is a transform *)
@@ -378,7 +378,7 @@ let parse_pattern ~language pattern_text =
       (* Substitute metavars in replacement template *)
       let (replace_transformed, _) =
         substitute_metavars preamble.p_metavars replace_template in
-      let replace_tree = Tree.parse_as_pattern ~language replace_transformed in
+      let replace_tree = Tree.parse_as_pattern ~ctx ~language replace_transformed in
       (Some replace_tree, replace_transformed)
     end else
       (None, "")
@@ -432,7 +432,7 @@ let split_pattern_sections text =
     if sections = [] then [text] else sections
 
 (** Parse a nested pattern from text with multiple @@ sections *)
-let parse_nested_pattern ~language pattern_text =
+let parse_nested_pattern ~ctx ~language pattern_text =
   let sections = split_pattern_sections pattern_text in
-  let patterns = List.map (parse_pattern ~language) sections in
+  let patterns = List.map (parse_pattern ~ctx ~language) sections in
   { patterns }

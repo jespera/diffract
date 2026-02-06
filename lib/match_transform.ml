@@ -602,12 +602,12 @@ let apply_edits source edits =
 
 (** Transform source text using a semantic patch pattern.
     Returns a transform_result with all edits and the transformed source. *)
-let transform ~language ~pattern_text ~source_text =
-  let pattern = Match_parse.parse_pattern ~language pattern_text in
+let transform ~ctx ~language ~pattern_text ~source_text =
+  let pattern = Match_parse.parse_pattern ~ctx ~language pattern_text in
   if not pattern.spatch.is_transform then
     { edits = []; original_source = source_text; transformed_source = source_text }
   else
-    let source_tree = Tree.parse ~language source_text in
+    let source_tree = Tree.parse ~ctx ~language source_text in
     let source = source_tree.source in
     let matches = Match_search.find_matches_in_subtree
       ~pattern
@@ -622,9 +622,9 @@ let transform ~language ~pattern_text ~source_text =
 
 (** Transform a file using a semantic patch pattern.
     Returns a transform_result. *)
-let transform_file ~language ~pattern_text ~source_path =
+let transform_file ~ctx ~language ~pattern_text ~source_path =
   let source_text = In_channel.with_open_text source_path In_channel.input_all in
-  transform ~language ~pattern_text ~source_text
+  transform ~ctx ~language ~pattern_text ~source_text
 
 (** Diff operation: keep, remove, or add a line *)
 type diff_op = DKeep of string | DRemove of string | DAdd of string
