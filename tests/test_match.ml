@@ -2807,6 +2807,31 @@ function init() {
     (string_contains ~needle:"setup();" result.transformed_source
      && string_contains ~needle:"start(mode);" result.transformed_source)
 
+(* Test: partial mode transform - JSX attribute deep in list (regression for
+   inner correspondences overwriting outer pattern→source index mapping) *)
+let test_transform_partial_deep_attr () =
+  let pattern_text = {|@@
+match: partial
+metavar $X: single
+@@
+- <WorkflowViewerTabbed additionalActionComponentTop={$X} />
++ <WorkflowViewerTabbed additionalActionComponentTop={<Wrapper>{$X}</Wrapper>} />|} in
+  let source_text = {|<WorkflowViewerTabbed
+    someProp={foo}
+    anotherProp={bar}
+    additionalActionComponentTop={someValue}
+    yetAnotherProp={baz}
+/>|} in
+  let result = Match.transform ~ctx ~language:"tsx" ~pattern_text ~source_text in
+  Alcotest.(check bool) "transformed additionalActionComponentTop" true
+    (string_contains ~needle:"additionalActionComponentTop={<Wrapper>{someValue}</Wrapper>}" result.transformed_source);
+  Alcotest.(check bool) "someProp unchanged" true
+    (string_contains ~needle:"someProp={foo}" result.transformed_source);
+  Alcotest.(check bool) "anotherProp unchanged" true
+    (string_contains ~needle:"anotherProp={bar}" result.transformed_source);
+  Alcotest.(check bool) "yetAnotherProp unchanged" true
+    (string_contains ~needle:"yetAnotherProp={baz}" result.transformed_source)
+
 let transform_tests = [
   Alcotest.test_case "classify spatch lines" `Quick test_classify_spatch_lines;
   Alcotest.test_case "simple rename" `Quick test_transform_simple_rename;
@@ -2831,4 +2856,5 @@ let transform_tests = [
   Alcotest.test_case "unbound replacement metavar" `Quick test_transform_unbound_replacement_metavar;
   Alcotest.test_case "ellipsis context" `Quick test_transform_ellipsis_context;
   Alcotest.test_case "ellipsis remove block" `Quick test_transform_ellipsis_remove_block;
+  Alcotest.test_case "partial deep attr" `Quick test_transform_partial_deep_attr;
 ]

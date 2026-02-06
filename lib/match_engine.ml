@@ -274,8 +274,12 @@ and match_children_partial ~pattern ~pattern_source ~source ~substitutions
           | None -> try_source (si + 1)
           | Some new_bindings ->
             let corr = { pattern_index = pi; source_index = si } in
+            (* Only keep our top-level correspondence; discard inner ones from
+               recursive matching — they use a different index space and would
+               corrupt the pattern_index → source_index mapping used by
+               apply_alignment_with_correspondences in transforms. *)
             let new_bindings = { new_bindings with
-              correspondences = corr :: new_bindings.correspondences } in
+              correspondences = [corr] } in
             match check_and_merge_bindings bindings new_bindings with
             | None -> try_source (si + 1)  (* Binding conflict, try next *)
             | Some merged ->
