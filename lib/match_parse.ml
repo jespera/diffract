@@ -363,6 +363,9 @@ let parse_pattern ~ctx ~language pattern_text =
   let tree = Tree.parse_as_pattern ~ctx ~language transformed_source in
   (* Add ellipsis var names to sequence_metavars *)
   let sequence_metavars = preamble.p_sequence_metavars @ ellipsis_var_names in
+  (* Disallow sequence metavars in partial mode (including ellipsis) *)
+  if match_mode = Partial && sequence_metavars <> [] then
+    failwith "Sequence metavars are not supported in match: partial";
   (* Handle replacement template if this is a transform *)
   let (replace_tree, replace_source) =
     if spatch.is_transform then begin

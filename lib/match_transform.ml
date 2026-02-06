@@ -126,231 +126,257 @@ let compute_edits_strict ~pattern ~match_result ~source =
 
 (** {1 Partial/field-mode transform support} *)
 
-(** Edit action for a pattern child during partial/field transforms *)
-type edit_action =
-  | EKeep     (** Context child - no change *)
-  | ERemove   (** Minus-only child - delete from source *)
-  | EReplace of int  (** Minus child paired with plus child at this replace index *)
+module Alignment = struct
+  (** Edit action for a pattern child during partial/field transforms *)
+  type edit_action =
+    | EKeep     (** Context child - no change *)
+    | ERemove   (** Minus-only child - delete from source *)
+    | EReplace of int  (** Minus child paired with plus child at this replace index *)
 
-(** Alignment between match tree children and replace tree children *)
-type alignment = {
-  entries: (int * edit_action) list;    (** (match_child_index, action) *)
-  insertions: (int * int) list;         (** (after_match_child_index, replace_child_index); -1 = before all *)
-}
+  (** Alignment between match tree children and replace tree children *)
+  type alignment = {
+    entries: (int * edit_action) list;    (** (match_child_index, action) *)
+    insertions: (int * int) list;         (** (after_match_child_index, replace_child_index); -1 = before all *)
+  }
 
-(** Align children of the match content node and replace content node.
-    Context children (identical type + text) serve as anchors.
-    Between anchors, minus-only children pair with plus-only children in order. *)
-let align_children ~match_source ~replace_source
-    (match_list : Tree.pat Tree.t list) (replace_list : Tree.pat Tree.t list) =
-  let match_arr = Array.of_list match_list in
-  let replace_arr = Array.of_list replace_list in
-  let mlen = Array.length match_arr in
-  let rlen = Array.length replace_arr in
-  let children_equal (mc : Tree.pat Tree.t) (rc : Tree.pat Tree.t) =
-    Tree.node_type mc = Tree.node_type rc &&
-    Tree.text match_source mc = Tree.text replace_source rc
-  in
-  let entries = ref [] in
-  let insertions = ref [] in
-  let mi = ref 0 in
-  let ri = ref 0 in
-  while !mi < mlen || !ri < rlen do
-    if !mi < mlen && !ri < rlen && children_equal match_arr.(!mi) replace_arr.(!ri) then begin
-      (* Context anchor - keep *)
-      entries := (!mi, EKeep) :: !entries;
-      incr mi; incr ri
-    end else begin
-      (* Find next anchor by scanning both lists *)
-      let anchor = ref None in
-      begin try
-        for try_mi = !mi to mlen - 1 do
-          for try_ri = !ri to rlen - 1 do
-            if children_equal match_arr.(try_mi) replace_arr.(try_ri) then begin
-              anchor := Some (try_mi, try_ri);
-              raise Exit
-            end
+  (** Align children of the match content node and replace content node.
+      Context children (identical type + text) serve as anchors.
+      Between anchors, minus-only children pair with plus-only children in order. *)
+  let align_children ~match_source ~replace_source
+      (match_list : Tree.pat Tree.t list) (replace_list : Tree.pat Tree.t list) =
+    let match_arr = Array.of_list match_list in
+    let replace_arr = Array.of_list replace_list in
+    let mlen = Array.length match_arr in
+    let rlen = Array.length replace_arr in
+    let children_equal (mc : Tree.pat Tree.t) (rc : Tree.pat Tree.t) =
+      Tree.node_type mc = Tree.node_type rc &&
+      Tree.text match_source mc = Tree.text replace_source rc
+    in
+    let entries = ref [] in
+    let insertions = ref [] in
+    let mi = ref 0 in
+    let ri = ref 0 in
+    while !mi < mlen || !ri < rlen do
+      if !mi < mlen && !ri < rlen && children_equal match_arr.(!mi) replace_arr.(!ri) then begin
+        (* Context anchor - keep *)
+        entries := (!mi, EKeep) :: !entries;
+        incr mi; incr ri
+      end else begin
+        (* Find next anchor by scanning both lists *)
+        let anchor = ref None in
+        begin try
+          for try_mi = !mi to mlen - 1 do
+            for try_ri = !ri to rlen - 1 do
+              if children_equal match_arr.(try_mi) replace_arr.(try_ri) then begin
+                anchor := Some (try_mi, try_ri);
+                raise Exit
+              end
+            done
           done
-        done
-      with Exit -> () end;
-      let (minus_end, plus_end) = match !anchor with
-        | Some (ami, ari) -> (ami, ari)
-        | None -> (mlen, rlen)
-      in
-      let minus_count = minus_end - !mi in
-      let plus_count = plus_end - !ri in
-      let paired = min minus_count plus_count in
-      (* Pair minus with plus children *)
-      for k = 0 to paired - 1 do
-        entries := (!mi + k, EReplace (!ri + k)) :: !entries
-      done;
-      (* Extra minus children → removals *)
-      for k = paired to minus_count - 1 do
-        entries := (!mi + k, ERemove) :: !entries
-      done;
-      (* Extra plus children → insertions *)
-      for k = paired to plus_count - 1 do
-        (* Insert after the last match child before this gap *)
-        let after = if !mi + minus_count > 0 then !mi + minus_count - 1 else -1 in
-        insertions := (after, !ri + k) :: !insertions
-      done;
-      mi := minus_end;
-      ri := plus_end
-    end
-  done;
-  { entries = List.rev !entries; insertions = List.rev !insertions }
-
-(** Compute the byte range to remove for a child, including surrounding separator.
-    Extends to consume the separator between this child and a sibling. *)
-let removal_range source (source_arr : Tree.src Tree.t array) child_idx =
-  let child = source_arr.(child_idx) in
-  let num = Array.length source_arr in
-  ignore source;
-  if child_idx > 0 then
-    (* Remove separator before (from previous child's end to this child's end) *)
-    let prev = source_arr.(child_idx - 1) in
-    (prev.Tree.end_byte, child.Tree.end_byte)
-  else if child_idx < num - 1 then
-    (* Remove child and separator after (from this child's start to next child's start) *)
-    let next = source_arr.(child_idx + 1) in
-    (child.Tree.start_byte, next.Tree.start_byte)
-  else
-    (* Only child *)
-    (child.Tree.start_byte, child.Tree.end_byte)
-
-(** Detect the separator text between two adjacent source children.
-    Used to replicate the separator when inserting new children. *)
-let detect_separator source (source_arr : Tree.src Tree.t array) after_idx =
-  let num = Array.length source_arr in
-  if after_idx + 1 < num then
-    (* Separator between after_idx and next child *)
-    let prev_end = source_arr.(after_idx).Tree.end_byte in
-    let next_start = source_arr.(after_idx + 1).Tree.start_byte in
-    String.sub source prev_end (next_start - prev_end)
-  else if after_idx > 0 then
-    (* Use separator before after_idx as template *)
-    let prev_end = source_arr.(after_idx - 1).Tree.end_byte in
-    let cur_start = source_arr.(after_idx).Tree.start_byte in
-    String.sub source prev_end (cur_start - prev_end)
-  else
-    ", "
-
-(** Apply alignment edits using a correspondence map (pattern child → source child).
-    Used for partial mode where matching is unordered. *)
-let apply_alignment_with_correspondences ~pattern ~(match_result : match_result) ~source alignment
-    (source_arr : Tree.src Tree.t array) (replace_arr : Tree.pat Tree.t array) =
-  let corr_map = Hashtbl.create 16 in
-  List.iter (fun (c : child_correspondence) ->
-    Hashtbl.replace corr_map c.pattern_index c.source_index
-  ) match_result.correspondences;
-  let best_source_after after_mi =
-    let best = ref None in
-    Hashtbl.iter (fun pi si ->
-      if pi <= after_mi then
-        match !best with
-        | None -> best := Some si
-        | Some prev when si > prev -> best := Some si
-        | Some _ -> ()
-    ) corr_map;
-    !best
-  in
-  let edits = ref [] in
-  (* Process alignment entries *)
-  List.iter (fun (mi, action) ->
-    match action with
-    | EKeep -> ()
-    | ERemove ->
-      (match Hashtbl.find_opt corr_map mi with
-       | Some si when si < Array.length source_arr ->
-         let (start_b, end_b) = removal_range source source_arr si in
-         edits := { start_byte = start_b; end_byte = end_b; replacement = "" } :: !edits
-       | _ -> ())
-    | EReplace ri ->
-      (match Hashtbl.find_opt corr_map mi with
-       | Some si when si < Array.length source_arr && ri < Array.length replace_arr ->
-         let src_child = source_arr.(si) in
-         let repl_text = Tree.text pattern.replace_source replace_arr.(ri) in
-         let instantiated = instantiate_template
-           ~substitutions:pattern.substitutions
-           ~text_bindings:match_result.bindings repl_text in
-         edits := { start_byte = src_child.Tree.start_byte;
-                    end_byte = src_child.Tree.end_byte;
-                    replacement = instantiated } :: !edits
-       | _ -> ())
-  ) alignment.entries;
-  (* Process insertions *)
-  List.iter (fun (after_mi, ri) ->
-    if ri < Array.length replace_arr then begin
-      let repl_text = Tree.text pattern.replace_source replace_arr.(ri) in
-      let instantiated = instantiate_template
-        ~substitutions:pattern.substitutions
-        ~text_bindings:match_result.bindings repl_text in
-      let (insert_byte, separator) =
-        if after_mi >= 0 then
-          match best_source_after after_mi with
-          | Some si when si < Array.length source_arr ->
-            (source_arr.(si).Tree.end_byte,
-             detect_separator source source_arr si)
-          | _ -> (match_result.node.Tree.end_byte, ", ")
-        else if Array.length source_arr > 0 then
-          (* Insert before the first child *)
-          (source_arr.(0).Tree.start_byte,
-           detect_separator source source_arr 0)
-        else
-          (match_result.node.Tree.start_byte, "")
-      in
-      edits := { start_byte = insert_byte; end_byte = insert_byte;
-                 replacement = separator ^ instantiated } :: !edits
-    end
-  ) alignment.insertions;
-  List.rev !edits
-
-(** Apply alignment edits using direct index mapping (pattern child i → source child i).
-    Used for field mode where matching is exact/ordered within each field group. *)
-let apply_alignment_direct ~pattern ~(match_result : match_result) ~source alignment
-    (source_arr : Tree.src Tree.t array) (replace_arr : Tree.pat Tree.t array) =
-  let edits = ref [] in
-  List.iter (fun (mi, action) ->
-    match action with
-    | EKeep -> ()
-    | ERemove ->
-      if mi < Array.length source_arr then begin
-        let (start_b, end_b) = removal_range source source_arr mi in
-        edits := { start_byte = start_b; end_byte = end_b; replacement = "" } :: !edits
+        with Exit -> () end;
+        let (minus_end, plus_end) = match !anchor with
+          | Some (ami, ari) -> (ami, ari)
+          | None -> (mlen, rlen)
+        in
+        let minus_count = minus_end - !mi in
+        let plus_count = plus_end - !ri in
+        let paired = min minus_count plus_count in
+        (* Pair minus with plus children *)
+        for k = 0 to paired - 1 do
+          entries := (!mi + k, EReplace (!ri + k)) :: !entries
+        done;
+        (* Extra minus children → removals *)
+        for k = paired to minus_count - 1 do
+          entries := (!mi + k, ERemove) :: !entries
+        done;
+        (* Extra plus children → insertions *)
+        for k = paired to plus_count - 1 do
+          (* Insert after the last match child before this gap *)
+          let after = if !mi + minus_count > 0 then !mi + minus_count - 1 else -1 in
+          insertions := (after, !ri + k) :: !insertions
+        done;
+        mi := minus_end;
+        ri := plus_end
       end
-    | EReplace ri ->
-      if mi < Array.length source_arr && ri < Array.length replace_arr then begin
-        let src_child = source_arr.(mi) in
+    done;
+    { entries = List.rev !entries; insertions = List.rev !insertions }
+
+  (** Compute the byte range to remove for a child, including surrounding separator.
+      Extends to consume the separator between this child and a sibling. *)
+  let removal_range source (source_arr : Tree.src Tree.t array) child_idx =
+    let child = source_arr.(child_idx) in
+    let num = Array.length source_arr in
+    ignore source;
+    if child_idx > 0 then
+      (* Remove separator before (from previous child's end to this child's end) *)
+      let prev = source_arr.(child_idx - 1) in
+      (prev.Tree.end_byte, child.Tree.end_byte)
+    else if child_idx < num - 1 then
+      (* Remove child and separator after (from this child's start to next child's start) *)
+      let next = source_arr.(child_idx + 1) in
+      (child.Tree.start_byte, next.Tree.start_byte)
+    else
+      (* Only child *)
+      (child.Tree.start_byte, child.Tree.end_byte)
+
+  (** Detect the separator text between two adjacent source children.
+      Used to replicate the separator when inserting new children. *)
+  let detect_separator source (source_arr : Tree.src Tree.t array) after_idx =
+    let num = Array.length source_arr in
+    if after_idx + 1 < num then
+      (* Separator between after_idx and next child *)
+      let prev_end = source_arr.(after_idx).Tree.end_byte in
+      let next_start = source_arr.(after_idx + 1).Tree.start_byte in
+      String.sub source prev_end (next_start - prev_end)
+    else if after_idx > 0 then
+      (* Use separator before after_idx as template *)
+      let prev_end = source_arr.(after_idx - 1).Tree.end_byte in
+      let cur_start = source_arr.(after_idx).Tree.start_byte in
+      String.sub source prev_end (cur_start - prev_end)
+    else
+      ", "
+
+  (** Insert position classification *)
+  type insertion_kind =
+    | Before_first
+    | After_child of int
+    | At_end
+    | Empty
+
+  (** Instantiate and adjust indentation for a single child replacement/insertion *)
+  let instantiate_with_indent ~pattern ~match_result ~source_column text =
+    let instantiated = instantiate_template
+      ~substitutions:pattern.substitutions
+      ~text_bindings:match_result.bindings text in
+    let tmpl_col = template_base_column text in
+    adjust_indentation ~source_column ~template_base_column:tmpl_col instantiated
+
+  (** Build insertion replacement with separator placement policy. *)
+  let insertion_replacement ~kind ~separator ~instantiated =
+    match kind with
+    | Before_first -> instantiated ^ separator
+    | Empty -> instantiated
+    | After_child _ | At_end -> separator ^ instantiated
+
+  (** Compute insertion spec for partial mode (with correspondences). *)
+  let insertion_spec_with_correspondences ~source ~match_result
+      (source_arr : Tree.src Tree.t array) ~after_mi ~best_source_after =
+    let source_len = Array.length source_arr in
+    if source_len = 0 then
+      (Empty, match_result.node.Tree.start_byte, "", match_result.start_point.column)
+    else if after_mi < 0 then
+      (Before_first,
+       source_arr.(0).Tree.start_byte,
+       detect_separator source source_arr 0,
+       source_arr.(0).Tree.start_point.column)
+    else
+      match best_source_after after_mi with
+      | Some si when si < source_len ->
+        (After_child si,
+         source_arr.(si).Tree.end_byte,
+         detect_separator source source_arr si,
+         source_arr.(si).Tree.start_point.column)
+      | _ ->
+        let last = source_arr.(source_len - 1) in
+        (At_end, match_result.node.Tree.end_byte, ", ", last.Tree.start_point.column)
+
+  (** Compute insertion spec for field mode (direct indices). *)
+  let insertion_spec_direct ~source ~match_result
+      (source_arr : Tree.src Tree.t array) ~after_mi =
+    let source_len = Array.length source_arr in
+    if source_len = 0 then
+      (Empty, match_result.node.Tree.start_byte, "", match_result.start_point.column)
+    else if after_mi < 0 then
+      (Before_first,
+       source_arr.(0).Tree.start_byte,
+       detect_separator source source_arr 0,
+       source_arr.(0).Tree.start_point.column)
+    else if after_mi < source_len then
+      (After_child after_mi,
+       source_arr.(after_mi).Tree.end_byte,
+       detect_separator source source_arr after_mi,
+       source_arr.(after_mi).Tree.start_point.column)
+    else
+      let last = source_arr.(source_len - 1) in
+      (At_end, match_result.node.Tree.end_byte, ", ", last.Tree.start_point.column)
+
+  let apply_alignment ~pattern ~(match_result : match_result) ~source alignment
+      ~(source_index_of_pattern : int -> int option)
+      ~(insertion_spec : after_mi:int -> insertion_kind * int * string * int)
+      (source_arr : Tree.src Tree.t array) (replace_arr : Tree.pat Tree.t array) =
+    let edits = ref [] in
+    List.iter (fun (mi, action) ->
+      match action with
+      | EKeep -> ()
+      | ERemove ->
+        (match source_index_of_pattern mi with
+         | Some si when si < Array.length source_arr ->
+           let (start_b, end_b) = removal_range source source_arr si in
+           edits := { start_byte = start_b; end_byte = end_b; replacement = "" } :: !edits
+         | _ -> ())
+      | EReplace ri ->
+        (match source_index_of_pattern mi with
+         | Some si when si < Array.length source_arr && ri < Array.length replace_arr ->
+           let src_child = source_arr.(si) in
+           let repl_text = Tree.text pattern.replace_source replace_arr.(ri) in
+           let instantiated = instantiate_with_indent ~pattern ~match_result
+             ~source_column:src_child.Tree.start_point.column repl_text in
+           edits := { start_byte = src_child.Tree.start_byte;
+                      end_byte = src_child.Tree.end_byte;
+                      replacement = instantiated } :: !edits
+         | _ -> ())
+    ) alignment.entries;
+    List.iter (fun (after_mi, ri) ->
+      if ri < Array.length replace_arr then begin
         let repl_text = Tree.text pattern.replace_source replace_arr.(ri) in
-        let instantiated = instantiate_template
-          ~substitutions:pattern.substitutions
-          ~text_bindings:match_result.bindings repl_text in
-        edits := { start_byte = src_child.Tree.start_byte;
-                   end_byte = src_child.Tree.end_byte;
-                   replacement = instantiated } :: !edits
+        let (kind, insert_byte, separator, insert_col) = insertion_spec ~after_mi in
+        let instantiated = instantiate_with_indent ~pattern ~match_result
+          ~source_column:insert_col repl_text in
+        let replacement = insertion_replacement ~kind ~separator ~instantiated in
+        edits := { start_byte = insert_byte; end_byte = insert_byte;
+                   replacement } :: !edits
       end
-  ) alignment.entries;
-  List.iter (fun (after_mi, ri) ->
-    if ri < Array.length replace_arr then begin
-      let repl_text = Tree.text pattern.replace_source replace_arr.(ri) in
-      let instantiated = instantiate_template
-        ~substitutions:pattern.substitutions
-        ~text_bindings:match_result.bindings repl_text in
-      let (insert_byte, separator) =
-        if after_mi >= 0 && after_mi < Array.length source_arr then
-          (source_arr.(after_mi).Tree.end_byte,
-           detect_separator source source_arr after_mi)
-        else if Array.length source_arr > 0 then
-          (source_arr.(0).Tree.start_byte,
-           detect_separator source source_arr 0)
-        else
-          (match_result.node.Tree.start_byte, "")
-      in
-      edits := { start_byte = insert_byte; end_byte = insert_byte;
-                 replacement = separator ^ instantiated } :: !edits
-    end
-  ) alignment.insertions;
-  List.rev !edits
+    ) alignment.insertions;
+    List.rev !edits
+
+  (** Apply alignment edits using a correspondence map (pattern child → source child).
+      Used for partial mode where matching is unordered. *)
+  let apply_with_correspondences ~pattern ~(match_result : match_result) ~source alignment
+      (source_arr : Tree.src Tree.t array) (replace_arr : Tree.pat Tree.t array) =
+    let corr_map = Hashtbl.create 16 in
+    List.iter (fun (c : child_correspondence) ->
+      Hashtbl.replace corr_map c.pattern_index c.source_index
+    ) match_result.correspondences;
+    let best_source_after after_mi =
+      let best = ref None in
+      Hashtbl.iter (fun pi si ->
+        if pi <= after_mi then
+          match !best with
+          | None -> best := Some si
+          | Some prev when si > prev -> best := Some si
+          | Some _ -> ()
+      ) corr_map;
+      !best
+    in
+    let source_index_of_pattern mi = Hashtbl.find_opt corr_map mi in
+    let insertion_spec ~after_mi =
+      insertion_spec_with_correspondences ~source ~match_result
+        source_arr ~after_mi ~best_source_after
+    in
+    apply_alignment ~pattern ~match_result ~source alignment
+      ~source_index_of_pattern ~insertion_spec source_arr replace_arr
+
+  (** Apply alignment edits using direct index mapping (pattern child i → source child i).
+      Used for field mode where matching is exact/ordered within each field group. *)
+  let apply_direct ~pattern ~(match_result : match_result) ~source alignment
+      (source_arr : Tree.src Tree.t array) (replace_arr : Tree.pat Tree.t array) =
+    let source_index_of_pattern mi = Some mi in
+    let insertion_spec ~after_mi =
+      insertion_spec_direct ~source ~match_result source_arr ~after_mi
+    in
+    apply_alignment ~pattern ~match_result ~source alignment
+      ~source_index_of_pattern ~insertion_spec source_arr replace_arr
+end
 
 (** Compute edits for partial-mode transform.
     Uses correspondences to map pattern children to source children,
@@ -363,13 +389,13 @@ let compute_edits_partial ~pattern ~match_result ~source =
     let replace_content = unwrap_content_node replace_tree.root in
     let match_children = Tree.named_children match_content in
     let replace_children = Tree.named_children replace_content in
-    let alignment = align_children
+    let alignment = Alignment.align_children
       ~match_source:pattern.source ~replace_source:pattern.replace_source
       match_children replace_children in
     let source_children = Tree.named_children match_result.node in
     let source_arr = Array.of_list source_children in
     let replace_arr = Array.of_list replace_children in
-    apply_alignment_with_correspondences ~pattern ~match_result ~source
+    Alignment.apply_with_correspondences ~pattern ~match_result ~source
       alignment source_arr replace_arr
 
 (** Find the end byte of the last child for a given field name in a field list.
@@ -536,12 +562,12 @@ let compute_edits_field ~pattern ~match_result ~source =
       if Hashtbl.mem replace_tbl field then begin
         let replace_nodes = Hashtbl.find replace_tbl field in
         let source_nodes = Hashtbl.find_opt source_tbl field |> Option.value ~default:[] in
-        let alignment = align_children
+        let alignment = Alignment.align_children
           ~match_source:pattern.source ~replace_source:pattern.replace_source
           match_nodes replace_nodes in
         let source_arr = Array.of_list source_nodes in
         let replace_arr = Array.of_list replace_nodes in
-        let field_edits = apply_alignment_direct ~pattern ~match_result ~source
+        let field_edits = Alignment.apply_direct ~pattern ~match_result ~source
           alignment source_arr replace_arr in
         edits := field_edits @ !edits
       end

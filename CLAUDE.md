@@ -92,6 +92,7 @@ function test() {
 - Auto-detects context: adds `;` in statement position, not in argument position
 - Does NOT replace `...$var` (PHP spread operator is preserved)
 - Each `...` gets a unique binding name (`..._0`, `..._1`, etc.)
+- Sequence metavars (including `...`) are not supported with `match: partial`.
 
 Matching modes (required - must specify one):
 - `match: strict` - Exact positional matching (no extra children allowed, ordered). Use for function calls, arrays.

@@ -103,6 +103,7 @@ function $NAME(...) { ... }
 Notes:
 - Each `...` matches zero or more nodes.
 - Ellipsis is not replaced when it looks like a spread operator (e.g., `...$x` or `...args`).
+- Sequence metavars (including `...`) are not supported with `match: partial`.
 
 ## Partial Matching
 
@@ -129,6 +130,10 @@ metavar $X: single
 ```
 
 This matches `{ f1: { f2: 42, f3: "extra" }, other: true }` binding `$X = 42`.
+
+Notes:
+- `match: partial` may backtrack to satisfy all bindings when multiple children could match.
+- Sequence metavars are rejected in `match: partial`.
 
 ## Nested Patterns with `on $VAR`
 
