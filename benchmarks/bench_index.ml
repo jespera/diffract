@@ -6,6 +6,8 @@
 
 open Diffract
 
+let ctx = Context.create ()
+
 (* Generate source with multiple console calls and classes *)
 let generate_source ~num_logs ~num_errors ~num_classes =
   let logs = List.init num_logs (fun i ->
@@ -62,12 +64,12 @@ let time_median n f =
 (* Match patterns using traversal (O(n*k) where n=nodes, k=patterns) *)
 let bench_traversal_multi ~language ~patterns ~source_text =
   List.concat_map (fun pattern_text ->
-    Match.find_matches ~language ~pattern_text ~source_text
+    Match.find_matches ~ctx ~language ~pattern_text ~source_text
   ) patterns
 
 (* Match patterns using index (O(n + k*m) where m=matches per type) *)
 let bench_indexed_multi ~language ~patterns ~source_text =
-  Match.find_matches_multi ~language ~patterns ~source_text
+  Match.find_matches_multi ~ctx ~language ~patterns ~source_text
 
 let print_header title =
   Printf.printf "\n%s\n" (String.make 65 '=');
@@ -191,16 +193,16 @@ const $name = $val|});
 
   List.iter (fun (label, pattern_text) ->
     let traversal_time = time_median 3 (fun () ->
-      Match.find_matches ~language:"typescript" ~pattern_text ~source_text:selective_source
+      Match.find_matches ~ctx ~language:"typescript" ~pattern_text ~source_text:selective_source
     ) in
 
     (* For fair comparison, index approach includes index building *)
     let indexed_time = time_median 3 (fun () ->
-      Match.find_matches_multi ~language:"typescript"
+      Match.find_matches_multi ~ctx ~language:"typescript"
         ~patterns:[pattern_text] ~source_text:selective_source
     ) in
 
-    let matches = Match.find_matches ~language:"typescript"
+    let matches = Match.find_matches ~ctx ~language:"typescript"
         ~pattern_text ~source_text:selective_source in
     let speedup = if indexed_time > 0.0 then traversal_time /. indexed_time else 0.0 in
 
@@ -219,7 +221,7 @@ const $name = $val|});
   Printf.printf "When index is pre-built, queries are very fast.\n\n";
 
   let source = generate_source ~num_logs:20 ~num_errors:10 ~num_classes:5 in
-  let source_tree = Tree.parse ~language:"typescript" source in
+  let source_tree = Tree.parse ~ctx ~language:"typescript" source in
   let index = Match.build_index source_tree.root in
 
   Printf.printf "Index built for source with ~130 nodes.\n\n";
@@ -227,7 +229,7 @@ const $name = $val|});
   Printf.printf "%s\n" (String.make 58 '-');
 
   List.iter (fun pattern_text ->
-    let pattern = Match.parse_pattern ~language:"typescript" pattern_text in
+    let pattern = Match.parse_pattern ~ctx ~language:"typescript" pattern_text in
     let query_time = time_median 5 (fun () ->
       Match.find_matches_with_index ~index ~pattern
         ~source:source_tree.source ~source_root:source_tree.root

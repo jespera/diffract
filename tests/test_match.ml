@@ -2,6 +2,8 @@
 
 open Diffract
 
+let ctx = Context.create ()
+
 (* Helper to check if string contains substring *)
 let string_contains ~needle haystack =
   let needle_len = String.length needle in
@@ -26,7 +28,7 @@ metavar $msg: single
 @@
 console.log($msg)|} in
   let results = Match.find_matches
-    ~language:"typescript"
+    ~ctx ~language:"typescript"
     ~pattern_text
     ~source_text:{|console.log("hello")|} in
   Alcotest.(check int) "found one match" 1 (List.length results);
@@ -46,7 +48,7 @@ metavar $arg: single
 @@
 $obj.$method($arg)|} in
   let results = Match.find_matches
-    ~language:"typescript"
+    ~ctx ~language:"typescript"
     ~pattern_text
     ~source_text:{|console.log("test"); Math.floor(3.14)|} in
   Alcotest.(check int) "found two matches" 2 (List.length results);
@@ -62,7 +64,7 @@ metavar $x: single
 @@
 nonexistent($x)|} in
   let results = Match.find_matches
-    ~language:"typescript"
+    ~ctx ~language:"typescript"
     ~pattern_text
     ~source_text:{|console.log("hello")|} in
   Alcotest.(check int) "no matches" 0 (List.length results)
@@ -80,7 +82,7 @@ console.log($n)|} in
     console.log("c");
   |} in
   let results = Match.find_matches
-    ~language:"typescript"
+    ~ctx ~language:"typescript"
     ~pattern_text
     ~source_text:source in
   Alcotest.(check int) "found three matches" 3 (List.length results)
@@ -93,7 +95,7 @@ metavar $x: single
 @@
 $x + $x|} in
   let results = Match.find_matches
-    ~language:"typescript"
+    ~ctx ~language:"typescript"
     ~pattern_text
     ~source_text:{|a + a; b + c|} in
   (* Only a + a should match, not b + c *)
@@ -110,7 +112,7 @@ metavar $msg: single
 console.log($msg)|} in
   let source_text = {|console.log("hello")|} in
   let results = Match.find_matches
-    ~language:"typescript"
+    ~ctx ~language:"typescript"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found match" 1 (List.length results);
@@ -129,7 +131,7 @@ console.log($MESAGE)|} in  (* Typo: $MESAGE instead of $MSG *)
     (Failure "Undeclared metavars: $MESAGE")
     (fun () ->
       ignore (Match.find_matches
-        ~language:"typescript"
+        ~ctx ~language:"typescript"
         ~pattern_text
         ~source_text:{|console.log("hello")|}))
 
@@ -156,7 +158,7 @@ class Logger {
 console.log("outside class");
 |} in
   let results = Match.find_nested_matches
-    ~language:"typescript"
+    ~ctx ~language:"typescript"
     ~pattern_text
     ~source_text in
   (* Should only find console.log inside the class, not outside *)
@@ -200,7 +202,7 @@ if (a) {
 }
 |} in
   let results = Match.find_nested_matches
-    ~language:"typescript"
+    ~ctx ~language:"typescript"
     ~pattern_text
     ~source_text in
   (* Should find matches with 2 context levels *)
@@ -232,7 +234,7 @@ class MyClass {
 }
 |} in
   let results = Match.find_nested_matches
-    ~language:"typescript"
+    ~ctx ~language:"typescript"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found match" 1 (List.length results);
@@ -270,7 +272,7 @@ class Bar {
 }
 |} in
   let results = Match.find_nested_matches
-    ~language:"typescript"
+    ~ctx ~language:"typescript"
     ~pattern_text
     ~source_text in
   (* Only the Foo class with console.log(Foo) should match - same $name value *)
@@ -305,7 +307,7 @@ class MyClass {
 outsideCall(2);
 |} in
   let results = Match.find_nested_matches
-    ~language:"typescript"
+    ~ctx ~language:"typescript"
     ~pattern_text
     ~source_text in
   (* outsideCall is not inside MyClass, so should not match *)
@@ -335,7 +337,7 @@ class Logger {
 }
 |} in
   let results = Match.find_nested_matches
-    ~language:"typescript"
+    ~ctx ~language:"typescript"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found match" 1 (List.length results);
@@ -352,7 +354,7 @@ metavar $msg: single
 @@
 console.log($msg)|} in
   let results = Match.find_nested_matches
-    ~language:"typescript"
+    ~ctx ~language:"typescript"
     ~pattern_text
     ~source_text:{|console.log("hello"); console.log("world")|} in
   Alcotest.(check int) "found two matches" 2 (List.length results);
@@ -376,7 +378,7 @@ class Service {
 }
 |} in
   let results = Match.find_matches
-    ~language:"typescript"
+    ~ctx ~language:"typescript"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found one match" 1 (List.length results);
@@ -397,7 +399,7 @@ metavar $items: sequence
 [$items]|} in
   let source_text = {|[]|} in
   let results = Match.find_matches
-    ~language:"typescript"
+    ~ctx ~language:"typescript"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found one match" 1 (List.length results);
@@ -431,7 +433,7 @@ class Service {
 console.log("outside");
 |} in
   let results = Match.find_nested_matches
-    ~language:"typescript"
+    ~ctx ~language:"typescript"
     ~pattern_text
     ~source_text in
   (* Should find 2 matches: both console.logs inside the class, not the one outside *)
@@ -452,10 +454,10 @@ metavar $msg: single
 @@
 console.log($msg)|} in
   let source_text = {|console.log("a"); console.log("b"); foo();|} in
-  let traversal_results = Match.find_matches ~language:"typescript" ~pattern_text ~source_text in
-  let source_tree = Tree.parse ~language:"typescript" source_text in
+  let traversal_results = Match.find_matches ~ctx ~language:"typescript" ~pattern_text ~source_text in
+  let source_tree = Tree.parse ~ctx ~language:"typescript" source_text in
   let index = Match.build_index source_tree.root in
-  let pattern = Match.parse_pattern ~language:"typescript" pattern_text in
+  let pattern = Match.parse_pattern ~ctx ~language:"typescript" pattern_text in
   let indexed_results = Match.find_matches_with_index
     ~index ~pattern ~source:source_tree.source ~source_root:source_tree.root in
   Alcotest.(check int) "same count"
@@ -469,9 +471,9 @@ metavar $x: single
 @@
 $x|} in
   let source_text = {|a + b|} in
-  let source_tree = Tree.parse ~language:"typescript" source_text in
+  let source_tree = Tree.parse ~ctx ~language:"typescript" source_text in
   let index = Match.build_index source_tree.root in
-  let pattern = Match.parse_pattern ~language:"typescript" pattern_text in
+  let pattern = Match.parse_pattern ~ctx ~language:"typescript" pattern_text in
   let results = Match.find_matches_with_index
     ~index ~pattern ~source:source_tree.source ~source_root:source_tree.root in
   Alcotest.(check bool) "found matches" true (List.length results > 0)
@@ -491,7 +493,7 @@ metavar $msg: single
 console.error($msg)|};
   ] in
   let source_text = {|console.log("info"); console.error("oops"); console.log("done");|} in
-  let results = Match.find_matches_multi ~language:"typescript" ~patterns ~source_text in
+  let results = Match.find_matches_multi ~ctx ~language:"typescript" ~patterns ~source_text in
   (* Pattern 0 (log) should have 2 matches, pattern 1 (error) should have 1 *)
   let log_matches = List.filter (fun (i, _) -> i = 0) results in
   let error_matches = List.filter (fun (i, _) -> i = 1) results in
@@ -508,7 +510,7 @@ metavar $X: single
 { someField: $X }|} in
   let source_text = {|({ someField: 1, other: 2 })|} in
   let results = Match.find_matches
-    ~language:"typescript"
+    ~ctx ~language:"typescript"
     ~pattern_text
     ~source_text in
   Printf.printf "Partial object matches: %d\n" (List.length results);
@@ -533,7 +535,7 @@ metavar $X: single
 { someField: $X }|} in
   let source_text = {|foo({ someField: 1, other: 2 })|} in
   let results = Match.find_nested_matches
-    ~language:"typescript"
+    ~ctx ~language:"typescript"
     ~pattern_text
     ~source_text in
   Printf.printf "Nested partial with on: %d\n" (List.length results);
@@ -552,7 +554,7 @@ metavar $X: single
 { f1: { f2: $X } }|} in
   let source_text = {|({ f1: { f2: 42, f3: "extra" }, other: true })|} in
   let results = Match.find_matches
-    ~language:"typescript"
+    ~ctx ~language:"typescript"
     ~pattern_text
     ~source_text in
   Printf.printf "Nested partial matches: %d\n" (List.length results);
@@ -569,13 +571,13 @@ metavar $X: single
 { someField: $X }|} in
   let source_text = {|({ someField: 1, other: 2 })|} in
   let results = Match.find_matches
-    ~language:"typescript"
+    ~ctx ~language:"typescript"
     ~pattern_text
     ~source_text in
   Printf.printf "Exact object matches against multi-prop: %d\n" (List.length results);
   let source_text_single = {|({ someField: 1 })|} in
   let results_single = Match.find_matches
-    ~language:"typescript"
+    ~ctx ~language:"typescript"
     ~pattern_text
     ~source_text:source_text_single in
   Printf.printf "Exact object matches against single-prop: %d\n" (List.length results_single);
@@ -621,7 +623,7 @@ fun main() {
 }
 |} in
   let results = Match.find_matches
-    ~language:"kotlin"
+    ~ctx ~language:"kotlin"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found one println match" 1 (List.length results);
@@ -645,7 +647,7 @@ fun main() {
 }
 |} in
   let results = Match.find_matches
-    ~language:"kotlin"
+    ~ctx ~language:"kotlin"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found two val declarations" 2 (List.length results);
@@ -670,7 +672,7 @@ fun main() {
 }
 |} in
   let results = Match.find_matches
-    ~language:"kotlin"
+    ~ctx ~language:"kotlin"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found three function calls" 3 (List.length results);
@@ -698,7 +700,7 @@ fun processUser(user: User) {
 }
 |} in
   let results = Match.find_matches
-    ~language:"kotlin"
+    ~ctx ~language:"kotlin"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found two property accesses" 2 (List.length results);
@@ -728,7 +730,7 @@ class User {
 }
 |} in
   let results = Match.find_matches
-    ~language:"kotlin"
+    ~ctx ~language:"kotlin"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found one class" 1 (List.length results);
@@ -756,7 +758,7 @@ fun describe(x: Int): String {
 }
 |} in
   let results = Match.find_matches
-    ~language:"kotlin"
+    ~ctx ~language:"kotlin"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found when expression" 1 (List.length results);
@@ -783,7 +785,7 @@ fun main() {
 }
 |} in
   let results = Match.find_matches
-    ~language:"kotlin"
+    ~ctx ~language:"kotlin"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found lambdas with explicit params" 2 (List.length results);
@@ -808,7 +810,7 @@ fun getName(user: User?): String {
 }
 |} in
   let results = Match.find_matches
-    ~language:"kotlin"
+    ~ctx ~language:"kotlin"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found safe call" 1 (List.length results);
@@ -830,7 +832,7 @@ fun getName(user: User?): String {
 }
 |} in
   let results = Match.find_matches
-    ~language:"kotlin"
+    ~ctx ~language:"kotlin"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found elvis expression" 1 (List.length results);
@@ -853,7 +855,7 @@ fun process(name: String?) {
 }
 |} in
   let results = Match.find_matches
-    ~language:"kotlin"
+    ~ctx ~language:"kotlin"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found let calls" 2 (List.length results);
@@ -878,7 +880,7 @@ fun max(a: Int, b: Int): Int {
 }
 |} in
   let results = Match.find_matches
-    ~language:"kotlin"
+    ~ctx ~language:"kotlin"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found if expression" 1 (List.length results);
@@ -906,7 +908,7 @@ fun sumList(items: List<Int>): Int {
 }
 |} in
   let results = Match.find_matches
-    ~language:"kotlin"
+    ~ctx ~language:"kotlin"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found for loop" 1 (List.length results);
@@ -940,7 +942,7 @@ fun standalone() {
 }
 |} in
   let results = Match.find_nested_matches
-    ~language:"kotlin"
+    ~ctx ~language:"kotlin"
     ~pattern_text
     ~source_text in
   (* Should only find println inside the class, not the standalone one *)
@@ -965,7 +967,7 @@ data class Point(val x: Double, val y: Double)
 class RegularClass(val value: Int)
 |} in
   let results = Match.find_matches
-    ~language:"kotlin"
+    ~ctx ~language:"kotlin"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found two data classes" 2 (List.length results);
@@ -990,7 +992,7 @@ fun process(text: String): String {
 }
 |} in
   let results = Match.find_matches
-    ~language:"kotlin"
+    ~ctx ~language:"kotlin"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found chained call" 1 (List.length results);
@@ -1013,7 +1015,7 @@ fun isAdult(age: Int): Boolean {
 }
 |} in
   let results = Match.find_matches
-    ~language:"kotlin"
+    ~ctx ~language:"kotlin"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found comparison" 1 (List.length results);
@@ -1034,7 +1036,7 @@ fun forceGet(value: String?): String {
 }
 |} in
   let results = Match.find_matches
-    ~language:"kotlin"
+    ~ctx ~language:"kotlin"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found null assertion" 1 (List.length results);
@@ -1072,7 +1074,7 @@ metavar $MSG: single
 <?php echo $MSG;|} in
   let source_text = {|<?php echo "Hello World"; echo $name;|} in
   let results = Match.find_matches
-    ~language:"php"
+    ~ctx ~language:"php"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found two echo statements" 2 (List.length results)
@@ -1091,7 +1093,7 @@ strlen($input);
 array_map($callback, $items);
 |} in
   let results = Match.find_matches
-    ~language:"php"
+    ~ctx ~language:"php"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found three function calls" 3 (List.length results)
@@ -1112,7 +1114,7 @@ function process($data) {
 }
 |} in
   let results = Match.find_matches
-    ~language:"php"
+    ~ctx ~language:"php"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found two error_log calls" 2 (List.length results)
@@ -1132,7 +1134,7 @@ $name = compute($data);
 $age = 25;
 |} in
   let results = Match.find_matches
-    ~language:"php"
+    ~ctx ~language:"php"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found two assignments to $name" 2 (List.length results);
@@ -1159,7 +1161,7 @@ class UserService {
 }
 |} in
   let results = Match.find_matches
-    ~language:"php"
+    ~ctx ~language:"php"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found one class" 1 (List.length results);
@@ -1187,7 +1189,7 @@ class User {
 }
 |} in
   let results = Match.find_matches
-    ~language:"php"
+    ~ctx ~language:"php"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found two property accesses" 2 (List.length results);
@@ -1215,7 +1217,7 @@ class Service {
 }
 |} in
   let results = Match.find_matches
-    ~language:"php"
+    ~ctx ~language:"php"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found three method calls" 3 (List.length results);
@@ -1241,7 +1243,7 @@ foreach ($users as $user) {
 }
 |} in
   let results = Match.find_matches
-    ~language:"php"
+    ~ctx ~language:"php"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found foreach loop" 1 (List.length results);
@@ -1265,7 +1267,7 @@ foreach ($config as $key => $value) {
 }
 |} in
   let results = Match.find_matches
-    ~language:"php"
+    ~ctx ~language:"php"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found foreach with key-value" 1 (List.length results);
@@ -1301,7 +1303,7 @@ try {} catch (RuntimeException $e) {
 error_log("outside catch");
 |} in
   let results = Match.find_nested_matches
-    ~language:"php"
+    ~ctx ~language:"php"
     ~pattern_text
     ~source_text in
   (* Should find error_log inside catch blocks only, not the one outside *)
@@ -1327,7 +1329,7 @@ $config = Config::get("database");
 Logger::info("Started");
 |} in
   let results = Match.find_matches
-    ~language:"php"
+    ~ctx ~language:"php"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found three static calls" 3 (List.length results);
@@ -1349,7 +1351,7 @@ $first = $items[0];
 $value = $config[$key];
 |} in
   let results = Match.find_matches
-    ~language:"php"
+    ~ctx ~language:"php"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found three array accesses" 3 (List.length results)
@@ -1368,7 +1370,7 @@ $db = new Database($config);
 $empty = new stdClass();
 |} in
   let results = Match.find_matches
-    ~language:"php"
+    ~ctx ~language:"php"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found three instantiations" 3 (List.length results);
@@ -1391,7 +1393,7 @@ $name = $user->name ?? "Guest";
 $port = $config["port"] ?? 8080;
 |} in
   let results = Match.find_matches
-    ~language:"php"
+    ~ctx ~language:"php"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found two null coalescing" 2 (List.length results);
@@ -1413,7 +1415,7 @@ $add = fn($a, $b) => $a + $b;
 $nums = array_map(fn($n) => $n * $n, $items);
 |} in
   let results = Match.find_matches
-    ~language:"php"
+    ~ctx ~language:"php"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found three arrow functions" 3 (List.length results)
@@ -1442,7 +1444,7 @@ class Logger {
 error_log("Outside class");
 |} in
   let results = Match.find_nested_matches
-    ~language:"php"
+    ~ctx ~language:"php"
     ~pattern_text
     ~source_text in
   (* Should only find error_log inside the class, not outside *)
@@ -1468,7 +1470,7 @@ $result = $query->where()->orderBy();
 $other = $query->select()->limit();
 |} in
   let results = Match.find_matches
-    ~language:"php"
+    ~ctx ~language:"php"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found two chained calls on $query" 2 (List.length results);
@@ -1492,7 +1494,7 @@ function getUser($id) {
 }
 |} in
   let results = Match.find_matches
-    ~language:"php"
+    ~ctx ~language:"php"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found two return statements" 2 (List.length results)
@@ -1534,7 +1536,7 @@ function test() {
 function test() {
     echo "Test";
 }|} in
-  let results = Match.find_matches ~language:"php" ~pattern_text:pattern ~source_text:source in
+  let results = Match.find_matches ~ctx ~language:"php" ~pattern_text:pattern ~source_text:source in
   Alcotest.(check int) "matches with attributes" 1 (List.length results)
 
 (* Test: verify ordering is preserved within fields *)
@@ -1559,10 +1561,10 @@ function test() {
     $a = 1;
 }|} in
   (* Should match correct order *)
-  let r1 = Match.find_matches ~language:"php" ~pattern_text:pattern ~source_text:source_correct in
+  let r1 = Match.find_matches ~ctx ~language:"php" ~pattern_text:pattern ~source_text:source_correct in
   Alcotest.(check int) "matches correct order" 1 (List.length r1);
   (* Should NOT match wrong order *)
-  let r2 = Match.find_matches ~language:"php" ~pattern_text:pattern ~source_text:source_wrong in
+  let r2 = Match.find_matches ~ctx ~language:"php" ~pattern_text:pattern ~source_text:source_wrong in
   Alcotest.(check int) "rejects wrong order" 0 (List.length r2)
 
 (* Test: field matching with metavars *)
@@ -1581,7 +1583,7 @@ function test() {
 function test() {
     return $data;
 }|} in
-  let results = Match.find_matches ~language:"php" ~pattern_text:pattern ~source_text:source in
+  let results = Match.find_matches ~ctx ~language:"php" ~pattern_text:pattern ~source_text:source in
   Alcotest.(check int) "matches with metavar" 1 (List.length results);
   let result = List.hd results in
   Alcotest.(check bool) "has $BODY binding" true (List.mem_assoc "$BODY" result.bindings)
@@ -1599,7 +1601,7 @@ function test() {
 function test() {
     echo "Test";
 }|} in
-  let results = Match.find_matches ~language:"php" ~pattern_text:pattern ~source_text:source in
+  let results = Match.find_matches ~ctx ~language:"php" ~pattern_text:pattern ~source_text:source in
   Alcotest.(check int) "matches without attributes" 1 (List.length results)
 
 (* Test: field matching in TypeScript class with decorators *)
@@ -1615,7 +1617,7 @@ class $NAME { $BODY }|} in
 class MyComponent {
   render() { return null; }
 }|} in
-  let results = Match.find_matches ~language:"typescript" ~pattern_text:pattern ~source_text:source in
+  let results = Match.find_matches ~ctx ~language:"typescript" ~pattern_text:pattern ~source_text:source in
   Alcotest.(check int) "matches class with decorator" 1 (List.length results);
   let result = List.hd results in
   Alcotest.(check string) "$NAME" "MyComponent" (List.assoc "$NAME" result.bindings)
@@ -1636,7 +1638,7 @@ function foo() { return 1; }
 #[Auth]
 function bar() { echo "hi"; }
 |} in
-  let results = Match.find_matches ~language:"php" ~pattern_text:pattern ~source_text:source in
+  let results = Match.find_matches ~ctx ~language:"php" ~pattern_text:pattern ~source_text:source in
   (* Should match both - attributes field is ignored since pattern doesn't have it *)
   Alcotest.(check int) "matches both functions with attributes" 2 (List.length results)
 
@@ -1674,7 +1676,7 @@ function test ()
     echo "C";
     echo "D";
 }|} in
-  let results = Match.find_matches ~language:"php" ~pattern_text:pattern ~source_text:source in
+  let results = Match.find_matches ~ctx ~language:"php" ~pattern_text:pattern ~source_text:source in
   Alcotest.(check int) "found one match" 1 (List.length results);
   let result = List.hd results in
   (* Check that ellipsis captured the right content *)
@@ -1697,7 +1699,7 @@ foo($a, $x, $b);
 bar($x);
 baz($m, $n, $x, $o, $p);
 |} in
-  let results = Match.find_matches ~language:"php" ~pattern_text:pattern ~source_text:source in
+  let results = Match.find_matches ~ctx ~language:"php" ~pattern_text:pattern ~source_text:source in
   Alcotest.(check int) "found three matches" 3 (List.length results)
 
 (* Test: ellipsis with zero matches *)
@@ -1715,7 +1717,7 @@ function test() {
 function test() {
     echo "only";
 }|} in
-  let results = Match.find_matches ~language:"php" ~pattern_text:pattern ~source_text:source in
+  let results = Match.find_matches ~ctx ~language:"php" ~pattern_text:pattern ~source_text:source in
   Alcotest.(check int) "found one match with empty ellipsis" 1 (List.length results);
   let result = List.hd results in
   Alcotest.(check string) "first ellipsis empty" "" (List.assoc "..._0" result.bindings);
@@ -1733,7 +1735,7 @@ metavar $ARR: single
 foo(...$args);
 bar($a, ...$rest);
 |} in
-  let results = Match.find_matches ~language:"php" ~pattern_text:pattern ~source_text:source in
+  let results = Match.find_matches ~ctx ~language:"php" ~pattern_text:pattern ~source_text:source in
   Alcotest.(check int) "found spread operator match" 1 (List.length results);
   let result = List.hd results in
   Alcotest.(check string) "$ARR" "$args" (List.assoc "$ARR" result.bindings)
@@ -1755,7 +1757,7 @@ function test() {
     console.log("middle");
     cleanup();
 }|} in
-  let results = Match.find_matches ~language:"typescript" ~pattern_text:pattern ~source_text:source in
+  let results = Match.find_matches ~ctx ~language:"typescript" ~pattern_text:pattern ~source_text:source in
   Alcotest.(check int) "found typescript match" 1 (List.length results);
   let result = List.hd results in
   Alcotest.(check string) "$NAME" "test" (List.assoc "$NAME" result.bindings)
@@ -1771,7 +1773,7 @@ const arr1 = ["a", "middle", "b"];
 const arr2 = ["middle"];
 const arr3 = ["x", "y", "middle", "z"];
 |} in
-  let results = Match.find_matches ~language:"typescript" ~pattern_text:pattern ~source_text:source in
+  let results = Match.find_matches ~ctx ~language:"typescript" ~pattern_text:pattern ~source_text:source in
   Alcotest.(check int) "found three array matches" 3 (List.length results)
 
 (* Test: ellipsis in TypeScript class methods *)
@@ -1797,7 +1799,7 @@ class Simple {
     render() {}
 }
 |} in
-  let results = Match.find_matches ~language:"typescript" ~pattern_text:pattern ~source_text:source in
+  let results = Match.find_matches ~ctx ~language:"typescript" ~pattern_text:pattern ~source_text:source in
   Alcotest.(check int) "found two class matches" 2 (List.length results);
   let names = List.map (fun (r : Match.match_result) ->
     List.assoc "$NAME" r.bindings
@@ -1825,7 +1827,7 @@ function Footer() {
     return <div />;
 }
 |} in
-  let results = Match.find_matches ~language:"tsx" ~pattern_text:pattern ~source_text:source in
+  let results = Match.find_matches ~ctx ~language:"tsx" ~pattern_text:pattern ~source_text:source in
   Alcotest.(check int) "found two TSX function matches" 2 (List.length results);
   let names = List.map (fun (r : Match.match_result) ->
     List.assoc "$NAME" r.bindings
@@ -1853,7 +1855,7 @@ const Footer = () => {
     return <div />;
 };
 |} in
-  let results = Match.find_matches ~language:"tsx" ~pattern_text:pattern ~source_text:source in
+  let results = Match.find_matches ~ctx ~language:"tsx" ~pattern_text:pattern ~source_text:source in
   Alcotest.(check int) "found two TSX arrow function matches" 2 (List.length results)
 
 (* Test: TypeScript spread operator preserved (exact match) *)
@@ -1867,7 +1869,7 @@ metavar $OBJ: single
 const copy = { ...original };
 const another = { ...source };
 |} in
-  let results = Match.find_matches ~language:"typescript" ~pattern_text:pattern ~source_text:source in
+  let results = Match.find_matches ~ctx ~language:"typescript" ~pattern_text:pattern ~source_text:source in
   Alcotest.(check int) "found spread patterns" 2 (List.length results);
   let objs = List.map (fun (r : Match.match_result) ->
     List.assoc "$OBJ" r.bindings
@@ -1906,7 +1908,7 @@ object Main {
 }
 |} in
   let results = Match.find_matches
-    ~language:"scala"
+    ~ctx ~language:"scala"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found two println matches" 2 (List.length results);
@@ -1932,7 +1934,7 @@ object Test {
 }
 |} in
   let results = Match.find_matches
-    ~language:"scala"
+    ~ctx ~language:"scala"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found two val declarations" 2 (List.length results);
@@ -1956,7 +1958,7 @@ object Test {
 }
 |} in
   let results = Match.find_matches
-    ~language:"scala"
+    ~ctx ~language:"scala"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found two var declarations" 2 (List.length results);
@@ -1981,7 +1983,7 @@ object Main {
 }
 |} in
   let results = Match.find_matches
-    ~language:"scala"
+    ~ctx ~language:"scala"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found three function calls" 3 (List.length results);
@@ -2011,7 +2013,7 @@ object Main {
 }
 |} in
   let results = Match.find_matches
-    ~language:"scala"
+    ~ctx ~language:"scala"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found three method calls" 3 (List.length results);
@@ -2040,7 +2042,7 @@ object Utils {
 }
 |} in
   let results = Match.find_matches
-    ~language:"scala"
+    ~ctx ~language:"scala"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found two objects" 2 (List.length results);
@@ -2068,7 +2070,7 @@ class Service {
 }
 |} in
   let results = Match.find_matches
-    ~language:"scala"
+    ~ctx ~language:"scala"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found two classes" 2 (List.length results);
@@ -2093,7 +2095,7 @@ class User(name: String, age: Int)
 class Point(x: Double, y: Double)
 |} in
   let results = Match.find_matches
-    ~language:"scala"
+    ~ctx ~language:"scala"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found two classes with params" 2 (List.length results);
@@ -2120,7 +2122,7 @@ object Utils {
 }
 |} in
   let results = Match.find_matches
-    ~language:"scala"
+    ~ctx ~language:"scala"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found two defs" 2 (List.length results);
@@ -2143,7 +2145,7 @@ object Main {
 }
 |} in
   let results = Match.find_matches
-    ~language:"scala"
+    ~ctx ~language:"scala"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found if expression" 1 (List.length results);
@@ -2170,7 +2172,7 @@ object Main {
 }
 |} in
   let results = Match.find_matches
-    ~language:"scala"
+    ~ctx ~language:"scala"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found match expression" 1 (List.length results);
@@ -2197,7 +2199,7 @@ object Main {
 }
 |} in
   let results = Match.find_matches
-    ~language:"scala"
+    ~ctx ~language:"scala"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found for comprehension" 1 (List.length results);
@@ -2220,7 +2222,7 @@ object Main {
 }
 |} in
   let results = Match.find_matches
-    ~language:"scala"
+    ~ctx ~language:"scala"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found lambdas" 2 (List.length results);
@@ -2245,7 +2247,7 @@ object Main {
 }
 |} in
   let results = Match.find_matches
-    ~language:"scala"
+    ~ctx ~language:"scala"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found filter calls" 2 (List.length results);
@@ -2281,7 +2283,7 @@ def standalone(): Unit = {
 }
 |} in
   let results = Match.find_nested_matches
-    ~language:"scala"
+    ~ctx ~language:"scala"
     ~pattern_text
     ~source_text in
   (* Should only find println inside the object, not the standalone one *)
@@ -2311,7 +2313,7 @@ object Main {
 }
 |} in
   let results = Match.find_matches
-    ~language:"scala"
+    ~ctx ~language:"scala"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found getOrElse calls" 2 (List.length results)
@@ -2333,7 +2335,7 @@ object Main {
 }
 |} in
   let results = Match.find_matches
-    ~language:"scala"
+    ~ctx ~language:"scala"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found chained call" 1 (List.length results);
@@ -2357,7 +2359,7 @@ object Main {
 }
 |} in
   let results = Match.find_matches
-    ~language:"scala"
+    ~ctx ~language:"scala"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found additions" 2 (List.length results)
@@ -2377,7 +2379,7 @@ object Main {
 }
 |} in
   let results = Match.find_matches
-    ~language:"scala"
+    ~ctx ~language:"scala"
     ~pattern_text
     ~source_text in
   Alcotest.(check int) "found comparisons" 2 (List.length results)
@@ -2435,7 +2437,7 @@ metavar $MSG: single
     console.log("hello");
     console.log(name);
 }|} in
-  let result = Match.transform ~language:"typescript" ~pattern_text ~source_text in
+  let result = Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text in
   Alcotest.(check int) "two edits" 2 (List.length result.edits);
   Alcotest.(check bool) "source changed" true
     (result.original_source <> result.transformed_source);
@@ -2456,7 +2458,7 @@ metavar $B: single
 - assertEqual($A, $B)
 + assertEqual($B, $A)|} in
   let source_text = "assertEqual(expected, actual);" in
-  let result = Match.transform ~language:"typescript" ~pattern_text ~source_text in
+  let result = Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text in
   Alcotest.(check int) "one edit" 1 (List.length result.edits);
   Alcotest.(check bool) "arguments swapped" true
     (string_contains ~needle:"assertEqual(actual, expected)" result.transformed_source)
@@ -2470,7 +2472,7 @@ metavar $X: single
 - foo($X)
 + bar($X)|} in
   let source_text = "foo(1); foo(2); foo(3);" in
-  let result = Match.transform ~language:"typescript" ~pattern_text ~source_text in
+  let result = Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text in
   Alcotest.(check int) "three edits" 3 (List.length result.edits);
   Alcotest.(check bool) "contains bar(1)" true
     (string_contains ~needle:"bar(1)" result.transformed_source);
@@ -2490,7 +2492,7 @@ metavar $X: single
 - nonexistent($X)
 + other($X)|} in
   let source_text = "console.log(42);" in
-  let result = Match.transform ~language:"typescript" ~pattern_text ~source_text in
+  let result = Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text in
   Alcotest.(check int) "no edits" 0 (List.length result.edits);
   Alcotest.(check string) "source unchanged" source_text result.transformed_source
 
@@ -2502,7 +2504,7 @@ metavar $MSG: single
 @@
 console.log($MSG)|} in
   let source_text = {|console.log("hello")|} in
-  let result = Match.transform ~language:"typescript" ~pattern_text ~source_text in
+  let result = Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text in
   Alcotest.(check int) "no edits (not a transform)" 0 (List.length result.edits);
   Alcotest.(check string) "source unchanged" source_text result.transformed_source
 
@@ -2542,7 +2544,7 @@ metavar $BODY: sequence
   let source_text = {|function greet() {
     console.log("hello");
 }|} in
-  let result = Match.transform ~language:"typescript" ~pattern_text ~source_text in
+  let result = Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text in
   Alcotest.(check int) "one edit" 1 (List.length result.edits);
   Alcotest.(check bool) "has arrow function" true
     (string_contains ~needle:"const greet = () => {" result.transformed_source)
@@ -2577,7 +2579,7 @@ metavar $X: single
 - old($X)
 + new($X)|} in
   let source_text = "var x = old(42);" in
-  let result = Match.transform ~language:"typescript" ~pattern_text ~source_text in
+  let result = Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text in
   Alcotest.(check bool) "replaced old with new" true
     (string_contains ~needle:"new(42)" result.transformed_source)
 
@@ -2593,7 +2595,7 @@ metavar $MSG: single
   let source_text = {|<?php
 echo "hello";
 echo "world";|} in
-  let result = Match.transform ~language:"php" ~pattern_text ~source_text in
+  let result = Match.transform ~ctx ~language:"php" ~pattern_text ~source_text in
   Alcotest.(check int) "two edits" 2 (List.length result.edits);
   Alcotest.(check bool) "has print(\"hello\")" true
     (string_contains ~needle:{|print("hello")|} result.transformed_source);
@@ -2616,7 +2618,7 @@ metavar $V: single
 - { color: $V }
 + { colour: $V }|} in
   let source_text = {|const config = { color: "red", size: 10 }|} in
-  let result = Match.transform ~language:"typescript" ~pattern_text ~source_text in
+  let result = Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text in
   Alcotest.(check int) "one edit" 1 (List.length result.edits);
   Alcotest.(check bool) "has colour" true
     (string_contains ~needle:{|colour: "red"|} result.transformed_source);
@@ -2636,7 +2638,7 @@ metavar $V: single
   { name: "bob", age: 25 },
   { age: 40 }
 ]|} in
-  let result = Match.transform ~language:"typescript" ~pattern_text ~source_text in
+  let result = Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text in
   Alcotest.(check int) "two edits (two objects have name)" 2 (List.length result.edits);
   Alcotest.(check bool) "alice gets id" true
     (string_contains ~needle:{|name: "alice", id: 0|} result.transformed_source);
@@ -2654,7 +2656,7 @@ metavar $V: single
 - { name: $V, age: 30 }
 + { name: $V }|} in
   let source_text = {|const data = { name: "alice", age: 30 }|} in
-  let result = Match.transform ~language:"typescript" ~pattern_text ~source_text in
+  let result = Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text in
   Alcotest.(check int) "one edit" 1 (List.length result.edits);
   Alcotest.(check bool) "has name" true
     (string_contains ~needle:{|name: "alice"|} result.transformed_source);
@@ -2677,7 +2679,7 @@ function test() {
 function test() {
     echo "hi";
 }|} in
-  let result = Match.transform ~language:"php" ~pattern_text ~source_text in
+  let result = Match.transform ~ctx ~language:"php" ~pattern_text ~source_text in
   Alcotest.(check int) "one edit" 1 (List.length result.edits);
   Alcotest.(check bool) "has new attribute" true
     (string_contains ~needle:{|#[deprecated(note = "use new API")]|} result.transformed_source);
@@ -2699,7 +2701,7 @@ metavar $BODY: sequence
 function foo() { return 1; }
 
 function plain() { echo "no attrs"; }|} in
-  let result = Match.transform ~language:"php" ~pattern_text ~source_text in
+  let result = Match.transform ~ctx ~language:"php" ~pattern_text ~source_text in
   Alcotest.(check int) "two edits" 2 (List.length result.edits);
   Alcotest.(check bool) "foo has return type" true
     (string_contains ~needle:"foo(): void" result.transformed_source);
@@ -2722,7 +2724,7 @@ metavar $BODY: sequence
 + function $NAME(): void { $BODY }|} in
   let source_text = {|<?php
 function plain() { echo "hi"; }|} in
-  let result = Match.transform ~language:"php" ~pattern_text ~source_text in
+  let result = Match.transform ~ctx ~language:"php" ~pattern_text ~source_text in
   Alcotest.(check bool) "has edits" true (List.length result.edits >= 1);
   Alcotest.(check bool) "adds attribute" true
     (string_contains ~needle:{|#[Route("/")]|} result.transformed_source);
@@ -2739,7 +2741,7 @@ metavar $B: single
 - { b: $B, a: $A }
 + { b: $B, a: $A, c: 3 }|} in
   let source_text = {|const obj = { a: 1, b: 2 }|} in
-  let result = Match.transform ~language:"typescript" ~pattern_text ~source_text in
+  let result = Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text in
   Alcotest.(check bool) "inserts after source order" true
     (string_contains ~needle:"{ a: 1, b: 2, c: 3 }" result.transformed_source)
 
@@ -2754,7 +2756,7 @@ metavar $X: single
   let source_text = "foo();" in
   Alcotest.check_raises "unbound replacement metavar"
     (Failure "Metavars in replacement not bound in match: $X")
-    (fun () -> ignore (Match.transform ~language:"typescript" ~pattern_text ~source_text))
+    (fun () -> ignore (Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text))
 
 (* Test: ellipsis in context lines is handled in transforms *)
 let test_transform_ellipsis_context () =
@@ -2773,7 +2775,7 @@ function test() {
   old(value);
   console.log("end");
 }|} in
-  let result = Match.transform ~language:"typescript" ~pattern_text ~source_text in
+  let result = Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text in
   Alcotest.(check bool) "replaces call" true
     (string_contains ~needle:"new(value)" result.transformed_source);
   Alcotest.(check bool) "no ellipsis left" false
@@ -2796,7 +2798,7 @@ function init() {
   warmup();
   start(mode);
 }|} in
-  let result = Match.transform ~language:"typescript" ~pattern_text ~source_text in
+  let result = Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text in
   Alcotest.(check bool) "removes log" false
     (string_contains ~needle:"log(\"starting\")" result.transformed_source);
   Alcotest.(check bool) "removes warmup" false

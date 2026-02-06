@@ -1,20 +1,21 @@
 (** Diffract - structural pattern matching for source code *)
 
 module Bindings = Tree_sitter_bindings
+module Context = Context
 module Tree = Tree
 module Match = Match
 
 (** Parse source code and return the tree representation *)
-let parse_tree ~language source =
-  Tree.parse ~language source
+let parse_tree ~ctx ~language source =
+  Tree.parse ~ctx ~language source
 
 (** Parse a file and return the tree representation *)
-let parse_file_tree ~language path =
-  Tree.parse_file ~language path
+let parse_file_tree ~ctx ~language path =
+  Tree.parse_file ~ctx ~language path
 
 (** Parse and return S-expression string (original API) *)
-let parse_to_sexp ~language source =
-  let lang = Languages.get language in
+let parse_to_sexp ~ctx ~language source =
+  let lang = Languages.get ctx language in
   let parser = Bindings.parser_new () in
 
   if parser = 0n then
@@ -37,8 +38,8 @@ let parse_to_sexp ~language source =
   sexp
 
 (** Parse file and return S-expression string *)
-let parse_file_to_sexp ~language path =
+let parse_file_to_sexp ~ctx ~language path =
   let source = In_channel.with_open_text path In_channel.input_all in
-  parse_to_sexp ~language source
+  parse_to_sexp ~ctx ~language source
 
 let available_languages () = Languages.list_available ()

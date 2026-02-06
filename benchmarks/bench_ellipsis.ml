@@ -9,6 +9,8 @@
 
 open Diffract
 
+let ctx = Context.create ()
+
 (* Generate a function body with N statements, where target_call appears
    at specified positions (0-indexed from start of body) *)
 let generate_function_body ~n ~target_call ~target_positions =
@@ -112,10 +114,10 @@ let () =
     let source = generate_source ~n ~target_call:target ~target_positions:[n/2] in
 
     let time = time_median 5 (fun () ->
-      Match.find_matches ~language:"typescript" ~pattern_text:pattern ~source_text:source
+      Match.find_matches ~ctx ~language:"typescript" ~pattern_text:pattern ~source_text:source
     ) in
 
-    let matches = Match.find_matches ~language:"typescript" ~pattern_text:pattern ~source_text:source in
+    let matches = Match.find_matches ~ctx ~language:"typescript" ~pattern_text:pattern ~source_text:source in
     let us_per_stmt = (time *. 1_000_000.0) /. float_of_int n in
 
     Printf.printf "%-12d %12.3f %12d %10.1f\n"
@@ -147,10 +149,10 @@ let () =
     let source = generate_source ~n ~target_call:target ~target_positions in
 
     let time = time_median 5 (fun () ->
-      Match.find_matches ~language:"typescript" ~pattern_text:pattern ~source_text:source
+      Match.find_matches ~ctx ~language:"typescript" ~pattern_text:pattern ~source_text:source
     ) in
 
-    let matches = Match.find_matches ~language:"typescript" ~pattern_text:pattern ~source_text:source in
+    let matches = Match.find_matches ~ctx ~language:"typescript" ~pattern_text:pattern ~source_text:source in
 
     Printf.printf "%-20s %12.3f %12d\n"
       label (time *. 1000.0) (List.length matches);
@@ -176,10 +178,10 @@ let () =
     let source = generate_source ~n ~target_call:target ~target_positions:positions in
 
     let time = time_median 5 (fun () ->
-      Match.find_matches ~language:"typescript" ~pattern_text:pattern ~source_text:source
+      Match.find_matches ~ctx ~language:"typescript" ~pattern_text:pattern ~source_text:source
     ) in
 
-    let matches = Match.find_matches ~language:"typescript" ~pattern_text:pattern ~source_text:source in
+    let matches = Match.find_matches ~ctx ~language:"typescript" ~pattern_text:pattern ~source_text:source in
     let ms_per_match = if List.length matches > 0
       then (time *. 1000.0) /. float_of_int (List.length matches)
       else 0.0 in
@@ -215,10 +217,10 @@ let () =
     in
 
     let time = time_median 3 (fun () ->
-      Match.find_matches ~language:"typescript" ~pattern_text:pattern2 ~source_text:source
+      Match.find_matches ~ctx ~language:"typescript" ~pattern_text:pattern2 ~source_text:source
     ) in
 
-    let matches = Match.find_matches ~language:"typescript" ~pattern_text:pattern2 ~source_text:source in
+    let matches = Match.find_matches ~ctx ~language:"typescript" ~pattern_text:pattern2 ~source_text:source in
 
     Printf.printf "%-12d %12.3f %12d\n"
       n (time *. 1000.0) (List.length matches);
@@ -247,10 +249,10 @@ let () =
 
   List.iter (fun (label, pat) ->
     let time = time_median 5 (fun () ->
-      Match.find_matches ~language:"typescript" ~pattern_text:pat ~source_text:source
+      Match.find_matches ~ctx ~language:"typescript" ~pattern_text:pat ~source_text:source
     ) in
 
-    let matches = Match.find_matches ~language:"typescript" ~pattern_text:pat ~source_text:source in
+    let matches = Match.find_matches ~ctx ~language:"typescript" ~pattern_text:pat ~source_text:source in
 
     Printf.printf "%-20s %12.3f %12d\n"
       label (time *. 1000.0) (List.length matches);
@@ -290,10 +292,10 @@ function test() {
     let source = Printf.sprintf "function test() {\n%s\n}" body in
 
     let time = time_median 3 (fun () ->
-      Match.find_matches ~language:"typescript" ~pattern_text:pattern_no_match ~source_text:source
+      Match.find_matches ~ctx ~language:"typescript" ~pattern_text:pattern_no_match ~source_text:source
     ) in
 
-    let matches = Match.find_matches ~language:"typescript" ~pattern_text:pattern_no_match ~source_text:source in
+    let matches = Match.find_matches ~ctx ~language:"typescript" ~pattern_text:pattern_no_match ~source_text:source in
     let us_per_stmt = (time *. 1_000_000.0) /. float_of_int n in
 
     Printf.printf "%-12d %12.3f %12d %10.1f\n"
@@ -340,10 +342,10 @@ function test() {
     let source = Printf.sprintf "function test() {\n%s\n}" body in
 
     let time = time_median 3 (fun () ->
-      Match.find_matches ~language:"typescript" ~pattern_text:pattern_many_false ~source_text:source
+      Match.find_matches ~ctx ~language:"typescript" ~pattern_text:pattern_many_false ~source_text:source
     ) in
 
-    let matches = Match.find_matches ~language:"typescript" ~pattern_text:pattern_many_false ~source_text:source in
+    let matches = Match.find_matches ~ctx ~language:"typescript" ~pattern_text:pattern_many_false ~source_text:source in
 
     Printf.printf "%-12d %-12d %12.3f %12d\n"
       n num_calls (time *. 1000.0) (List.length matches);
@@ -403,7 +405,7 @@ function test() {
     let source = Printf.sprintf "function test() {\n%s\n}" body in
 
     let time = time_median 3 (fun () ->
-      Match.find_matches ~language:"typescript" ~pattern_text:pattern_mixed ~source_text:source
+      Match.find_matches ~ctx ~language:"typescript" ~pattern_text:pattern_mixed ~source_text:source
     ) in
 
     let us_per_stmt = (time *. 1_000_000.0) /. float_of_int n in

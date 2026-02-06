@@ -164,12 +164,12 @@ val of_ts_tree : string -> Node.tree -> src tree
 
 (** {1 Parsing} *)
 
-(** [parse ~language source] parses source code and returns a source tree *)
-val parse : language:string -> string -> src tree
+(** [parse ~ctx ~language source] parses source code and returns a source tree *)
+val parse : ctx:Context.t -> language:string -> string -> src tree
 
-(** [parse_file ~language path] parses a file and returns a source tree *)
-val parse_file : language:string -> string -> src tree
+(** [parse_file ~ctx ~language path] parses a file and returns a source tree *)
+val parse_file : ctx:Context.t -> language:string -> string -> src tree
 
-(** [parse_as_pattern ~language source] parses pattern code and returns a pattern tree.
+(** [parse_as_pattern ~ctx ~language source] parses pattern code and returns a pattern tree.
     The parsing is identical to [parse], but the result is typed as a pattern tree. *)
-val parse_as_pattern : language:string -> string -> pat tree
+val parse_as_pattern : ctx:Context.t -> language:string -> string -> pat tree

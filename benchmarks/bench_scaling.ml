@@ -7,6 +7,8 @@ let generate_class_source n =
   ) |> String.concat "\n" in
   Printf.sprintf "class TestClass {\n%s\n}" methods
 
+let ctx = Diffract.Context.create ()
+
 (* Sequence pattern for class matching *)
 let sequence_pattern = {|@@
 match: strict
@@ -65,7 +67,7 @@ let () =
     (* Sequence benchmark - just 3 runs *)
     let seq_time = time_median 3 (fun () ->
       Diffract.Match.find_matches
-        ~language:"typescript"
+        ~ctx ~language:"typescript"
         ~pattern_text:sequence_pattern
         ~source_text:source
     ) in
@@ -74,7 +76,7 @@ let () =
     let nested_time =
       time_median 3 (fun () ->
         Diffract.Match.find_nested_matches
-          ~language:"typescript"
+          ~ctx ~language:"typescript"
           ~pattern_text:nested_sequence_pattern
           ~source_text:source
       )

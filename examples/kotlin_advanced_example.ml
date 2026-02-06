@@ -1,5 +1,7 @@
 open Diffract
 
+let ctx = Context.create ()
+
 (* Example 1: Nested rules - find deprecated API calls inside specific classes *)
 let example_nested_rules () =
   print_endline "=== Example 1: Nested Rules ===";
@@ -47,7 +49,7 @@ fun standalone() {
 |} in
 
   let results = Match.find_nested_matches
-    ~language:"kotlin"
+    ~ctx ~language:"kotlin"
     ~pattern_text
     ~source_text in
 
@@ -106,7 +108,7 @@ fun standaloneFunction() {
 |} in
 
   let results = Match.find_nested_matches
-    ~language:"kotlin"
+    ~ctx ~language:"kotlin"
     ~pattern_text
     ~source_text in
 
@@ -148,7 +150,7 @@ fun main() {
 |} in
 
   let results = Match.find_matches
-    ~language:"kotlin"
+    ~ctx ~language:"kotlin"
     ~pattern_text
     ~source_text in
 
@@ -206,7 +208,7 @@ class Logger {
 |} in
 
   let results = Match.find_nested_matches
-    ~language:"kotlin"
+    ~ctx ~language:"kotlin"
     ~pattern_text
     ~source_text in
 
@@ -274,7 +276,7 @@ fun standaloneQuery() {
 |} in
 
   let results = Match.find_nested_matches
-    ~language:"kotlin"
+    ~ctx ~language:"kotlin"
     ~pattern_text
     ~source_text in
 

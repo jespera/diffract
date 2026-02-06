@@ -1,6 +1,7 @@
 (* Example: Traverse a TypeScript file and print function names *)
 
 let () =
+  let ctx = Diffract.Context.create () in
   let source = {|
 function hello(name: string): void {
   console.log("Hello, " + name);
@@ -13,7 +14,7 @@ function goodbye(name: string): void {
 const greet = (x: string) => console.log(x);
 |} in
 
-  let tree = Diffract.parse_tree ~language:"typescript" source in
+  let tree = Diffract.parse_tree ~ctx ~language:"typescript" source in
   let root = tree.root in
 
   Printf.printf "Root node type: %s\n" root.Diffract.Tree.node_type;

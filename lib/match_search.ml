@@ -57,18 +57,18 @@ let find_pattern_matches ~pattern ~inherited_bindings ~source
     find_matches_in_subtree ~pattern ~inherited_bindings ~source ~root_node
 
 (** Find all matches of a pattern in source code *)
-let find_matches ~language ~pattern_text ~source_text =
-  let pattern = Match_parse.parse_pattern ~language pattern_text in
-  let source_tree = Tree.parse ~language source_text in
+let find_matches ~ctx ~language ~pattern_text ~source_text =
+  let pattern = Match_parse.parse_pattern ~ctx ~language pattern_text in
+  let source_tree = Tree.parse ~ctx ~language source_text in
   find_matches_in_subtree ~pattern
     ~inherited_bindings:Match_engine.empty_bindings
     ~source:source_tree.source
     ~root_node:source_tree.root
 
 (** Find matches in a file *)
-let find_matches_in_file ~language ~pattern_text ~source_path =
+let find_matches_in_file ~ctx ~language ~pattern_text ~source_path =
   let source_text = In_channel.with_open_text source_path In_channel.input_all in
-  find_matches ~language ~pattern_text ~source_text
+  find_matches ~ctx ~language ~pattern_text ~source_text
 
 (** Recursively find nested matches.
     Process patterns left-to-right. For each context pattern, find matches,
@@ -128,9 +128,9 @@ let rec find_nested_matches_impl ~source ~inherited_bindings
     ) ctx_matches
 
 (** Internal: find nested matches and return with source tree for error checking *)
-let find_nested_matches_internal ~language ~pattern_text ~source_text =
-  let nested = Match_parse.parse_nested_pattern ~language pattern_text in
-  let source_tree = Tree.parse ~language source_text in
+let find_nested_matches_internal ~ctx ~language ~pattern_text ~source_text =
+  let nested = Match_parse.parse_nested_pattern ~ctx ~language pattern_text in
+  let source_tree = Tree.parse ~ctx ~language source_text in
   let source = source_tree.source in
   let source_root = source_tree.root in
   let matches =
@@ -167,14 +167,14 @@ let find_nested_matches_internal ~language ~pattern_text ~source_text =
 (** Find nested matches using a pattern with multiple sections.
     Auto-detects: single section behaves like find_matches, multiple sections
     enable nested/scoped matching. Supports 'on $VAR' for direct matching. *)
-let find_nested_matches ~language ~pattern_text ~source_text =
-  let (matches, _) = find_nested_matches_internal ~language ~pattern_text ~source_text in
+let find_nested_matches ~ctx ~language ~pattern_text ~source_text =
+  let (matches, _) = find_nested_matches_internal ~ctx ~language ~pattern_text ~source_text in
   matches
 
 (** Find nested matches and return parse error information.
     Returns both matches and the count of parse errors (ERROR nodes) in the source. *)
-let search ~language ~pattern_text ~source_text =
-  let (matches, source_tree) = find_nested_matches_internal ~language ~pattern_text ~source_text in
+let search ~ctx ~language ~pattern_text ~source_text =
+  let (matches, source_tree) = find_nested_matches_internal ~ctx ~language ~pattern_text ~source_text in
   { matches; parse_error_count = Tree.error_count source_tree }
 
 (** Build an index from a source tree root. O(n) where n is node count. *)
@@ -223,12 +223,12 @@ let find_matches_with_index ~index ~pattern ~source ~(source_root : Tree.src Tre
 
 (** Match multiple patterns against source, building index once.
     Returns list of (pattern_index, match_result) pairs. *)
-let find_matches_multi ~language ~patterns ~source_text =
-  let source_tree = Tree.parse ~language source_text in
+let find_matches_multi ~ctx ~language ~patterns ~source_text =
+  let source_tree = Tree.parse ~ctx ~language source_text in
   let source = source_tree.source in
   let index = build_index source_tree.root in
   List.concat (List.mapi (fun i pattern_text ->
-    let pattern = Match_parse.parse_pattern ~language pattern_text in
+    let pattern = Match_parse.parse_pattern ~ctx ~language pattern_text in
     let matches = find_matches_with_index ~index ~pattern ~source ~source_root:source_tree.root in
     List.map (fun m -> (i, m)) matches
   ) patterns)

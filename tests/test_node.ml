@@ -2,8 +2,10 @@
 
 open Diffract
 
+let ctx = Context.create ()
+
 let parse_ts source =
-  let tree = Diffract.parse_tree ~language:"typescript" source in
+  let tree = Diffract.parse_tree ~ctx ~language:"typescript" source in
   (tree.root, tree.source)
 
 (* Test: Root node type *)
@@ -23,14 +25,14 @@ let test_find_children () =
 (* Test: Text extraction *)
 let test_text_extraction () =
   let source = "const x = 42;" in
-  let tree = Diffract.parse_tree ~language:"typescript" source in
+  let tree = Diffract.parse_tree ~ctx ~language:"typescript" source in
   let text = Tree.text tree.source tree.root in
   Alcotest.(check string) "text matches source" source text
 
 (* Test: Text extraction for child *)
 let test_child_text_extraction () =
   let source = "const x = 42;" in
-  let tree = Diffract.parse_tree ~language:"typescript" source in
+  let tree = Diffract.parse_tree ~ctx ~language:"typescript" source in
   let numbers = Tree.find_by_type "number" tree.root in
   Alcotest.(check bool) "found number" true (List.length numbers > 0);
   let num = List.hd numbers in
