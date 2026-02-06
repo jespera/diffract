@@ -152,7 +152,7 @@ Pattern matching is implemented as a pipeline:
    expands ellipsis (`...`) into sequence metavars, and parses the pattern with
    tree-sitter (`Tree.parse_as_pattern`).
 2. **Match**: `match_engine.ml` performs structural matching with three modes
-   (`strict`, `field`, `partial`) and supports sequence metavars.
+   (`strict`, `field`, `partial`) and supports sequence metavars (except in `partial` mode).
 3. **Search**: `match_search.ml` traverses trees, handles nested patterns, and
    formats match results. `match.ml` re-exports the public API.
 

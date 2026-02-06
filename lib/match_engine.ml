@@ -257,45 +257,41 @@ and match_children_partial ~pattern ~pattern_source ~source ~substitutions
   (* Track which source children have been consumed *)
   let used = Array.make source_len false in
 
-  (* Try to find a matching source child for pattern child p *)
-  let find_match_for bindings pi (p : Tree.pat Tree.t) =
-    let is_seq = is_sequence_placeholder ~pattern substitutions pattern_source p in
-    if is_seq then
-      (* Sequence metavars don't make sense in partial mode - treat as single *)
-      None
-    else
-      (* Try each unconsumed source child *)
-      let rec try_source si =
-        if si >= source_len then None
-        else if used.(si) then try_source (si + 1)
-        else
-          match match_node ~pattern ~pattern_source ~source ~substitutions
-                  p source_arr.(si) with
-          | None -> try_source (si + 1)
-          | Some new_bindings ->
-            let corr = { pattern_index = pi; source_index = si } in
-            (* Only keep our top-level correspondence; discard inner ones from
-               recursive matching — they use a different index space and would
-               corrupt the pattern_index → source_index mapping used by
-               apply_alignment_with_correspondences in transforms. *)
-            let new_bindings = { new_bindings with
-              correspondences = [corr] } in
-            match check_and_merge_bindings bindings new_bindings with
-            | None -> try_source (si + 1)  (* Binding conflict, try next *)
-            | Some merged ->
-              used.(si) <- true;
-              Some merged
-      in
-      try_source 0
-  in
-
-  (* Match each pattern child *)
+  (* Match each pattern child with backtracking over source choices *)
   let rec match_all bindings pi = function
     | [] -> Some bindings
     | p :: rest ->
-      match find_match_for bindings pi p with
-      | None -> None
-      | Some merged -> match_all merged (pi + 1) rest
+      let is_seq = is_sequence_placeholder ~pattern substitutions pattern_source p in
+      if is_seq then
+        (* Sequence metavars don't make sense in partial mode - reject *)
+        None
+      else
+        let rec try_source si =
+          if si >= source_len then None
+          else if used.(si) then try_source (si + 1)
+          else
+            match match_node ~pattern ~pattern_source ~source ~substitutions
+                    p source_arr.(si) with
+            | None -> try_source (si + 1)
+            | Some new_bindings ->
+              let corr = { pattern_index = pi; source_index = si } in
+              (* Only keep our top-level correspondence; discard inner ones from
+                 recursive matching — they use a different index space and would
+                 corrupt the pattern_index → source_index mapping used by
+                 apply_alignment_with_correspondences in transforms. *)
+              let new_bindings = { new_bindings with
+                correspondences = [corr] } in
+              match check_and_merge_bindings bindings new_bindings with
+              | None -> try_source (si + 1)  (* Binding conflict, try next *)
+              | Some merged ->
+                used.(si) <- true;
+                match match_all merged (pi + 1) rest with
+                | Some result -> Some result
+                | None ->
+                  used.(si) <- false;
+                  try_source (si + 1)
+        in
+        try_source 0
   in
   match_all empty_bindings 0 pattern_children
 

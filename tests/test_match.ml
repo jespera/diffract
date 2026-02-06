@@ -2745,6 +2745,22 @@ metavar $B: single
   Alcotest.(check bool) "inserts after source order" true
     (string_contains ~needle:"{ a: 1, b: 2, c: 3 }" result.transformed_source)
 
+(* Test: partial mode insert before first child should not add leading separator *)
+let test_transform_partial_insert_before_first () =
+  let pattern_text = {|@@
+match: partial
+metavar $A: single
+@@
+- { a: $A }
++ { z: 0, a: $A }|} in
+  let source_text = {|const obj = { a: 1, b: 2 }|} in
+  let result = Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text in
+  Alcotest.(check bool) "has inserted leading property" true
+    (string_contains ~needle:"{ z: 0, a: 1, b: 2 }" result.transformed_source);
+  Alcotest.(check bool) "no leading separator" false
+    (string_contains ~needle:"{ , z: 0" result.transformed_source
+     || string_contains ~needle:"{, z: 0" result.transformed_source)
+
 (* Test: replacement-only metavar must be bound in match *)
 let test_transform_unbound_replacement_metavar () =
   let pattern_text = {|@@
@@ -2832,6 +2848,51 @@ metavar $X: single
   Alcotest.(check bool) "yetAnotherProp unchanged" true
     (string_contains ~needle:"yetAnotherProp={baz}" result.transformed_source)
 
+(* Test: partial matching should backtrack to find a valid pairing *)
+let test_partial_match_backtracking_needed () =
+  let pattern_text = {|@@
+match: partial
+metavar $K: single
+metavar $V: single
+@@
+{ $K: $V, y: 1 }|} in
+  let source_text = {|const obj = { y: 1, x: 2 }|} in
+  let results = Match.find_matches
+    ~ctx ~language:"typescript"
+    ~pattern_text
+    ~source_text in
+  Alcotest.(check int) "found one match" 1 (List.length results);
+  let result = List.hd results in
+  Alcotest.(check string) "$K binds to x" "x" (List.assoc "$K" result.bindings)
+
+(* Test: partial mode multiline replacement should honor source indentation *)
+let test_transform_partial_multiline_indent () =
+  let pattern_text = {|@@
+match: partial
+metavar $V: single
+@@
+- { value: $V }
++ { value:
++   $V }|} in
+  let source_text = "const data = {\n    value: foo,\n    other: bar\n };" in
+  let result = Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text in
+  Alcotest.(check bool) "multiline uses source indentation" true
+    (string_contains ~needle:"\n    value:\n      foo" result.transformed_source)
+
+(* Test: sequence metavars should be rejected in partial mode *)
+let test_partial_rejects_sequence_metavar () =
+  let pattern_text = {|@@
+match: partial
+metavar $BODY: sequence
+@@
+{ $BODY }|} in
+  Alcotest.check_raises "sequence metavars in partial"
+    (Failure "Sequence metavars are not supported in match: partial")
+    (fun () -> ignore (Match.find_matches
+      ~ctx ~language:"typescript"
+      ~pattern_text
+      ~source_text:"const obj = { a: 1, b: 2 };"))
+
 let transform_tests = [
   Alcotest.test_case "classify spatch lines" `Quick test_classify_spatch_lines;
   Alcotest.test_case "simple rename" `Quick test_transform_simple_rename;
@@ -2853,8 +2914,12 @@ let transform_tests = [
   Alcotest.test_case "field add return type" `Quick test_transform_field_add_field;
   Alcotest.test_case "field add multiple fields" `Quick test_transform_field_add_multiple_fields;
   Alcotest.test_case "partial insert order" `Quick test_transform_partial_insert_order;
+  Alcotest.test_case "partial insert before first" `Quick test_transform_partial_insert_before_first;
   Alcotest.test_case "unbound replacement metavar" `Quick test_transform_unbound_replacement_metavar;
   Alcotest.test_case "ellipsis context" `Quick test_transform_ellipsis_context;
   Alcotest.test_case "ellipsis remove block" `Quick test_transform_ellipsis_remove_block;
   Alcotest.test_case "partial deep attr" `Quick test_transform_partial_deep_attr;
+  Alcotest.test_case "partial backtracking" `Quick test_partial_match_backtracking_needed;
+  Alcotest.test_case "partial multiline indent" `Quick test_transform_partial_multiline_indent;
+  Alcotest.test_case "partial rejects sequence" `Quick test_partial_rejects_sequence_metavar;
 ]

@@ -151,7 +151,7 @@ Found 2 match(es) in 2 file(s) (scanned 47 files)
 The matching pipeline is split into focused modules:
 
 - `match_parse` handles `@@` preambles, metavars, ellipsis expansion, and spatch line classification.
-- `match_engine` performs the structural matching (`strict`, `field`, `partial`) and sequence metavars.
+- `match_engine` performs the structural matching (`strict`, `field`, `partial`) and sequence metavars (except in `partial` mode).
 - `match_search` drives traversal, nested pattern contexts, indexing, and formatting.
 - `match_transform` computes edits from match results and applies them to source text.
 - `match` exposes the public API surface.
