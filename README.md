@@ -6,6 +6,7 @@ An OCaml library and CLI tool for parsing source files using [tree-sitter](https
 
 - Parse source files to S-expressions using tree-sitter grammars
 - Pattern matching with concrete syntax and metavariables
+- Semantic patch transforms (find-and-replace at the AST level)
 - Support for TypeScript, Kotlin, and other languages (extensible)
 
 ## Building
@@ -68,9 +69,51 @@ diffract --match pattern.txt --include '*.ts' src/
 # Scan with custom directory exclusions
 diffract --match pattern.txt --include '*.ts' -e vendor -e dist src/
 
+# Apply a semantic patch (preview diff)
+diffract --apply --match patch.txt source.ts
+
+# Apply a semantic patch in place
+diffract --apply --in-place --match patch.txt source.ts
+
+# Apply across a directory
+diffract --apply --match patch.txt --include '*.ts' src/
+
 # List available languages
 diffract --list-languages
 ```
+
+### Transforms (Semantic Patches)
+
+Patterns can include `-`/`+` prefixed lines to describe code transformations.
+For example, to rename `console.log` to `logger.info`:
+
+**patch.txt:**
+```
+@@
+match: strict
+metavar $MSG: single
+@@
+- console.log($MSG)
++ logger.info($MSG)
+```
+
+```bash
+$ diffract --apply --match patch.txt source.ts
+--- a/source.ts
++++ b/source.ts
+@@ -1,3 +1,3 @@
+ function greet(name: string) {
+-    console.log(name);
++    logger.info(name);
+ }
+```
+
+Lines prefixed with `- ` are matched and removed; lines with `+ ` are inserted.
+Unprefixed (or space-prefixed) lines are context that appears in both match and replace.
+Metavariables carry values from the match side to the replace side.
+
+See [Transform documentation](docs/patterns.md#transforms-semantic-patches) for
+partial-mode and field-mode transforms.
 
 ### Directory Scanning
 
@@ -107,9 +150,10 @@ Found 2 match(es) in 2 file(s) (scanned 47 files)
 
 The matching pipeline is split into focused modules:
 
-- `match_parse` handles `@@` preambles, metavars, and ellipsis expansion, then parses with tree-sitter.
+- `match_parse` handles `@@` preambles, metavars, ellipsis expansion, and spatch line classification.
 - `match_engine` performs the structural matching (`strict`, `field`, `partial`) and sequence metavars.
 - `match_search` drives traversal, nested pattern contexts, indexing, and formatting.
+- `match_transform` computes edits from match results and applies them to source text.
 - `match` exposes the public API surface.
 
 ## License

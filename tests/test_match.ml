@@ -2403,3 +2403,430 @@ let scala_tests = [
   Alcotest.test_case "scala binary operator" `Quick test_scala_binary_operator;
   Alcotest.test_case "scala comparison" `Quick test_scala_comparison;
 ]
+
+(* === Transform (semantic patch) tests === *)
+
+(* Test: line classification *)
+let test_classify_spatch_lines () =
+  (* No transform lines *)
+  let result = Match.classify_spatch_lines "console.log(x)" in
+  Alcotest.(check bool) "no transform" false result.is_transform;
+  Alcotest.(check string) "match_text unchanged" "console.log(x)" result.match_text;
+  (* With transform lines *)
+  let result = Match.classify_spatch_lines "- console.log($MSG)\n+ logger.info($MSG)" in
+  Alcotest.(check bool) "is transform" true result.is_transform;
+  Alcotest.(check string) "match_text" "console.log($MSG)" result.match_text;
+  Alcotest.(check string) "replace_template" "logger.info($MSG)" result.replace_template;
+  (* Context lines *)
+  let result = Match.classify_spatch_lines " foo()\n- bar()\n+ baz()\n qux()" in
+  Alcotest.(check bool) "is transform with context" true result.is_transform;
+  Alcotest.(check string) "match with context" "foo()\nbar()\nqux()" result.match_text;
+  Alcotest.(check string) "replace with context" "foo()\nbaz()\nqux()" result.replace_template
+
+(* Test: simple strict rename *)
+let test_transform_simple_rename () =
+  let pattern_text = {|@@
+match: strict
+metavar $MSG: single
+@@
+- console.log($MSG)
++ logger.info($MSG)|} in
+  let source_text = {|function greet(name: string) {
+    console.log("hello");
+    console.log(name);
+}|} in
+  let result = Match.transform ~language:"typescript" ~pattern_text ~source_text in
+  Alcotest.(check int) "two edits" 2 (List.length result.edits);
+  Alcotest.(check bool) "source changed" true
+    (result.original_source <> result.transformed_source);
+  Alcotest.(check bool) "contains logger.info(\"hello\")" true
+    (string_contains ~needle:{|logger.info("hello")|} result.transformed_source);
+  Alcotest.(check bool) "contains logger.info(name)" true
+    (string_contains ~needle:"logger.info(name)" result.transformed_source);
+  Alcotest.(check bool) "no more console.log" false
+    (string_contains ~needle:"console.log" result.transformed_source)
+
+(* Test: metavar swap *)
+let test_transform_metavar_swap () =
+  let pattern_text = {|@@
+match: strict
+metavar $A: single
+metavar $B: single
+@@
+- assertEqual($A, $B)
++ assertEqual($B, $A)|} in
+  let source_text = "assertEqual(expected, actual);" in
+  let result = Match.transform ~language:"typescript" ~pattern_text ~source_text in
+  Alcotest.(check int) "one edit" 1 (List.length result.edits);
+  Alcotest.(check bool) "arguments swapped" true
+    (string_contains ~needle:"assertEqual(actual, expected)" result.transformed_source)
+
+(* Test: multiple matches in one file *)
+let test_transform_multiple_matches () =
+  let pattern_text = {|@@
+match: strict
+metavar $X: single
+@@
+- foo($X)
++ bar($X)|} in
+  let source_text = "foo(1); foo(2); foo(3);" in
+  let result = Match.transform ~language:"typescript" ~pattern_text ~source_text in
+  Alcotest.(check int) "three edits" 3 (List.length result.edits);
+  Alcotest.(check bool) "contains bar(1)" true
+    (string_contains ~needle:"bar(1)" result.transformed_source);
+  Alcotest.(check bool) "contains bar(2)" true
+    (string_contains ~needle:"bar(2)" result.transformed_source);
+  Alcotest.(check bool) "contains bar(3)" true
+    (string_contains ~needle:"bar(3)" result.transformed_source);
+  Alcotest.(check bool) "no more foo" false
+    (string_contains ~needle:"foo(" result.transformed_source)
+
+(* Test: no match returns source unchanged *)
+let test_transform_no_match () =
+  let pattern_text = {|@@
+match: strict
+metavar $X: single
+@@
+- nonexistent($X)
++ other($X)|} in
+  let source_text = "console.log(42);" in
+  let result = Match.transform ~language:"typescript" ~pattern_text ~source_text in
+  Alcotest.(check int) "no edits" 0 (List.length result.edits);
+  Alcotest.(check string) "source unchanged" source_text result.transformed_source
+
+(* Test: backwards compat - pattern without -/+ returns empty edits *)
+let test_transform_backwards_compat () =
+  let pattern_text = {|@@
+match: strict
+metavar $MSG: single
+@@
+console.log($MSG)|} in
+  let source_text = {|console.log("hello")|} in
+  let result = Match.transform ~language:"typescript" ~pattern_text ~source_text in
+  Alcotest.(check int) "no edits (not a transform)" 0 (List.length result.edits);
+  Alcotest.(check string) "source unchanged" source_text result.transformed_source
+
+(* Test: generate_diff output *)
+let test_transform_generate_diff () =
+  let original = "line1\nline2\nline3\n" in
+  let transformed = "line1\nchanged\nline3\n" in
+  let diff = Match.generate_diff ~file_path:"test.ts" ~original ~transformed in
+  Alcotest.(check bool) "has --- header" true
+    (string_contains ~needle:"--- a/test.ts" diff);
+  Alcotest.(check bool) "has +++ header" true
+    (string_contains ~needle:"+++ b/test.ts" diff);
+  Alcotest.(check bool) "has -line2" true
+    (string_contains ~needle:"-line2" diff);
+  Alcotest.(check bool) "has +changed" true
+    (string_contains ~needle:"+changed" diff)
+
+(* Test: generate_diff returns empty for no changes *)
+let test_transform_diff_no_changes () =
+  let text = "same\ncontent\n" in
+  let diff = Match.generate_diff ~file_path:"test.ts" ~original:text ~transformed:text in
+  Alcotest.(check string) "empty diff" "" diff
+
+(* Test: multi-line pattern transform *)
+let test_transform_multiline () =
+  let pattern_text = {|@@
+match: strict
+metavar $NAME: single
+metavar $BODY: sequence
+@@
+- function $NAME() {
+-     $BODY
+- }
++ const $NAME = () => {
++     $BODY
++ }|} in
+  let source_text = {|function greet() {
+    console.log("hello");
+}|} in
+  let result = Match.transform ~language:"typescript" ~pattern_text ~source_text in
+  Alcotest.(check int) "one edit" 1 (List.length result.edits);
+  Alcotest.(check bool) "has arrow function" true
+    (string_contains ~needle:"const greet = () => {" result.transformed_source)
+
+(* Test: apply_edits with overlapping edits *)
+let test_apply_edits_overlap () =
+  let source = "abcdefghij" in
+  let edits : Match.text_edit list = [
+    { start_byte = 2; end_byte = 5; replacement = "XY" };
+    { start_byte = 3; end_byte = 7; replacement = "ZZ" };  (* overlaps with first *)
+  ] in
+  let result = Match.apply_edits source edits in
+  (* First edit wins (start_byte=2), second is filtered out *)
+  Alcotest.(check string) "first edit kept" "abXYfghij" result
+
+(* Test: apply_edits prefers longest when same start byte *)
+let test_apply_edits_same_start () =
+  let source = "abcdef" in
+  let edits : Match.text_edit list = [
+    { start_byte = 0; end_byte = 5; replacement = "X" };
+    { start_byte = 0; end_byte = 3; replacement = "Y" };
+  ] in
+  let result = Match.apply_edits source edits in
+  Alcotest.(check string) "longest edit kept" "Xf" result
+
+(* Test: context lines in spatch *)
+let test_transform_context_lines () =
+  let pattern_text = {|@@
+match: strict
+metavar $X: single
+@@
+- old($X)
++ new($X)|} in
+  let source_text = "var x = old(42);" in
+  let result = Match.transform ~language:"typescript" ~pattern_text ~source_text in
+  Alcotest.(check bool) "replaced old with new" true
+    (string_contains ~needle:"new(42)" result.transformed_source)
+
+(* Test: PHP strict transform - verifies wrapper trimming *)
+let test_transform_php_strict () =
+  let pattern_text = {|@@
+match: strict
+metavar $MSG: single
+@@
+<?php
+- echo $MSG;
++ print($MSG);|} in
+  let source_text = {|<?php
+echo "hello";
+echo "world";|} in
+  let result = Match.transform ~language:"php" ~pattern_text ~source_text in
+  Alcotest.(check int) "two edits" 2 (List.length result.edits);
+  Alcotest.(check bool) "has print(\"hello\")" true
+    (string_contains ~needle:{|print("hello")|} result.transformed_source);
+  Alcotest.(check bool) "has print(\"world\")" true
+    (string_contains ~needle:{|print("world")|} result.transformed_source);
+  (* Must NOT duplicate <?php *)
+  let php_count = ref 0 in
+  let s = result.transformed_source in
+  for i = 0 to String.length s - 6 do
+    if String.sub s i 5 = "<?php" then incr php_count
+  done;
+  Alcotest.(check int) "only one <?php" 1 !php_count
+
+(* Test: partial mode transform - rename a property *)
+let test_transform_partial_rename () =
+  let pattern_text = {|@@
+match: partial
+metavar $V: single
+@@
+- { color: $V }
++ { colour: $V }|} in
+  let source_text = {|const config = { color: "red", size: 10 }|} in
+  let result = Match.transform ~language:"typescript" ~pattern_text ~source_text in
+  Alcotest.(check int) "one edit" 1 (List.length result.edits);
+  Alcotest.(check bool) "has colour" true
+    (string_contains ~needle:{|colour: "red"|} result.transformed_source);
+  Alcotest.(check bool) "preserves size" true
+    (string_contains ~needle:"size: 10" result.transformed_source)
+
+(* Test: partial mode transform - add a property *)
+let test_transform_partial_add () =
+  let pattern_text = {|@@
+match: partial
+metavar $V: single
+@@
+- { name: $V }
++ { name: $V, id: 0 }|} in
+  let source_text = {|const users = [
+  { name: "alice", age: 30 },
+  { name: "bob", age: 25 },
+  { age: 40 }
+]|} in
+  let result = Match.transform ~language:"typescript" ~pattern_text ~source_text in
+  Alcotest.(check int) "two edits (two objects have name)" 2 (List.length result.edits);
+  Alcotest.(check bool) "alice gets id" true
+    (string_contains ~needle:{|name: "alice", id: 0|} result.transformed_source);
+  Alcotest.(check bool) "bob gets id" true
+    (string_contains ~needle:{|name: "bob", id: 0|} result.transformed_source);
+  Alcotest.(check bool) "age-only object unchanged" true
+    (string_contains ~needle:"{ age: 40 }" result.transformed_source)
+
+(* Test: partial mode transform - remove a property *)
+let test_transform_partial_remove () =
+  let pattern_text = {|@@
+match: partial
+metavar $V: single
+@@
+- { name: $V, age: 30 }
++ { name: $V }|} in
+  let source_text = {|const data = { name: "alice", age: 30 }|} in
+  let result = Match.transform ~language:"typescript" ~pattern_text ~source_text in
+  Alcotest.(check int) "one edit" 1 (List.length result.edits);
+  Alcotest.(check bool) "has name" true
+    (string_contains ~needle:{|name: "alice"|} result.transformed_source);
+  Alcotest.(check bool) "no age" false
+    (string_contains ~needle:"age: 30" result.transformed_source)
+
+(* Test: field mode transform - modify attribute (same field set) *)
+let test_transform_field_modify_attr () =
+  let pattern_text = {|@@
+match: field
+@@
+<?php
+- #[deprecated]
++ #[deprecated(note = "use new API")]
+function test() {
+    echo "hi";
+}|} in
+  let source_text = {|<?php
+#[deprecated]
+function test() {
+    echo "hi";
+}|} in
+  let result = Match.transform ~language:"php" ~pattern_text ~source_text in
+  Alcotest.(check int) "one edit" 1 (List.length result.edits);
+  Alcotest.(check bool) "has new attribute" true
+    (string_contains ~needle:{|#[deprecated(note = "use new API")]|} result.transformed_source);
+  Alcotest.(check bool) "has function body" true
+    (string_contains ~needle:{|echo "hi"|} result.transformed_source)
+
+(* Test: field mode transform - add return type (new field) *)
+let test_transform_field_add_field () =
+  let pattern_text = {|@@
+match: field
+metavar $NAME: single
+metavar $BODY: sequence
+@@
+<?php
+- function $NAME() { $BODY }
++ function $NAME(): void { $BODY }|} in
+  let source_text = {|<?php
+#[Route("/")]
+function foo() { return 1; }
+
+function plain() { echo "no attrs"; }|} in
+  let result = Match.transform ~language:"php" ~pattern_text ~source_text in
+  Alcotest.(check int) "two edits" 2 (List.length result.edits);
+  Alcotest.(check bool) "foo has return type" true
+    (string_contains ~needle:"foo(): void" result.transformed_source);
+  Alcotest.(check bool) "plain has return type" true
+    (string_contains ~needle:"plain(): void" result.transformed_source);
+  (* Attributes must be preserved *)
+  Alcotest.(check bool) "preserves Route attribute" true
+    (string_contains ~needle:{|#[Route("/")]|} result.transformed_source)
+
+(* Test: field mode transform - add multiple new fields *)
+let test_transform_field_add_multiple_fields () =
+  let pattern_text = {|@@
+match: field
+metavar $NAME: single
+metavar $BODY: sequence
+@@
+<?php
+- function $NAME() { $BODY }
++ #[Route("/")]
++ function $NAME(): void { $BODY }|} in
+  let source_text = {|<?php
+function plain() { echo "hi"; }|} in
+  let result = Match.transform ~language:"php" ~pattern_text ~source_text in
+  Alcotest.(check bool) "has edits" true (List.length result.edits >= 1);
+  Alcotest.(check bool) "adds attribute" true
+    (string_contains ~needle:{|#[Route("/")]|} result.transformed_source);
+  Alcotest.(check bool) "adds return type" true
+    (string_contains ~needle:"plain(): void" result.transformed_source)
+
+(* Test: partial mode insert position follows source order *)
+let test_transform_partial_insert_order () =
+  let pattern_text = {|@@
+match: partial
+metavar $A: single
+metavar $B: single
+@@
+- { b: $B, a: $A }
++ { b: $B, a: $A, c: 3 }|} in
+  let source_text = {|const obj = { a: 1, b: 2 }|} in
+  let result = Match.transform ~language:"typescript" ~pattern_text ~source_text in
+  Alcotest.(check bool) "inserts after source order" true
+    (string_contains ~needle:"{ a: 1, b: 2, c: 3 }" result.transformed_source)
+
+(* Test: replacement-only metavar must be bound in match *)
+let test_transform_unbound_replacement_metavar () =
+  let pattern_text = {|@@
+match: strict
+metavar $X: single
+@@
+- foo()
++ bar($X)|} in
+  let source_text = "foo();" in
+  Alcotest.check_raises "unbound replacement metavar"
+    (Failure "Metavars in replacement not bound in match: $X")
+    (fun () -> ignore (Match.transform ~language:"typescript" ~pattern_text ~source_text))
+
+(* Test: ellipsis in context lines is handled in transforms *)
+let test_transform_ellipsis_context () =
+  let pattern_text = {|@@
+match: strict
+metavar $X: single
+@@
+function test() {
+    ...
+-   old($X)
++   new($X)
+    ...
+}|} in
+  let source_text = {|function test() {
+  console.log("start");
+  old(value);
+  console.log("end");
+}|} in
+  let result = Match.transform ~language:"typescript" ~pattern_text ~source_text in
+  Alcotest.(check bool) "replaces call" true
+    (string_contains ~needle:"new(value)" result.transformed_source);
+  Alcotest.(check bool) "no ellipsis left" false
+    (string_contains ~needle:"..." result.transformed_source)
+
+(* Test: - ... removes the in-between block when anchored *)
+let test_transform_ellipsis_remove_block () =
+  let pattern_text = {|@@
+match: strict
+metavar $X: single
+@@
+function init() {
+    setup();
+-   ...
+    start($X);
+}|} in
+  let source_text = {|function init() {
+  setup();
+  log("starting");
+  warmup();
+  start(mode);
+}|} in
+  let result = Match.transform ~language:"typescript" ~pattern_text ~source_text in
+  Alcotest.(check bool) "removes log" false
+    (string_contains ~needle:"log(\"starting\")" result.transformed_source);
+  Alcotest.(check bool) "removes warmup" false
+    (string_contains ~needle:"warmup()" result.transformed_source);
+  Alcotest.(check bool) "keeps anchors" true
+    (string_contains ~needle:"setup();" result.transformed_source
+     && string_contains ~needle:"start(mode);" result.transformed_source)
+
+let transform_tests = [
+  Alcotest.test_case "classify spatch lines" `Quick test_classify_spatch_lines;
+  Alcotest.test_case "simple rename" `Quick test_transform_simple_rename;
+  Alcotest.test_case "metavar swap" `Quick test_transform_metavar_swap;
+  Alcotest.test_case "multiple matches" `Quick test_transform_multiple_matches;
+  Alcotest.test_case "no match" `Quick test_transform_no_match;
+  Alcotest.test_case "backwards compat" `Quick test_transform_backwards_compat;
+  Alcotest.test_case "generate diff" `Quick test_transform_generate_diff;
+  Alcotest.test_case "diff no changes" `Quick test_transform_diff_no_changes;
+  Alcotest.test_case "multiline transform" `Quick test_transform_multiline;
+  Alcotest.test_case "overlapping edits" `Quick test_apply_edits_overlap;
+  Alcotest.test_case "same start edits" `Quick test_apply_edits_same_start;
+  Alcotest.test_case "context lines" `Quick test_transform_context_lines;
+  Alcotest.test_case "php strict transform" `Quick test_transform_php_strict;
+  Alcotest.test_case "partial rename" `Quick test_transform_partial_rename;
+  Alcotest.test_case "partial add property" `Quick test_transform_partial_add;
+  Alcotest.test_case "partial remove property" `Quick test_transform_partial_remove;
+  Alcotest.test_case "field modify attribute" `Quick test_transform_field_modify_attr;
+  Alcotest.test_case "field add return type" `Quick test_transform_field_add_field;
+  Alcotest.test_case "field add multiple fields" `Quick test_transform_field_add_multiple_fields;
+  Alcotest.test_case "partial insert order" `Quick test_transform_partial_insert_order;
+  Alcotest.test_case "unbound replacement metavar" `Quick test_transform_unbound_replacement_metavar;
+  Alcotest.test_case "ellipsis context" `Quick test_transform_ellipsis_context;
+  Alcotest.test_case "ellipsis remove block" `Quick test_transform_ellipsis_remove_block;
+]

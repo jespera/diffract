@@ -9,4 +9,5 @@ let () =
     ("Match (Scala)", Test_match.scala_tests);
     ("Match (Field)", Test_match.field_tests);
     ("Match (Ellipsis)", Test_match.ellipsis_tests);
+    ("Transform", Test_match.transform_tests);
   ]

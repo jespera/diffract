@@ -1,6 +1,6 @@
 open Match_types
 
-let empty_bindings = { text_bindings = []; node_bindings = []; sequence_node_bindings = [] }
+let empty_bindings = { text_bindings = []; node_bindings = []; sequence_node_bindings = []; correspondences = [] }
 
 (** Merge text bindings, checking that same var doesn't bind to different values *)
 let check_and_merge_text_bindings existing new_bindings =
@@ -23,7 +23,8 @@ let check_and_merge_bindings existing new_bindings =
     (* Node bindings don't need consistency check - just accumulate *)
     Some { text_bindings = merged_text;
            node_bindings = existing.node_bindings @ new_bindings.node_bindings;
-           sequence_node_bindings = existing.sequence_node_bindings @ new_bindings.sequence_node_bindings }
+           sequence_node_bindings = existing.sequence_node_bindings @ new_bindings.sequence_node_bindings;
+           correspondences = existing.correspondences @ new_bindings.correspondences }
 
 (** Check if a pattern node's text is a placeholder, return the original metavar name if so.
     Also handles wrapper nodes (like expression_statement) that contain just a placeholder
@@ -109,7 +110,8 @@ let rec match_node ~pattern ~pattern_source ~source ~substitutions
     let source_text = Tree.text source source_node in
     Some { text_bindings = [(var_name, source_text)];
            node_bindings = [(var_name, source_node)];
-           sequence_node_bindings = [] }
+           sequence_node_bindings = [];
+           correspondences = [] }
   | None ->
     (* Not a metavar - must match structurally *)
     let pattern_type = Tree.node_type pattern_node in
@@ -211,10 +213,14 @@ and match_children_exact ~pattern ~pattern_source ~source ~substitutions
             | n :: rest ->
               let seq_text = cumulative.(n) in
               let seq_nodes = Array.to_list (Array.sub source_arr si n) in
+              let seq_corrs = List.init n (fun k ->
+                { pattern_index = pi; source_index = si + k }
+              ) in
               let seq_binding = {
                 text_bindings = [(var_name, seq_text)];
                 node_bindings = [];
-                sequence_node_bindings = [(var_name, seq_nodes)]
+                sequence_node_bindings = [(var_name, seq_nodes)];
+                correspondences = seq_corrs;
               } in
               match check_and_merge_bindings bindings seq_binding with
               | None -> try_positions rest  (* Binding conflict *)
@@ -232,6 +238,9 @@ and match_children_exact ~pattern ~pattern_source ~source ~substitutions
                   p source_arr.(si) with
           | None -> None
           | Some new_bindings ->
+            let corr = { pattern_index = pi; source_index = si } in
+            let new_bindings = { new_bindings with
+              correspondences = corr :: new_bindings.correspondences } in
             match check_and_merge_bindings bindings new_bindings with
             | None -> None
             | Some merged -> match_from merged (pi + 1) (si + 1)
@@ -249,7 +258,7 @@ and match_children_partial ~pattern ~pattern_source ~source ~substitutions
   let used = Array.make source_len false in
 
   (* Try to find a matching source child for pattern child p *)
-  let find_match_for bindings (p : Tree.pat Tree.t) =
+  let find_match_for bindings pi (p : Tree.pat Tree.t) =
     let is_seq = is_sequence_placeholder ~pattern substitutions pattern_source p in
     if is_seq then
       (* Sequence metavars don't make sense in partial mode - treat as single *)
@@ -264,6 +273,9 @@ and match_children_partial ~pattern ~pattern_source ~source ~substitutions
                   p source_arr.(si) with
           | None -> try_source (si + 1)
           | Some new_bindings ->
+            let corr = { pattern_index = pi; source_index = si } in
+            let new_bindings = { new_bindings with
+              correspondences = corr :: new_bindings.correspondences } in
             match check_and_merge_bindings bindings new_bindings with
             | None -> try_source (si + 1)  (* Binding conflict, try next *)
             | Some merged ->
@@ -274,14 +286,14 @@ and match_children_partial ~pattern ~pattern_source ~source ~substitutions
   in
 
   (* Match each pattern child *)
-  let rec match_all bindings = function
+  let rec match_all bindings pi = function
     | [] -> Some bindings
     | p :: rest ->
-      match find_match_for bindings p with
+      match find_match_for bindings pi p with
       | None -> None
-      | Some merged -> match_all merged rest
+      | Some merged -> match_all merged (pi + 1) rest
   in
-  match_all empty_bindings pattern_children
+  match_all empty_bindings 0 pattern_children
 
 (** Field-based child matching.
     Matches children by tree-sitter field name instead of position.

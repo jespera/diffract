@@ -212,6 +212,134 @@ let preprocess_ellipsis text =
   done;
   (Buffer.contents result, List.rev !substitutions)
 
+(** Classify spatch lines: split pattern body into match_text and replace_template.
+    Lines prefixed with "- " are match-only (minus lines).
+    Lines prefixed with "+ " are replace-only (plus lines).
+    Lines with " " prefix or no prefix are context (appear in both).
+    Returns spatch_body. *)
+let classify_spatch_lines body =
+  let lines = String.split_on_char '\n' body in
+  let has_transform = List.exists (fun line ->
+    String.length line >= 2 &&
+    (line.[0] = '-' || line.[0] = '+') && line.[1] = ' '
+  ) lines in
+  if not has_transform then
+    { match_text = body; replace_template = ""; is_transform = false }
+  else
+    let match_lines = ref [] in
+    let replace_lines = ref [] in
+    List.iter (fun line ->
+      if String.length line >= 2 && line.[0] = '-' && line.[1] = ' ' then begin
+        (* Minus line: strip "- " prefix, add to match only *)
+        let content = String.sub line 2 (String.length line - 2) in
+        match_lines := content :: !match_lines
+      end else if String.length line >= 2 && line.[0] = '+' && line.[1] = ' ' then begin
+        (* Plus line: strip "+ " prefix, add to replace only *)
+        let content = String.sub line 2 (String.length line - 2) in
+        replace_lines := content :: !replace_lines
+      end else begin
+        (* Context line: strip leading space if present (unified diff convention) *)
+        let content =
+          if String.length line >= 1 && line.[0] = ' ' then
+            String.sub line 1 (String.length line - 1)
+          else
+            line
+        in
+        match_lines := content :: !match_lines;
+        replace_lines := content :: !replace_lines
+      end
+    ) lines;
+    let match_text = String.concat "\n" (List.rev !match_lines) in
+    let replace_template = String.concat "\n" (List.rev !replace_lines) in
+    { match_text; replace_template; is_transform = true }
+
+(** Preprocess ellipsis in spatch lines with consistent placeholder mapping.
+    - Ellipsis in context/minus lines becomes placeholders and is bound.
+    - Ellipsis in plus-only lines is rejected (unbound).
+    Returns (match_text, replace_template, ellipsis_subs). *)
+let preprocess_spatch_ellipsis body =
+  let lines = String.split_on_char '\n' body in
+  let match_lines = ref [] in
+  let replace_lines = ref [] in
+  let substitutions = ref [] in
+  let counter = ref 0 in
+  let replace_ellipsis_in_line line =
+    let len = String.length line in
+    let buf = Buffer.create len in
+    let i = ref 0 in
+    while !i < len do
+      if !i + 2 < len && line.[!i] = '.' && line.[!i+1] = '.' && line.[!i+2] = '.' then begin
+        let next_char = if !i + 3 < len then Some line.[!i+3] else None in
+        let is_spread = match next_char with
+          | Some '$' -> true
+          | Some c when (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') -> true
+          | _ -> false
+        in
+        if is_spread then begin
+          Buffer.add_string buf "...";
+          i := !i + 3
+        end else begin
+          let n = !counter in
+          let var_name = Printf.sprintf "..._%d" n in
+          let placeholder = Printf.sprintf "__ellipsis_%d__" n in
+          substitutions := (var_name, placeholder) :: !substitutions;
+          incr counter;
+          Buffer.add_string buf placeholder;
+          i := !i + 3;
+          let j = ref !i in
+          while !j < len && (line.[!j] = ' ' || line.[!j] = '\t') do
+            incr j
+          done;
+          if !j >= len then
+            Buffer.add_char buf ';'
+        end
+      end else begin
+        Buffer.add_char buf line.[!i];
+        incr i
+      end
+    done;
+    Buffer.contents buf
+  in
+  List.iter (fun line ->
+    if String.length line >= 2 && line.[0] = '-' && line.[1] = ' ' then begin
+      let content = String.sub line 2 (String.length line - 2) in
+      let transformed = replace_ellipsis_in_line content in
+      match_lines := transformed :: !match_lines
+    end else if String.length line >= 2 && line.[0] = '+' && line.[1] = ' ' then begin
+      let content = String.sub line 2 (String.length line - 2) in
+      (* Disallow ellipsis in plus-only lines (unbound) *)
+      let rec scan i =
+        if i + 2 >= String.length content then false
+        else if content.[i] = '.' && content.[i+1] = '.' && content.[i+2] = '.' then begin
+          let next_char = if i + 3 < String.length content then Some content.[i+3] else None in
+          let is_spread = match next_char with
+            | Some '$' -> true
+            | Some c when (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') -> true
+            | _ -> false
+          in
+          if is_spread then scan (i + 3) else true
+        end else
+          scan (i + 1)
+      in
+      if scan 0 then
+        failwith "Ellipsis (...) in replacement-only line is not bound by match";
+      replace_lines := content :: !replace_lines
+    end else begin
+      let content =
+        if String.length line >= 1 && line.[0] = ' ' then
+          String.sub line 1 (String.length line - 1)
+        else
+          line
+      in
+      let transformed = replace_ellipsis_in_line content in
+      match_lines := transformed :: !match_lines;
+      replace_lines := transformed :: !replace_lines
+    end
+  ) lines;
+  let match_text = String.concat "\n" (List.rev !match_lines) in
+  let replace_template = String.concat "\n" (List.rev !replace_lines) in
+  (match_text, replace_template, List.rev !substitutions)
+
 (** Parse a pattern file/string into a pattern structure *)
 let parse_pattern ~language pattern_text =
   let preamble = parse_preamble pattern_text in
@@ -220,11 +348,13 @@ let parse_pattern ~language pattern_text =
     | Some m -> m
     | None -> failwith "Pattern must specify match mode (match: strict, match: field, or match: partial)"
   in
-  validate_metavars preamble.p_metavars preamble.p_pattern_body;
-  (* First preprocess ellipsis (...) *)
-  let (after_ellipsis, ellipsis_subs) = preprocess_ellipsis preamble.p_pattern_body in
+  (* Classify spatch lines first *)
+  let spatch = classify_spatch_lines preamble.p_pattern_body in
+  let (pattern_body, replace_template, ellipsis_subs) =
+    preprocess_spatch_ellipsis preamble.p_pattern_body in
+  validate_metavars preamble.p_metavars pattern_body;
   (* Then substitute declared metavars *)
-  let (transformed_source, metavar_subs) = substitute_metavars preamble.p_metavars after_ellipsis in
+  let (transformed_source, metavar_subs) = substitute_metavars preamble.p_metavars pattern_body in
   (* Combine substitutions *)
   let all_substitutions = metavar_subs @ ellipsis_subs in
   (* Ellipsis var names (e.g., "..._0", "..._1") are sequence metavars *)
@@ -233,6 +363,26 @@ let parse_pattern ~language pattern_text =
   let tree = Tree.parse_as_pattern ~language transformed_source in
   (* Add ellipsis var names to sequence_metavars *)
   let sequence_metavars = preamble.p_sequence_metavars @ ellipsis_var_names in
+  (* Handle replacement template if this is a transform *)
+  let (replace_tree, replace_source) =
+    if spatch.is_transform then begin
+      (* Validate: metavars in + lines must appear in - or context lines *)
+      let replace_metavars = find_metavars_in_text replace_template in
+      let match_metavars = find_metavars_in_text pattern_body in
+      let undefined = List.filter (fun v ->
+        not (List.mem v match_metavars)
+      ) replace_metavars in
+      if undefined <> [] then
+        failwith (Printf.sprintf "Metavars in replacement not bound in match: %s"
+          (String.concat ", " undefined));
+      (* Substitute metavars in replacement template *)
+      let (replace_transformed, _) =
+        substitute_metavars preamble.p_metavars replace_template in
+      let replace_tree = Tree.parse_as_pattern ~language replace_transformed in
+      (Some replace_tree, replace_transformed)
+    end else
+      (None, "")
+  in
   {
     metavars = preamble.p_metavars;
     sequence_metavars;
@@ -242,6 +392,9 @@ let parse_pattern ~language pattern_text =
     original_source = preamble.p_pattern_body;
     match_mode;
     on_var = preamble.p_on_var;
+    spatch;
+    replace_tree;
+    replace_source;
   }
 
 (** Split pattern text into sections.
