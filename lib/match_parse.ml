@@ -162,6 +162,17 @@ let validate_metavars metavars pattern_body =
   if undeclared <> [] then
     failwith (Printf.sprintf "Undeclared metavars: %s" (String.concat ", " undeclared))
 
+(** Check if a '...' at position [i] in [text] is a spread operator
+    (i.e., immediately followed by '$' or an alphanumeric character). *)
+let is_spread_at text i =
+  let len = String.length text in
+  if i + 3 < len then
+    match text.[i + 3] with
+    | '$' -> true
+    | c when (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') -> true
+    | _ -> false
+  else false
+
 (** Preprocess ellipsis (...) in pattern text.
     Replaces ... with __ellipsis_N__ placeholders.
     Adds trailing ; if ... is followed by only whitespace then newline (statement context).
@@ -177,14 +188,7 @@ let preprocess_ellipsis text =
   while !i < len do
     (* Check for ... *)
     if !i + 2 < len && text.[!i] = '.' && text.[!i+1] = '.' && text.[!i+2] = '.' then begin
-      (* Check what follows - don't replace if followed by $ or alphanumeric (spread operator) *)
-      let next_char = if !i + 3 < len then Some text.[!i+3] else None in
-      let is_spread = match next_char with
-        | Some '$' -> true
-        | Some c when (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') -> true
-        | _ -> false
-      in
-      if is_spread then begin
+      if is_spread_at text !i then begin
         (* Keep as literal ... *)
         Buffer.add_string result "...";
         i := !i + 3
@@ -269,13 +273,7 @@ let preprocess_spatch_ellipsis body =
     let i = ref 0 in
     while !i < len do
       if !i + 2 < len && line.[!i] = '.' && line.[!i+1] = '.' && line.[!i+2] = '.' then begin
-        let next_char = if !i + 3 < len then Some line.[!i+3] else None in
-        let is_spread = match next_char with
-          | Some '$' -> true
-          | Some c when (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') -> true
-          | _ -> false
-        in
-        if is_spread then begin
+        if is_spread_at line !i then begin
           Buffer.add_string buf "...";
           i := !i + 3
         end else begin
@@ -310,15 +308,9 @@ let preprocess_spatch_ellipsis body =
       (* Disallow ellipsis in plus-only lines (unbound) *)
       let rec scan i =
         if i + 2 >= String.length content then false
-        else if content.[i] = '.' && content.[i+1] = '.' && content.[i+2] = '.' then begin
-          let next_char = if i + 3 < String.length content then Some content.[i+3] else None in
-          let is_spread = match next_char with
-            | Some '$' -> true
-            | Some c when (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') -> true
-            | _ -> false
-          in
-          if is_spread then scan (i + 3) else true
-        end else
+        else if content.[i] = '.' && content.[i+1] = '.' && content.[i+2] = '.' then
+          if is_spread_at content i then scan (i + 3) else true
+        else
           scan (i + 1)
       in
       if scan 0 then
