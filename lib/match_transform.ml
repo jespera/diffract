@@ -107,7 +107,7 @@ let get_replace_template pattern =
 
 (** Compute edits for strict-mode transform.
     The entire matched node's byte range gets replaced with the instantiated template. *)
-let compute_edits_strict ~pattern ~match_result ~source =
+let compute_edits_strict ~pattern ~match_result =
   let template = get_replace_template pattern in
   (* Instantiate metavars in the template (replace_source has placeholders) *)
   let instantiated = instantiate_template
@@ -119,7 +119,6 @@ let compute_edits_strict ~pattern ~match_result ~source =
   let tmpl_col = template_base_column template in
   let replacement = adjust_indentation ~source_column:source_col
     ~template_base_column:tmpl_col instantiated in
-  ignore source;
   [{ start_byte = match_result.node.start_byte;
      end_byte = match_result.node.end_byte;
      replacement }]
@@ -203,10 +202,9 @@ module Alignment = struct
 
   (** Compute the byte range to remove for a child, including surrounding separator.
       Extends to consume the separator between this child and a sibling. *)
-  let removal_range source (source_arr : Tree.src Tree.t array) child_idx =
+  let removal_range (source_arr : Tree.src Tree.t array) child_idx =
     let child = source_arr.(child_idx) in
     let num = Array.length source_arr in
-    ignore source;
     if child_idx > 0 then
       (* Remove separator before (from previous child's end to this child's end) *)
       let prev = source_arr.(child_idx - 1) in
@@ -300,7 +298,7 @@ module Alignment = struct
       let last = source_arr.(source_len - 1) in
       (At_end, match_result.node.Tree.end_byte, ", ", last.Tree.start_point.column)
 
-  let apply_alignment ~pattern ~(match_result : match_result) ~source alignment
+  let apply_alignment ~pattern ~(match_result : match_result) alignment
       ~(source_index_of_pattern : int -> int option)
       ~(insertion_spec : after_mi:int -> insertion_kind * int * string * int)
       (source_arr : Tree.src Tree.t array) (replace_arr : Tree.pat Tree.t array) =
@@ -311,7 +309,7 @@ module Alignment = struct
       | ERemove ->
         (match source_index_of_pattern mi with
          | Some si when si < Array.length source_arr ->
-           let (start_b, end_b) = removal_range source source_arr si in
+           let (start_b, end_b) = removal_range source_arr si in
            edits := { start_byte = start_b; end_byte = end_b; replacement = "" } :: !edits
          | _ -> ())
       | EReplace ri ->
@@ -363,7 +361,7 @@ module Alignment = struct
       insertion_spec_with_correspondences ~source ~match_result
         source_arr ~after_mi ~best_source_after
     in
-    apply_alignment ~pattern ~match_result ~source alignment
+    apply_alignment ~pattern ~match_result alignment
       ~source_index_of_pattern ~insertion_spec source_arr replace_arr
 
   (** Apply alignment edits using direct index mapping (pattern child i → source child i).
@@ -374,7 +372,7 @@ module Alignment = struct
     let insertion_spec ~after_mi =
       insertion_spec_direct ~source ~match_result source_arr ~after_mi
     in
-    apply_alignment ~pattern ~match_result ~source alignment
+    apply_alignment ~pattern ~match_result alignment
       ~source_index_of_pattern ~insertion_spec source_arr replace_arr
 end
 
@@ -383,7 +381,7 @@ end
     then applies alignment-based edits to individual children. *)
 let compute_edits_partial ~pattern ~match_result ~source =
   match pattern.replace_tree with
-  | None -> compute_edits_strict ~pattern ~match_result ~source
+  | None -> compute_edits_strict ~pattern ~match_result
   | Some replace_tree ->
     let match_content = unwrap_content_node pattern.tree.root in
     let replace_content = unwrap_content_node replace_tree.root in
@@ -529,7 +527,7 @@ let compute_field_removal_edits ~(match_result : match_result)
     by computing span-based edits between anchor fields. *)
 let compute_edits_field ~pattern ~match_result ~source =
   match pattern.replace_tree with
-  | None -> compute_edits_strict ~pattern ~match_result ~source
+  | None -> compute_edits_strict ~pattern ~match_result
   | Some replace_tree ->
     let match_content = unwrap_content_node pattern.tree.root in
     let replace_content = unwrap_content_node replace_tree.root in
@@ -586,7 +584,7 @@ let compute_edits_field ~pattern ~match_result ~source =
 let compute_edits ~pattern ~match_result ~source =
   match pattern.match_mode with
   | Strict ->
-    compute_edits_strict ~pattern ~match_result ~source
+    compute_edits_strict ~pattern ~match_result
   | Partial ->
     compute_edits_partial ~pattern ~match_result ~source
   | Field ->
