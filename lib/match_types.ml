@@ -11,13 +11,6 @@ type match_mode =
   | Field    (** Match by field name - extras in other fields ignored, ordered within fields *)
   | Partial  (** Unordered subset matching - extras ignored, order doesn't matter *)
 
-(** Semantic patch body: split from pattern text using -/+ prefixes *)
-type spatch_body = {
-  match_text: string;  (** Lines to match (context + minus lines) *)
-  replace_template: string;  (** Lines for replacement (context + plus lines) *)
-  is_transform: bool;  (** Whether any -/+ lines were found *)
-}
-
 (** A correspondence between a pattern child index and a source child index *)
 type child_correspondence = {
   pattern_index: int;
@@ -48,7 +41,7 @@ type pattern = {
   original_source: string;  (** Original pattern source (after preamble) *)
   match_mode: match_mode;  (** How to match children *)
   on_var: string option;  (** If set, match against the node bound to this var instead of traversing *)
-  spatch: spatch_body;  (** Semantic patch info (match/replace split) *)
+  is_transform: bool;  (** Whether pattern has -/+ lines (semantic patch) *)
   replace_tree: Tree.pat Tree.tree option;  (** Parsed replacement tree, if is_transform *)
   replace_source: string;  (** Transformed replacement source (with placeholders) *)
 }

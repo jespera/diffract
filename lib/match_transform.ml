@@ -612,7 +612,7 @@ let apply_edits source edits =
     Returns a transform_result with all edits and the transformed source. *)
 let transform ~ctx ~language ~pattern_text ~source_text =
   let pattern = Match_parse.parse_pattern ~ctx ~language pattern_text in
-  if not pattern.spatch.is_transform then
+  if not pattern.is_transform then
     { edits = []; original_source = source_text; transformed_source = source_text }
   else
     let source_tree = Tree.parse ~ctx ~language source_text in

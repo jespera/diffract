@@ -172,11 +172,6 @@ val find_matches_multi :
 
 (** {1 Semantic patch transforms} *)
 
-val classify_spatch_lines : string -> spatch_body
-(** [classify_spatch_lines body] splits a pattern body into match and replace parts.
-    Lines prefixed with [- ] are match-only, [+ ] are replace-only,
-    other lines are context (appear in both). *)
-
 val transform :
   ctx:Context.t ->
   language:string ->
