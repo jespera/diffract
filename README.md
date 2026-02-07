@@ -49,7 +49,16 @@ dune build
 
 # Run tests
 dune test
+
+# Format code (requires ocamlformat: opam install ocamlformat)
+dune fmt
 ```
+
+Formatting is managed via [ocamlformat](https://github.com/ocaml-pp/ocamlformat).
+Run `dune fmt` to reformat all OCaml and dune files before committing.
+
+**Note:** `dune fmt` emits "Stray '@'" warnings for `@@` delimiters appearing
+in doc comments. These are harmless and can be ignored.
 
 ## Usage
 

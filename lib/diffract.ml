@@ -6,20 +6,17 @@ module Tree = Tree
 module Match = Match
 
 (** Parse source code and return the tree representation *)
-let parse_tree ~ctx ~language source =
-  Tree.parse ~ctx ~language source
+let parse_tree ~ctx ~language source = Tree.parse ~ctx ~language source
 
 (** Parse a file and return the tree representation *)
-let parse_file_tree ~ctx ~language path =
-  Tree.parse_file ~ctx ~language path
+let parse_file_tree ~ctx ~language path = Tree.parse_file ~ctx ~language path
 
 (** Parse and return S-expression string (original API) *)
 let parse_to_sexp ~ctx ~language source =
   let lang = Languages.get ctx language in
   let parser = Bindings.parser_new () in
 
-  if parser = 0n then
-    failwith "Failed to create parser";
+  if parser = 0n then failwith "Failed to create parser";
 
   let cleanup () = Bindings.parser_delete parser in
 

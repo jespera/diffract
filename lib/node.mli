@@ -1,19 +1,19 @@
 (** Tree-sitter node traversal API *)
 
-(** Abstract type for a parsed tree (GC-managed) *)
 type tree
+(** Abstract type for a parsed tree (GC-managed) *)
 
-(** Abstract type for a node in the tree *)
 type t
+(** Abstract type for a node in the tree *)
 
+type point = { row : int; column : int }
 (** Position in source code (0-indexed) *)
-type point = { row: int; column: int }
 
 (** {1 Tree operations} *)
 
 val parse : nativeint -> string -> tree
-(** [parse parser_ptr source] parses source code and returns a tree.
-    The parser must have a language set. *)
+(** [parse parser_ptr source] parses source code and returns a tree. The parser
+    must have a language set. *)
 
 val root : tree -> t
 (** [root tree] returns the root node of the tree. *)
@@ -21,13 +21,16 @@ val root : tree -> t
 (** {1 Node properties} *)
 
 val node_type : t -> string
-(** [node_type node] returns the grammar type of the node (e.g., "function_declaration"). *)
+(** [node_type node] returns the grammar type of the node (e.g.,
+    "function_declaration"). *)
 
 val to_sexp : t -> string
-(** [to_sexp node] returns the S-expression representation of the node and its children. *)
+(** [to_sexp node] returns the S-expression representation of the node and its
+    children. *)
 
 val is_named : t -> bool
-(** [is_named node] returns true if this is a named node (vs anonymous punctuation). *)
+(** [is_named node] returns true if this is a named node (vs anonymous
+    punctuation). *)
 
 val is_null : t -> bool
 (** [is_null node] returns true if this is a null/missing node. *)
@@ -35,7 +38,8 @@ val is_null : t -> bool
 (** {1 Child access} *)
 
 val child_count : t -> int
-(** [child_count node] returns the total number of children (including anonymous). *)
+(** [child_count node] returns the total number of children (including
+    anonymous). *)
 
 val named_child_count : t -> int
 (** [named_child_count node] returns the number of named children. *)
@@ -51,7 +55,8 @@ val child_by_field_name : t -> string -> t
     Returns a null node if not found (check with [is_null]). *)
 
 val field_name_for_child : t -> int -> string option
-(** [field_name_for_child node i] returns the field name for the i-th child, if any. *)
+(** [field_name_for_child node i] returns the field name for the i-th child, if
+    any. *)
 
 (** {1 Tree navigation} *)
 
@@ -105,14 +110,16 @@ val fold_children : ('a -> t -> 'a) -> 'a -> t -> 'a
 (** [fold_children f init node] folds over all children. *)
 
 val traverse : (t -> unit) -> t -> unit
-(** [traverse f node] recursively traverses the tree in pre-order,
-    visiting only named nodes. *)
+(** [traverse f node] recursively traverses the tree in pre-order, visiting only
+    named nodes. *)
 
 val find_all : (t -> bool) -> t -> t list
 (** [find_all pred node] finds all descendant nodes matching the predicate. *)
 
 val find_by_type : string -> t -> t list
-(** [find_by_type type_name node] finds all descendants with the given node type. *)
+(** [find_by_type type_name node] finds all descendants with the given node
+    type. *)
 
 val field : string -> t -> t option
-(** [field name node] returns the child with the given field name as an option. *)
+(** [field name node] returns the child with the given field name as an option.
+*)

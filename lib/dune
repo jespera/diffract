@@ -1,12 +1,16 @@
 (rule
  (targets c_flags.sexp)
- (action (with-stdout-to %{targets}
-          (bash "echo '('$(pkg-config --cflags tree-sitter)')'"))))
+ (action
+  (with-stdout-to
+   %{targets}
+   (bash "echo '('$(pkg-config --cflags tree-sitter)')'"))))
 
 (rule
  (targets c_library_flags.sexp)
- (action (with-stdout-to %{targets}
-          (bash "echo '('$(pkg-config --libs tree-sitter)')'"))))
+ (action
+  (with-stdout-to
+   %{targets}
+   (bash "echo '('$(pkg-config --libs tree-sitter)')'"))))
 
 (library
  (name diffract)
@@ -15,5 +19,9 @@
  (foreign_stubs
   (language c)
   (names ts_helper)
-  (flags (:standard) (:include c_flags.sexp)))
- (c_library_flags (:standard) (:include c_library_flags.sexp)))
+  (flags
+   (:standard)
+   (:include c_flags.sexp)))
+ (c_library_flags
+  (:standard)
+  (:include c_library_flags.sexp)))
