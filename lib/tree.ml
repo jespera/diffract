@@ -16,6 +16,7 @@ type 'kind child = { field_name : string option; node : 'kind t }
 and 'kind t = {
   node_type : string;
   is_named : bool;
+  hash : int;
   start_byte : int;
   end_byte : int;
   start_point : point;
@@ -23,7 +24,8 @@ and 'kind t = {
   children : 'kind child list;
   named_children : 'kind t list;
 }
-(** A tree node with all data copied from tree-sitter *)
+(** A tree node with all data copied from tree-sitter. The [hash] field is a
+    precomputed structural hash that excludes positional information. *)
 
 type 'kind tree = { root : 'kind t; source : string }
 (** A complete parsed tree with source. The 'kind parameter is a phantom type -
@@ -45,6 +47,26 @@ let text source node =
   let start = node.start_byte in
   let len = node.end_byte - start in
   String.sub source start len
+
+(** Get the precomputed structural hash of a node *)
+let hash t = t.hash
+
+(** Structural equality ignoring positions/formatting. Uses hash for fast
+    rejection. Takes two source strings because nodes from different parses
+    reference different source buffers for leaf text extraction. *)
+let rec equal source1 node1 source2 node2 =
+  node1.hash = node2.hash
+  && node1.node_type = node2.node_type
+  && node1.is_named = node2.is_named
+  &&
+  match (node1.children, node2.children) with
+  | [], [] -> text source1 node1 = text source2 node2
+  | c1, c2 ->
+      List.length c1 = List.length c2
+      && List.for_all2
+           (fun (a : _ child) (b : _ child) ->
+             a.field_name = b.field_name && equal source1 a.node source2 b.node)
+           c1 c2
 
 (** {1 Child access} *)
 
@@ -224,6 +246,11 @@ let forget_node : 'a t -> any t = fun node -> Obj.magic node
 (** Erase the source/pattern distinction on a tree. *)
 let forget : 'a tree -> any tree = fun tree -> Obj.magic tree
 
+(** {1 Hashing} *)
+
+(** Combine two hash values using a simple mixing function *)
+let hash_combine h1 h2 = (h1 * 65599) + h2
+
 (** {1 Conversion from tree-sitter nodes} *)
 
 (** Convert a tree-sitter node to our internal representation (untyped). *)
@@ -253,9 +280,29 @@ let rec of_ts_node_internal source (ts_node : Node.t) =
       children
   in
 
+  (* Compute structural hash: node_type, is_named, field names, children hashes,
+     and token text for leaves. Excludes positional information. *)
+  let hash =
+    let h = Hashtbl.hash (node_type, is_named) in
+    let h =
+      List.fold_left
+        (fun acc (c : _ child) ->
+          let fh =
+            match c.field_name with None -> 0 | Some name -> Hashtbl.hash name
+          in
+          hash_combine (hash_combine acc fh) c.node.hash)
+        h children
+    in
+    if children = [] then
+      hash_combine h
+        (Hashtbl.hash (String.sub source start_byte (end_byte - start_byte)))
+    else h
+  in
+
   {
     node_type;
     is_named;
+    hash;
     start_byte;
     end_byte;
     start_point;

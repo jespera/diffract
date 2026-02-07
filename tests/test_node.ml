@@ -77,6 +77,71 @@ let test_traverse () =
   Tree.traverse (fun _ -> incr count) root;
   Alcotest.(check bool) "visited multiple nodes" true (!count > 1)
 
+(* Test: Identical sources produce same hash *)
+let test_hash_identical_trees () =
+  let tree1 = Diffract.parse_tree ~ctx ~language:"typescript" "const x = 1;" in
+  let tree2 = Diffract.parse_tree ~ctx ~language:"typescript" "const x = 1;" in
+  Alcotest.(check int)
+    "same source same hash" tree1.root.Tree.hash tree2.root.Tree.hash
+
+(* Test: Different sources produce different hash *)
+let test_hash_different_trees () =
+  let tree1 = Diffract.parse_tree ~ctx ~language:"typescript" "const x = 1;" in
+  let tree2 = Diffract.parse_tree ~ctx ~language:"typescript" "const y = 2;" in
+  Alcotest.(check bool)
+    "different source different hash" true
+    (tree1.root.Tree.hash <> tree2.root.Tree.hash)
+
+(* Test: equal returns true for same source parsed twice *)
+let test_equal_same_source () =
+  let source = "function foo(a, b) { return a + b; }" in
+  let tree1 = Diffract.parse_tree ~ctx ~language:"typescript" source in
+  let tree2 = Diffract.parse_tree ~ctx ~language:"typescript" source in
+  Alcotest.(check bool)
+    "equal trees" true
+    (Tree.equal tree1.source tree1.root tree2.source tree2.root)
+
+(* Test: equal returns false for different sources *)
+let test_equal_different_source () =
+  let tree1 = Diffract.parse_tree ~ctx ~language:"typescript" "const x = 1;" in
+  let tree2 = Diffract.parse_tree ~ctx ~language:"typescript" "const y = 2;" in
+  Alcotest.(check bool)
+    "not equal trees" false
+    (Tree.equal tree1.source tree1.root tree2.source tree2.root)
+
+(* Test: Formatting differences don't affect hash *)
+let test_hash_formatting_insensitive () =
+  let tree1 = Diffract.parse_tree ~ctx ~language:"typescript" "f(x,  y)" in
+  let tree2 = Diffract.parse_tree ~ctx ~language:"typescript" "f(x,y)" in
+  let root1 = Tree.unwrap_root tree1.root in
+  let root2 = Tree.unwrap_root tree2.root in
+  Alcotest.(check int)
+    "formatting insensitive hash" root1.Tree.hash root2.Tree.hash;
+  Alcotest.(check bool)
+    "formatting insensitive equal" true
+    (Tree.equal tree1.source root1 tree2.source root2)
+
+(* Test: equal works on subtrees *)
+let test_equal_subtree () =
+  let tree1 =
+    Diffract.parse_tree ~ctx ~language:"typescript" "const x = f(1, 2);"
+  in
+  let tree2 =
+    Diffract.parse_tree ~ctx ~language:"typescript" "let y = f(1, 2);"
+  in
+  (* The call expression f(1, 2) should be equal in both *)
+  let calls1 = Tree.find_by_type "call_expression" tree1.root in
+  let calls2 = Tree.find_by_type "call_expression" tree2.root in
+  Alcotest.(check bool)
+    "found calls" true
+    (List.length calls1 > 0 && List.length calls2 > 0);
+  let call1 = List.hd calls1 in
+  let call2 = List.hd calls2 in
+  Alcotest.(check int) "subtree same hash" call1.Tree.hash call2.Tree.hash;
+  Alcotest.(check bool)
+    "subtree equal" true
+    (Tree.equal tree1.source call1 tree2.source call2)
+
 let tests =
   [
     Alcotest.test_case "root node type" `Quick test_root_node_type;
@@ -87,4 +152,12 @@ let tests =
     Alcotest.test_case "named vs all children" `Quick test_named_vs_all_children;
     Alcotest.test_case "child_by_field_name" `Quick test_child_by_field_name;
     Alcotest.test_case "traverse" `Quick test_traverse;
+    Alcotest.test_case "hash identical trees" `Quick test_hash_identical_trees;
+    Alcotest.test_case "hash different trees" `Quick test_hash_different_trees;
+    Alcotest.test_case "equal same source" `Quick test_equal_same_source;
+    Alcotest.test_case "equal different source" `Quick
+      test_equal_different_source;
+    Alcotest.test_case "hash formatting insensitive" `Quick
+      test_hash_formatting_insensitive;
+    Alcotest.test_case "equal subtree" `Quick test_equal_subtree;
   ]
