@@ -73,29 +73,13 @@ let template_base_column text =
       min min_col !spaces
     ) max_int non_empty_lines
 
-(** Unwrap program/module/expression_statement wrappers from a tree root.
-    Same logic as Match_engine.get_pattern_content but works on a raw root node. *)
-let unwrap_content_node (root : Tree.pat Tree.t) : Tree.pat Tree.t =
-  let rec unwrap (node : Tree.pat Tree.t) =
-    let node_type = Tree.node_type node in
-    let children = Tree.named_children node in
-    match node_type, children with
-    | ("program" | "module" | "source_file" | "compilation_unit"), [child] -> unwrap child
-    | "expression_statement", [child] -> unwrap child
-    | "program", first :: rest when Tree.node_type first = "php_tag" ->
-      (match rest with
-       | [child] -> unwrap child
-       | _ -> node)
-    | _ -> node
-  in
-  unwrap root
 
 (** Extract the replacement template text from replace_source, trimming wrapper
     nodes (e.g., <?php prefix) that surround the content node.
     Uses the match content node's position within pattern.source to compute
     how much wrapper text to strip from both ends of replace_source. *)
 let get_replace_template pattern =
-  let match_content = unwrap_content_node pattern.tree.root in
+  let match_content = Tree.unwrap_root pattern.tree.root in
   let front_trim = match_content.Tree.start_byte in
   let back_trim = String.length pattern.source - match_content.Tree.end_byte in
   let rlen = String.length pattern.replace_source in
@@ -383,8 +367,8 @@ let compute_edits_partial ~pattern ~match_result ~source =
   match pattern.replace_tree with
   | None -> compute_edits_strict ~pattern ~match_result
   | Some replace_tree ->
-    let match_content = unwrap_content_node pattern.tree.root in
-    let replace_content = unwrap_content_node replace_tree.root in
+    let match_content = Tree.unwrap_root pattern.tree.root in
+    let replace_content = Tree.unwrap_root replace_tree.root in
     let match_children = Tree.named_children match_content in
     let replace_children = Tree.named_children replace_content in
     let alignment = Alignment.align_children
@@ -529,8 +513,8 @@ let compute_edits_field ~pattern ~match_result ~source =
   match pattern.replace_tree with
   | None -> compute_edits_strict ~pattern ~match_result
   | Some replace_tree ->
-    let match_content = unwrap_content_node pattern.tree.root in
-    let replace_content = unwrap_content_node replace_tree.root in
+    let match_content = Tree.unwrap_root pattern.tree.root in
+    let replace_content = Tree.unwrap_root replace_tree.root in
     let match_fields = Tree.named_children_with_fields match_content in
     let replace_fields = Tree.named_children_with_fields replace_content in
     let source_fields = Tree.named_children_with_fields match_result.node in

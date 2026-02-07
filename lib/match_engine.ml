@@ -341,22 +341,7 @@ and match_children_field ~pattern ~pattern_source ~source ~substitutions
   match_groups empty_bindings pattern_grouped
 
 (** Get the innermost meaningful node from a pattern.
-    This unwraps program/module wrappers and expression_statement wrappers
+    Unwraps program/module/expression_statement wrappers
     to get to the actual pattern content. *)
 let get_pattern_content pattern : Tree.pat Tree.t =
-  let rec unwrap (node : Tree.pat Tree.t) =
-    let node_type = Tree.node_type node in
-    let children = Tree.named_children node in
-    match node_type, children with
-    (* Unwrap program/module/source_file/compilation_unit with single child *)
-    | ("program" | "module" | "source_file" | "compilation_unit"), [child] -> unwrap child
-    (* Unwrap expression_statement with single child *)
-    | "expression_statement", [child] -> unwrap child
-    (* PHP: skip php_tag prefix in program node *)
-    | "program", first :: rest when Tree.node_type first = "php_tag" ->
-      (match rest with
-       | [child] -> unwrap child
-       | _ -> node)
-    | _ -> node
-  in
-  unwrap pattern.tree.root
+  Tree.unwrap_root pattern.tree.root
