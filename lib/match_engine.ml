@@ -148,9 +148,11 @@ let rec match_node ~pattern ~pattern_source ~source ~substitutions
         let source_children = Tree.named_children source_node in
         if pattern_children = [] && source_children = [] then
           (* Both are leaves - text must match exactly *)
-          let pattern_text = Tree.text pattern_source pattern_node in
-          let source_text = Tree.text source source_node in
-          if pattern_text = source_text then Some empty_bindings else None
+          if pattern_node.hash <> source_node.hash then None
+          else
+            let pattern_text = Tree.text pattern_source pattern_node in
+            let source_text = Tree.text source source_node in
+            if pattern_text = source_text then Some empty_bindings else None
         else if pattern_children = [] then
           (* Pattern is leaf but source has children - no match *)
           None

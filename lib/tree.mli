@@ -34,6 +34,7 @@ type 'kind child = { field_name : string option; node : 'kind t }
 and 'kind t = {
   node_type : string;
   is_named : bool;
+  hash : int;
   start_byte : int;
   end_byte : int;
   start_point : point;
@@ -42,7 +43,8 @@ and 'kind t = {
   named_children : 'kind t list;
 }
 (** A tree node with all data from the parse. The ['kind] parameter
-    distinguishes source nodes from pattern nodes. *)
+    distinguishes source nodes from pattern nodes. The [hash] field is a
+    precomputed structural hash that excludes positional information. *)
 
 type 'kind tree = { root : 'kind t; source : string }
 (** A complete parsed tree with source text. The ['kind] parameter distinguishes
@@ -61,6 +63,17 @@ val named_children : 'kind t -> 'kind t list
 
 val text : string -> _ t -> string
 (** [text source node] extracts the source text for a node *)
+
+val hash : _ t -> int
+(** [hash node] returns a precomputed structural hash. Two nodes with different
+    hashes are guaranteed to be structurally different. Two nodes with the same
+    hash are very likely (but not guaranteed) to be structurally equal. The hash
+    excludes positional information (byte offsets, line/column). *)
+
+val equal : string -> _ t -> string -> _ t -> bool
+(** [equal source1 node1 source2 node2] returns true if two nodes are
+    structurally equal (same node types, same leaf text, same children
+    structure). Ignores positions/formatting. Uses hash for fast rejection. *)
 
 (** {1 Child access} *)
 
