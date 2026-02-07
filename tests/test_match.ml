@@ -168,7 +168,7 @@ console.log("outside class");
   Alcotest.(check string) "$class_name" "Logger"
     (List.assoc "$class_name" (List.hd result.contexts).context_bindings);
   Alcotest.(check string) "$msg" {|"inside class"|}
-    (List.assoc "$msg" result.inner_bindings)
+    (List.assoc "$msg" result.bindings)
 
 (* Test: single context level - matching sequence *)
 
@@ -241,9 +241,9 @@ class MyClass {
   let result = List.hd results in
   (* all_bindings should include bindings from all levels *)
   Alcotest.(check bool) "all_bindings has $class_name" true
-    (List.mem_assoc "$class_name" result.all_bindings);
+    (List.mem_assoc "$class_name" result.bindings);
   Alcotest.(check bool) "all_bindings has $msg" true
-    (List.mem_assoc "$msg" result.all_bindings)
+    (List.mem_assoc "$msg" result.bindings)
 
 (* Test: binding consistency across levels *)
 let test_binding_consistency_across_levels () =
@@ -282,7 +282,7 @@ class Bar {
   Alcotest.(check string) "$name in context" "Foo"
     (List.assoc "$name" (List.hd result.contexts).context_bindings);
   Alcotest.(check string) "$name in inner" "Foo"
-    (List.assoc "$name" result.inner_bindings)
+    (List.assoc "$name" result.bindings)
 
 (* Test: no match when inner pattern is outside all contexts *)
 let test_no_match_outside_context () =
@@ -344,7 +344,7 @@ class Logger {
   (* Just verify we get a result with the expected structure *)
   let result = List.hd results in
   Alcotest.(check int) "has one context" 1 (List.length result.contexts);
-  Alcotest.(check bool) "has bindings" true (List.length result.inner_bindings > 0)
+  Alcotest.(check bool) "has bindings" true (List.length result.bindings > 0)
 
 (* Test: single section pattern works with find_nested_matches (backward compat) *)
 let test_single_section_backward_compat () =
@@ -541,7 +541,7 @@ metavar $X: single
   Printf.printf "Nested partial with on: %d\n" (List.length results);
   Alcotest.(check int) "found nested match" 1 (List.length results);
   let result = List.hd results in
-  Alcotest.(check string) "$X value" "1" (List.assoc "$X" result.all_bindings);
+  Alcotest.(check string) "$X value" "1" (List.assoc "$X" result.bindings);
   Alcotest.(check int) "has one context" 1 (List.length result.contexts)
 
 (* Test: nested partial matching for deeply nested objects.
@@ -950,7 +950,7 @@ fun standalone() {
   let result = List.hd results in
   Alcotest.(check string) "$CLASS" "Logger"
     (List.assoc "$CLASS" (List.hd result.contexts).context_bindings);
-  let msg = List.assoc "$MSG" result.inner_bindings in
+  let msg = List.assoc "$MSG" result.bindings in
   Alcotest.(check bool) "msg contains Logging" true (string_contains ~needle:"Logging" msg)
 
 (* Test: Kotlin data class pattern *)
@@ -1452,7 +1452,7 @@ error_log("Outside class");
   let result = List.hd results in
   Alcotest.(check string) "$CLASS" "Logger"
     (List.assoc "$CLASS" (List.hd result.contexts).context_bindings);
-  let msg = List.assoc "$MSG" result.inner_bindings in
+  let msg = List.assoc "$MSG" result.bindings in
   Alcotest.(check bool) "msg contains Inside class" true (string_contains ~needle:"Inside class" msg)
 
 (* Test: PHP chained method calls - match method names in chain *)
@@ -2291,7 +2291,7 @@ def standalone(): Unit = {
   let result = List.hd results in
   Alcotest.(check string) "$OBJ" "Logger"
     (List.assoc "$OBJ" (List.hd result.contexts).context_bindings);
-  let msg = List.assoc "$MSG" result.inner_bindings in
+  let msg = List.assoc "$MSG" result.bindings in
   Alcotest.(check bool) "msg contains Logging" true (string_contains ~needle:"Logging" msg)
 
 (* Test: Scala Option.getOrElse pattern *)

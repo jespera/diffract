@@ -78,7 +78,7 @@ let find_files ~pattern ~exclude_dirs root =
 (* Format a match result with file path *)
 let format_file_match ~file_path ~source_text (result : Diffract.Match.nested_match_result) =
   let line = result.start_point.row + 1 in
-  let matched_text = Diffract.Tree.text source_text result.inner_node in
+  let matched_text = Diffract.Tree.text source_text result.node in
   (* Truncate and single-line the matched text for display *)
   let preview =
     let text = String.map (fun c -> if c = '\n' then ' ' else c) matched_text in
@@ -88,7 +88,7 @@ let format_file_match ~file_path ~source_text (result : Diffract.Match.nested_ma
   let buf = Buffer.create 256 in
   Buffer.add_string buf (Printf.sprintf "%s:%d: %s\n" file_path line preview);
   (* Add bindings *)
-  let bindings = result.inner_bindings
+  let bindings = result.bindings
     |> List.sort_uniq (fun (v1, _) (v2, _) -> String.compare v1 v2) in
   List.iter (fun (var, value) ->
     let value_preview =

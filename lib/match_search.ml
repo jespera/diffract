@@ -85,14 +85,11 @@ let rec find_nested_matches_impl ~source ~inherited_bindings
         ~inherited_bindings
         ~source
         ~root_node in
-    List.map (fun m -> {
-      inner_node = m.node;
-      inner_bindings = m.bindings;
-      inner_node_bindings = m.node_bindings;
-      inner_sequence_node_bindings = m.sequence_node_bindings;
-      all_bindings = m.bindings;
-      all_node_bindings = m.node_bindings;
-      all_sequence_node_bindings = m.sequence_node_bindings;
+    List.map (fun (m : match_result) -> {
+      node = m.node;
+      bindings = m.bindings;
+      node_bindings = m.node_bindings;
+      sequence_node_bindings = m.sequence_node_bindings;
       contexts = List.rev accumulated_contexts;
       start_point = m.start_point;
       end_point = m.end_point;
@@ -104,7 +101,7 @@ let rec find_nested_matches_impl ~source ~inherited_bindings
         ~inherited_bindings
         ~source
         ~root_node in
-    List.concat_map (fun ctx_match ->
+    List.concat_map (fun (ctx_match : match_result) ->
       let ctx_record = {
         context_node = ctx_match.node;
         context_bindings = ctx_match.bindings;
@@ -142,14 +139,11 @@ let find_nested_matches_internal ~ctx ~language ~pattern_text ~source_text =
           ~inherited_bindings:Match_engine.empty_bindings
           ~source
           ~root_node:source_root in
-      List.map (fun m -> {
-        inner_node = m.node;
-        inner_bindings = m.bindings;
-        inner_node_bindings = m.node_bindings;
-        inner_sequence_node_bindings = m.sequence_node_bindings;
-        all_bindings = m.bindings;
-        all_node_bindings = m.node_bindings;
-        all_sequence_node_bindings = m.sequence_node_bindings;
+      List.map (fun (m : match_result) -> {
+        node = m.node;
+        bindings = m.bindings;
+        node_bindings = m.node_bindings;
+        sequence_node_bindings = m.sequence_node_bindings;
         contexts = [];
         start_point = m.start_point;
         end_point = m.end_point;
@@ -279,9 +273,9 @@ let format_nested_match source_text result =
   (* Format the inner match (target) *)
   let inner_indent = List.length result.contexts * 2 in
   let line = result.start_point.row + 1 in
-  let matched_text = Tree.text source_text result.inner_node in
+  let matched_text = Tree.text source_text result.node in
   let preview = truncate_text matched_text 50 in
   Buffer.add_string buf (String.make inner_indent ' ');
   Buffer.add_string buf (Printf.sprintf "=> line %d: %s\n" line preview);
-  format_bindings (inner_indent + 3) result.inner_bindings;
+  format_bindings (inner_indent + 3) result.bindings;
   Buffer.contents buf
