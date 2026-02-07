@@ -1,11 +1,12 @@
 (** Tree-sitter node traversal API *)
 
-(** Abstract types for tree and node *)
 type tree
-type t  (* node *)
+(** Abstract types for tree and node *)
 
+type t (* node *)
+
+type point = { row : int; column : int }
 (** Position in source code *)
-type point = { row: int; column: int }
 
 (** {1 Tree operations} *)
 
@@ -25,8 +26,12 @@ external child_count : t -> int = "ts_helper_node_child_count"
 external named_child_count : t -> int = "ts_helper_node_named_child_count"
 external child : t -> int -> t = "ts_helper_node_child"
 external named_child : t -> int -> t = "ts_helper_node_named_child"
-external child_by_field_name : t -> string -> t = "ts_helper_node_child_by_field_name"
-external field_name_for_child : t -> int -> string option = "ts_helper_node_field_name_for_child"
+
+external child_by_field_name : t -> string -> t
+  = "ts_helper_node_child_by_field_name"
+
+external field_name_for_child : t -> int -> string option
+  = "ts_helper_node_field_name_for_child"
 
 (** {1 Tree navigation} *)
 
@@ -44,11 +49,11 @@ external start_point_raw : t -> int * int = "ts_helper_node_start_point"
 external end_point_raw : t -> int * int = "ts_helper_node_end_point"
 
 let start_point node =
-  let (row, column) = start_point_raw node in
+  let row, column = start_point_raw node in
   { row; column }
 
 let end_point node =
-  let (row, column) = end_point_raw node in
+  let row, column = end_point_raw node in
   { row; column }
 
 (** {1 Convenience functions} *)
