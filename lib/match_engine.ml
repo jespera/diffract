@@ -28,7 +28,8 @@ let check_and_merge_bindings existing new_bindings =
 
 (** Check if a pattern node's text is a placeholder, return the original metavar name if so.
     Also handles wrapper nodes (like expression_statement) that contain just a placeholder
-    plus a trailing semicolon. This allows patterns like `$X;` in PHP to work. *)
+    plus a trailing semicolon. This allows patterns like `$X;` to work in languages
+    where semicolons are parsed as part of the statement wrapper. *)
 let is_placeholder substitutions source (node : Tree.pat Tree.t) =
   let text = Tree.text source node in
   (* First check if node's text directly matches *)
