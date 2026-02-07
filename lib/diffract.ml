@@ -4,6 +4,7 @@ module Bindings = Tree_sitter_bindings
 module Context = Context
 module Tree = Tree
 module Match = Match
+module Tree_diff = Tree_diff
 
 (** Parse source code and return the tree representation *)
 let parse_tree ~ctx ~language source = Tree.parse ~ctx ~language source
