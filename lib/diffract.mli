@@ -5,6 +5,7 @@ module Context = Context
 
 module Tree = Tree
 module Match = Match
+module Tree_diff = Tree_diff
 
 (** {1 Parsing} *)
 
