@@ -56,7 +56,7 @@ fun standalone() {
   Printf.printf "Found %d println() calls inside classes:\n\n" (List.length results);
   List.iter (fun (r : Match.nested_match_result) ->
     let class_name = List.assoc "$CLASS" (List.hd r.contexts).context_bindings in
-    let msg = List.assoc "$MSG" r.inner_bindings in
+    let msg = List.assoc "$MSG" r.bindings in
     Printf.printf "  In class '%s' at line %d: println(%s)\n"
       class_name
       (r.start_point.row + 1)
@@ -115,7 +115,7 @@ fun standaloneFunction() {
   Printf.printf "Found %d methods inside classes (standalone function excluded):\n\n" (List.length results);
   List.iter (fun (r : Match.nested_match_result) ->
     let class_name = List.assoc "$CLASS" (List.hd r.contexts).context_bindings in
-    let method_name = List.assoc "$METHOD" r.inner_bindings in
+    let method_name = List.assoc "$METHOD" r.bindings in
     Printf.printf "  %s.%s() at line %d\n"
       class_name
       method_name
@@ -215,7 +215,7 @@ class Logger {
   Printf.printf "Found %d return statements inside classes:\n\n" (List.length results);
   List.iter (fun (r : Match.nested_match_result) ->
     let class_name = List.assoc "$CLASS" (List.hd r.contexts).context_bindings in
-    let expr = List.assoc "$EXPR" r.inner_bindings in
+    let expr = List.assoc "$EXPR" r.bindings in
     Printf.printf "  In %s: return %s (line %d)\n"
       class_name
       expr
@@ -286,7 +286,7 @@ fun standaloneQuery() {
   List.iter (fun (r : Match.nested_match_result) ->
     let repo = List.assoc "$REPO" (List.nth r.contexts 0).context_bindings in
     let method_name = List.assoc "$METHOD" (List.nth r.contexts 1).context_bindings in
-    let query = List.assoc "$QUERY" r.inner_bindings in
+    let query = List.assoc "$QUERY" r.bindings in
     Printf.printf "  %s.%s(): %s\n" repo method_name query
   ) results;
   print_newline ()

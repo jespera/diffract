@@ -91,7 +91,7 @@ let get_replace_template pattern =
 
 (** Compute edits for strict-mode transform.
     The entire matched node's byte range gets replaced with the instantiated template. *)
-let compute_edits_strict ~pattern ~match_result =
+let compute_edits_strict ~pattern ~(match_result : match_result) =
   let template = get_replace_template pattern in
   (* Instantiate metavars in the template (replace_source has placeholders) *)
   let instantiated = instantiate_template
@@ -226,7 +226,7 @@ module Alignment = struct
     | Empty
 
   (** Instantiate and adjust indentation for a single child replacement/insertion *)
-  let instantiate_with_indent ~pattern ~match_result ~source_column text =
+  let instantiate_with_indent ~pattern ~(match_result : match_result) ~source_column text =
     let instantiated = instantiate_template
       ~substitutions:pattern.substitutions
       ~text_bindings:match_result.bindings text in
@@ -241,7 +241,7 @@ module Alignment = struct
     | After_child _ | At_end -> separator ^ instantiated
 
   (** Compute insertion spec for partial mode (with correspondences). *)
-  let insertion_spec_with_correspondences ~source ~match_result
+  let insertion_spec_with_correspondences ~source ~(match_result : match_result)
       (source_arr : Tree.src Tree.t array) ~after_mi ~best_source_after =
     let source_len = Array.length source_arr in
     if source_len = 0 then
@@ -263,7 +263,7 @@ module Alignment = struct
         (At_end, match_result.node.Tree.end_byte, ", ", last.Tree.start_point.column)
 
   (** Compute insertion spec for field mode (direct indices). *)
-  let insertion_spec_direct ~source ~match_result
+  let insertion_spec_direct ~source ~(match_result : match_result)
       (source_arr : Tree.src Tree.t array) ~after_mi =
     let source_len = Array.length source_arr in
     if source_len = 0 then
@@ -363,7 +363,7 @@ end
 (** Compute edits for partial-mode transform.
     Uses correspondences to map pattern children to source children,
     then applies alignment-based edits to individual children. *)
-let compute_edits_partial ~pattern ~match_result ~source =
+let compute_edits_partial ~pattern ~(match_result : match_result) ~source =
   match pattern.replace_tree with
   | None -> compute_edits_strict ~pattern ~match_result
   | Some replace_tree ->
@@ -509,7 +509,7 @@ let compute_field_removal_edits ~(match_result : match_result)
     Pattern child i within a group maps directly to source child i (exact matching).
     Handles field additions (fields only in replace) and removals (fields only in match)
     by computing span-based edits between anchor fields. *)
-let compute_edits_field ~pattern ~match_result ~source =
+let compute_edits_field ~pattern ~(match_result : match_result) ~source =
   match pattern.replace_tree with
   | None -> compute_edits_strict ~pattern ~match_result
   | Some replace_tree ->
@@ -565,7 +565,7 @@ let compute_edits_field ~pattern ~match_result ~source =
     List.rev !edits
 
 (** Compute edits for a single match, dispatching by match mode *)
-let compute_edits ~pattern ~match_result ~source =
+let compute_edits ~pattern ~(match_result : match_result) ~source =
   match pattern.match_mode with
   | Strict ->
     compute_edits_strict ~pattern ~match_result

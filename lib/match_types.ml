@@ -69,13 +69,10 @@ type context_match = {
 
 (** Result of nested pattern matching *)
 type nested_match_result = {
-  inner_node: Tree.src Tree.t;
-  inner_bindings: (string * string) list;
-  inner_node_bindings: (string * Tree.src Tree.t) list;
-  inner_sequence_node_bindings: (string * Tree.src Tree.t list) list;
-  all_bindings: (string * string) list;
-  all_node_bindings: (string * Tree.src Tree.t) list;
-  all_sequence_node_bindings: (string * Tree.src Tree.t list) list;
+  node: Tree.src Tree.t;
+  bindings: (string * string) list;  (** All bindings (inner + inherited from contexts) *)
+  node_bindings: (string * Tree.src Tree.t) list;
+  sequence_node_bindings: (string * Tree.src Tree.t list) list;
   contexts: context_match list;  (** outermost first *)
   start_point: Tree.point;
   end_point: Tree.point;
