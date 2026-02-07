@@ -216,52 +216,14 @@ let preprocess_ellipsis text =
   done;
   (Buffer.contents result, List.rev !substitutions)
 
-(** Classify spatch lines: split pattern body into match_text and replace_template.
+(** Classify and preprocess spatch lines in a single pass.
     Lines prefixed with "- " are match-only (minus lines).
     Lines prefixed with "+ " are replace-only (plus lines).
     Lines with " " prefix or no prefix are context (appear in both).
-    Returns spatch_body. *)
-let classify_spatch_lines body =
-  let lines = String.split_on_char '\n' body in
-  let has_transform = List.exists (fun line ->
-    String.length line >= 2 &&
-    (line.[0] = '-' || line.[0] = '+') && line.[1] = ' '
-  ) lines in
-  if not has_transform then
-    { match_text = body; replace_template = ""; is_transform = false }
-  else
-    let match_lines = ref [] in
-    let replace_lines = ref [] in
-    List.iter (fun line ->
-      if String.length line >= 2 && line.[0] = '-' && line.[1] = ' ' then begin
-        (* Minus line: strip "- " prefix, add to match only *)
-        let content = String.sub line 2 (String.length line - 2) in
-        match_lines := content :: !match_lines
-      end else if String.length line >= 2 && line.[0] = '+' && line.[1] = ' ' then begin
-        (* Plus line: strip "+ " prefix, add to replace only *)
-        let content = String.sub line 2 (String.length line - 2) in
-        replace_lines := content :: !replace_lines
-      end else begin
-        (* Context line: strip leading space if present (unified diff convention) *)
-        let content =
-          if String.length line >= 1 && line.[0] = ' ' then
-            String.sub line 1 (String.length line - 1)
-          else
-            line
-        in
-        match_lines := content :: !match_lines;
-        replace_lines := content :: !replace_lines
-      end
-    ) lines;
-    let match_text = String.concat "\n" (List.rev !match_lines) in
-    let replace_template = String.concat "\n" (List.rev !replace_lines) in
-    { match_text; replace_template; is_transform = true }
-
-(** Preprocess ellipsis in spatch lines with consistent placeholder mapping.
-    - Ellipsis in context/minus lines becomes placeholders and is bound.
-    - Ellipsis in plus-only lines is rejected (unbound).
-    Returns (match_text, replace_template, ellipsis_subs). *)
-let preprocess_spatch_ellipsis body =
+    Ellipsis in context/minus lines becomes placeholders and is bound.
+    Ellipsis in plus-only lines is rejected (unbound).
+    Returns (match_text, replace_template, ellipsis_subs, is_transform). *)
+let classify_and_preprocess_spatch body =
   let lines = String.split_on_char '\n' body in
   let match_lines = ref [] in
   let replace_lines = ref [] in
@@ -330,7 +292,11 @@ let preprocess_spatch_ellipsis body =
   ) lines;
   let match_text = String.concat "\n" (List.rev !match_lines) in
   let replace_template = String.concat "\n" (List.rev !replace_lines) in
-  (match_text, replace_template, List.rev !substitutions)
+  let is_transform = List.exists (fun line ->
+    String.length line >= 2 &&
+    (line.[0] = '-' || line.[0] = '+') && line.[1] = ' '
+  ) lines in
+  (match_text, replace_template, List.rev !substitutions, is_transform)
 
 (** Parse a pattern file/string into a pattern structure *)
 let parse_pattern ~ctx ~language pattern_text =
@@ -340,10 +306,8 @@ let parse_pattern ~ctx ~language pattern_text =
     | Some m -> m
     | None -> failwith "Pattern must specify match mode (match: strict, match: field, or match: partial)"
   in
-  (* Classify spatch lines first *)
-  let spatch = classify_spatch_lines preamble.p_pattern_body in
-  let (pattern_body, replace_template, ellipsis_subs) =
-    preprocess_spatch_ellipsis preamble.p_pattern_body in
+  let (pattern_body, replace_template, ellipsis_subs, is_transform) =
+    classify_and_preprocess_spatch preamble.p_pattern_body in
   validate_metavars preamble.p_metavars pattern_body;
   (* Then substitute declared metavars *)
   let (transformed_source, metavar_subs) = substitute_metavars preamble.p_metavars pattern_body in
@@ -360,7 +324,7 @@ let parse_pattern ~ctx ~language pattern_text =
     failwith "Sequence metavars are not supported in match: partial";
   (* Handle replacement template if this is a transform *)
   let (replace_tree, replace_source) =
-    if spatch.is_transform then begin
+    if is_transform then begin
       (* Validate: metavars in + lines must appear in - or context lines *)
       let replace_metavars = find_metavars_in_text replace_template in
       let match_metavars = find_metavars_in_text pattern_body in
@@ -387,7 +351,7 @@ let parse_pattern ~ctx ~language pattern_text =
     original_source = preamble.p_pattern_body;
     match_mode;
     on_var = preamble.p_on_var;
-    spatch;
+    is_transform;
     replace_tree;
     replace_source;
   }

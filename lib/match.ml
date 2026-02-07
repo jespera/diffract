@@ -31,5 +31,3 @@ let transform_file = Match_transform.transform_file
 let generate_diff = Match_transform.generate_diff
 
 let apply_edits = Match_transform.apply_edits
-
-let classify_spatch_lines = Match_parse.classify_spatch_lines

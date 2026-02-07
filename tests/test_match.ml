@@ -2408,23 +2408,6 @@ let scala_tests = [
 
 (* === Transform (semantic patch) tests === *)
 
-(* Test: line classification *)
-let test_classify_spatch_lines () =
-  (* No transform lines *)
-  let result = Match.classify_spatch_lines "console.log(x)" in
-  Alcotest.(check bool) "no transform" false result.is_transform;
-  Alcotest.(check string) "match_text unchanged" "console.log(x)" result.match_text;
-  (* With transform lines *)
-  let result = Match.classify_spatch_lines "- console.log($MSG)\n+ logger.info($MSG)" in
-  Alcotest.(check bool) "is transform" true result.is_transform;
-  Alcotest.(check string) "match_text" "console.log($MSG)" result.match_text;
-  Alcotest.(check string) "replace_template" "logger.info($MSG)" result.replace_template;
-  (* Context lines *)
-  let result = Match.classify_spatch_lines " foo()\n- bar()\n+ baz()\n qux()" in
-  Alcotest.(check bool) "is transform with context" true result.is_transform;
-  Alcotest.(check string) "match with context" "foo()\nbar()\nqux()" result.match_text;
-  Alcotest.(check string) "replace with context" "foo()\nbaz()\nqux()" result.replace_template
-
 (* Test: simple strict rename *)
 let test_transform_simple_rename () =
   let pattern_text = {|@@
@@ -2894,7 +2877,6 @@ metavar $BODY: sequence
       ~source_text:"const obj = { a: 1, b: 2 };"))
 
 let transform_tests = [
-  Alcotest.test_case "classify spatch lines" `Quick test_classify_spatch_lines;
   Alcotest.test_case "simple rename" `Quick test_transform_simple_rename;
   Alcotest.test_case "metavar swap" `Quick test_transform_metavar_swap;
   Alcotest.test_case "multiple matches" `Quick test_transform_multiple_matches;
