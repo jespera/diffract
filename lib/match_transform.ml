@@ -75,7 +75,7 @@ let template_base_column text =
 
 
 (** Extract the replacement template text from replace_source, trimming wrapper
-    nodes (e.g., <?php prefix) that surround the content node.
+    nodes (e.g., language-specific preambles) that surround the content node.
     Uses the match content node's position within pattern.source to compute
     how much wrapper text to strip from both ends of replace_source. *)
 let get_replace_template pattern =

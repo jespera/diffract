@@ -162,8 +162,9 @@ let validate_metavars metavars pattern_body =
   if undeclared <> [] then
     failwith (Printf.sprintf "Undeclared metavars: %s" (String.concat ", " undeclared))
 
-(** Check if a '...' at position [i] in [text] is a spread operator
-    (i.e., immediately followed by '$' or an alphanumeric character). *)
+(** Check if a '...' at position [i] in [text] is a spread/rest operator
+    rather than an ellipsis pattern (i.e., immediately followed by '$' or
+    an alphanumeric character, as in `...$args` or `...rest`). *)
 let is_spread_at text i =
   let len = String.length text in
   if i + 3 < len then
@@ -176,7 +177,7 @@ let is_spread_at text i =
 (** Preprocess ellipsis (...) in pattern text.
     Replaces ... with __ellipsis_N__ placeholders.
     Adds trailing ; if ... is followed by only whitespace then newline (statement context).
-    Does NOT replace ... if immediately followed by $ or alphanumeric (PHP spread operator).
+    Does NOT replace ... if immediately followed by $ or alphanumeric (spread/rest operator).
     Returns (transformed_text, ellipsis_substitutions) where ellipsis_substitutions
     maps unique var names to placeholder strings (e.g., [("..._0", "__ellipsis_0__")]). *)
 let preprocess_ellipsis text =
