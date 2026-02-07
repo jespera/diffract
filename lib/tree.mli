@@ -145,6 +145,13 @@ val get_errors : 'kind tree -> 'kind t list
     v} *)
 val format_tree : _ tree -> string
 
+(** {1 Unwrapping} *)
+
+(** [unwrap_root node] unwraps parser wrapper nodes (program, module,
+    expression_statement, etc.) to get to the innermost meaningful content node.
+    Handles PHP's php_tag prefix in program nodes. *)
+val unwrap_root : 'kind t -> 'kind t
+
 (** {1 Phantom type conversion} *)
 
 val forget_node : _ t -> any t

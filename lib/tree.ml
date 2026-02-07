@@ -208,6 +208,25 @@ let format_tree tree =
   format_node 0 tree.root;
   Buffer.contents buf
 
+(** {1 Unwrapping} *)
+
+(** Unwrap parser wrapper nodes (program, module, expression_statement, etc.)
+    to get to the innermost meaningful content node.
+    Handles PHP's php_tag prefix in program nodes. *)
+let unwrap_root (node : 'kind t) : 'kind t =
+  let rec unwrap node =
+    let children = named_children node in
+    match node.node_type, children with
+    | ("program" | "module" | "source_file" | "compilation_unit"), [child] -> unwrap child
+    | "expression_statement", [child] -> unwrap child
+    | "program", first :: rest when first.node_type = "php_tag" ->
+      (match rest with
+       | [child] -> unwrap child
+       | _ -> node)
+    | _ -> node
+  in
+  unwrap node
+
 (** {1 Phantom type conversion} *)
 
 (** Erase the source/pattern distinction on a node.
