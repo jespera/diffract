@@ -3536,6 +3536,107 @@ metavar $BODY: sequence
         (Match.find_matches ~ctx ~language:"typescript" ~pattern_text
            ~source_text:"const obj = { a: 1, b: 2 };"))
 
+(* Test: partial mode transform that restructures the surrounding expression
+   drops unmentioned properties from inner objects.
+
+   Use case: Refactoring `useHook({ select: fn, enabled: cond, extra: val })`
+   to `useAppMemo(useHook({ enabled: cond, extra: val }), fn)`.
+
+   Partial matching correctly identifies the call even when the object has extra
+   properties beyond `select` and `enabled`. But the transform replaces the
+   entire call expression, so properties not captured by a metavar are lost.
+
+   Simple same-level partial transforms (e.g., renaming a property) preserve
+   extras because the alignment operates on the matched node's direct children,
+   and unmatched source children are left untouched.
+
+   But when the transform *restructures* the expression (changing which node the
+   object lives in), the replacement template is instantiated from metavar
+   bindings alone — it has no way to splice in unmatched source children that
+   were inside a replaced subtree.
+
+   A "surgical partial" mode would need to:
+   1. Recognize that the inner object `{ enabled: $COND }` in the replacement
+      corresponds to the matched object `{ select: $FN, enabled: $COND, ... }`
+   2. Preserve the unmatched properties (extra: 42) in the replacement object
+   This likely requires tracking correspondences through nested structures. *)
+let test_partial_restructure_loses_extra_properties () =
+  let pattern_text =
+    {|@@
+match: partial
+metavar $FN: single
+metavar $COND: single
+@@
+- f({ select: $FN, enabled: $COND })
++ g(f({ enabled: $COND }), $FN)|}
+  in
+  (* Source has an extra property "extra: 42" not mentioned in the pattern *)
+  let source_text = {|f({ select: fn, enabled: true, extra: 42 })|} in
+  let result =
+    Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text
+  in
+  Alcotest.(check bool) "produces edits" true (result.edits <> []);
+  (* The restructuring works *)
+  Alcotest.(check bool)
+    "has wrapper call" true
+    (string_contains ~needle:"g(f(" result.transformed_source);
+  Alcotest.(check bool)
+    "select extracted as argument" true
+    (string_contains ~needle:", fn)" result.transformed_source);
+  Alcotest.(check bool)
+    "enabled preserved in inner call" true
+    (string_contains ~needle:"enabled: true" result.transformed_source);
+
+  (* BUG: extra: 42 is lost because the entire call expression is replaced
+     from the metavar-instantiated template, which has no knowledge of
+     unmatched source children inside replaced subtrees.
+
+     A "surgical partial" mode would preserve it:
+       g(f({ enabled: true, extra: 42 }), fn)
+
+     For now, we assert the current (broken) behavior so the test documents
+     the problem and will break when the fix lands. *)
+  Alcotest.(check bool)
+    "KNOWN ISSUE: extra property is lost" false
+    (string_contains ~needle:"extra: 42" result.transformed_source)
+
+(* Test: partial mode - surgically remove one property from an object even when
+   the pattern has surrounding context (const x = {...}).
+
+   The pattern marks only `b: $X` for removal. The surrounding `const x = {}`
+   is context. The source has extra properties `a` and `c` that are not
+   mentioned in the pattern at all.
+
+   Without a fix the alignment operates at the variable_declarator level:
+   both match and replace contain a variable_declarator (same type, different
+   text), so align_children makes them an EReplace pair and the whole
+   declarator gets swapped out for `x = {}`, losing every property. With the
+   fix the transform descends recursively into same-type container nodes until
+   it reaches the object level, where only the `b` property is removed. *)
+let test_transform_partial_remove_nested () =
+  let pattern_text =
+    {|@@
+match: partial
+metavar $X: single
+@@
+const x = {
+-   b: $X,
+}|}
+  in
+  let source_text = {|const x = { a: 1, b: 2, c: 3 }|} in
+  let result =
+    Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text
+  in
+  Alcotest.(check bool)
+    "preserves a: 1" true
+    (string_contains ~needle:"a: 1" result.transformed_source);
+  Alcotest.(check bool)
+    "removes b: 2" false
+    (string_contains ~needle:"b: 2" result.transformed_source);
+  Alcotest.(check bool)
+    "preserves c: 3" true
+    (string_contains ~needle:"c: 3" result.transformed_source)
+
 let transform_tests =
   [
     Alcotest.test_case "simple rename" `Quick test_transform_simple_rename;
@@ -3577,4 +3678,8 @@ let transform_tests =
       test_transform_partial_multiline_indent;
     Alcotest.test_case "partial rejects sequence" `Quick
       test_partial_rejects_sequence_metavar;
+    Alcotest.test_case "partial restructure loses extras" `Quick
+      test_partial_restructure_loses_extra_properties;
+    Alcotest.test_case "partial remove nested" `Quick
+      test_transform_partial_remove_nested;
   ]
