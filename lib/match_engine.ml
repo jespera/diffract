@@ -397,6 +397,19 @@ and match_children_field ~pattern ~pattern_source ~source ~substitutions
   in
   match_groups empty_bindings pattern_grouped
 
+(** Re-run partial matching on [pattern_children] against [source_children] and
+    return the resulting correspondences. Used by the transform step to recover
+    the pattern→source child mapping inside container nodes that were initially
+    aligned as same-type EReplace pairs. *)
+let rematch_partial_correspondences ~pattern ~pattern_source ~source
+    ~substitutions pattern_children source_children =
+  match
+    match_children_partial ~pattern ~pattern_source ~source ~substitutions
+      pattern_children source_children
+  with
+  | None -> None
+  | Some bindings -> Some bindings.correspondences
+
 (** Get the innermost meaningful node from a pattern. Unwraps
     program/module/expression_statement wrappers to get to the actual pattern
     content. *)

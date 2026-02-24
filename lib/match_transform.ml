@@ -382,10 +382,154 @@ module Alignment = struct
       alignment.insertions;
     List.rev !edits
 
+  (** Recursively compute surgical edits inside a same-type container pair.
+      [match_node] and [replace_node] have the same node_type; [src_node] is the
+      corresponding source node. Inner correspondences are obtained by re-running
+      partial matching on the named children of [match_node] vs [src_node].
+      Returns [] when the nodes are leaves (caller should fall back to wholesale
+      replacement) or when re-matching fails. *)
+  let rec apply_partial_recursive ~pattern ~(match_result : match_result) ~source
+      (match_node : Tree.pat Tree.t) (replace_node : Tree.pat Tree.t)
+      (src_node : Tree.src Tree.t) =
+    let inner_match_ch = Tree.named_children match_node in
+    let inner_replace_ch = Tree.named_children replace_node in
+    let inner_source_ch = Tree.named_children src_node in
+    if inner_match_ch = [] && inner_replace_ch = [] then
+      (* Both are leaves - caller handles as wholesale replacement *)
+      []
+    else
+      match
+        Match_engine.rematch_partial_correspondences ~pattern
+          ~pattern_source:pattern.source ~source
+          ~substitutions:pattern.substitutions inner_match_ch inner_source_ch
+      with
+      | None ->
+          (* Re-match failed; caller falls back to wholesale replacement *)
+          []
+      | Some inner_corrs ->
+          let inner_corr_map = Hashtbl.create 8 in
+          List.iter
+            (fun (c : child_correspondence) ->
+              Hashtbl.replace inner_corr_map c.pattern_index c.source_index)
+            inner_corrs;
+          let inner_source_arr = Array.of_list inner_source_ch in
+          let inner_replace_arr = Array.of_list inner_replace_ch in
+          let inner_alignment =
+            align_children ~match_source:pattern.source
+              ~replace_source:pattern.replace_source inner_match_ch
+              inner_replace_ch
+          in
+          let source_index_of_pattern mi = Hashtbl.find_opt inner_corr_map mi in
+          let best_source_after after_mi =
+            let best = ref None in
+            Hashtbl.iter
+              (fun pi si ->
+                if pi <= after_mi then
+                  match !best with
+                  | None -> best := Some si
+                  | Some prev when si > prev -> best := Some si
+                  | Some _ -> ())
+              inner_corr_map;
+            !best
+          in
+          let insertion_spec ~after_mi =
+            insertion_spec_with_correspondences ~source ~match_result
+              inner_source_arr ~after_mi ~best_source_after
+          in
+          let edits = ref [] in
+          List.iter
+            (fun (mi, action) ->
+              match action with
+              | EKeep -> ()
+              | ERemove -> (
+                  match source_index_of_pattern mi with
+                  | Some si when si < Array.length inner_source_arr ->
+                      let sb, eb = removal_range inner_source_arr si in
+                      edits :=
+                        { start_byte = sb; end_byte = eb; replacement = "" }
+                        :: !edits
+                  | _ -> ())
+              | EReplace ri -> (
+                  match source_index_of_pattern mi with
+                  | Some si
+                    when si < Array.length inner_source_arr
+                         && ri < Array.length inner_replace_arr ->
+                      let m_ch = List.nth inner_match_ch mi in
+                      let r_ch = inner_replace_arr.(ri) in
+                      let s_ch = inner_source_arr.(si) in
+                      if Tree.node_type m_ch = Tree.node_type r_ch
+                         && (Tree.named_children m_ch <> []
+                             || Tree.named_children r_ch <> [])
+                      then begin
+                        (* Same-type container: recurse *)
+                        let sub =
+                          apply_partial_recursive ~pattern ~match_result ~source
+                            m_ch r_ch s_ch
+                        in
+                        if sub <> [] then edits := sub @ !edits
+                        else begin
+                          (* Recursion returned nothing (leaf or re-match failed):
+                             fall back to wholesale replacement *)
+                          let repl_text = Tree.text pattern.replace_source r_ch in
+                          let inst =
+                            instantiate_with_indent ~pattern ~match_result
+                              ~source_column:s_ch.Tree.start_point.column repl_text
+                          in
+                          edits :=
+                            {
+                              start_byte = s_ch.Tree.start_byte;
+                              end_byte = s_ch.Tree.end_byte;
+                              replacement = inst;
+                            }
+                            :: !edits
+                        end
+                      end else begin
+                        (* Different type or true leaf: wholesale replacement *)
+                        let repl_text = Tree.text pattern.replace_source r_ch in
+                        let inst =
+                          instantiate_with_indent ~pattern ~match_result
+                            ~source_column:s_ch.Tree.start_point.column repl_text
+                        in
+                        edits :=
+                          {
+                            start_byte = s_ch.Tree.start_byte;
+                            end_byte = s_ch.Tree.end_byte;
+                            replacement = inst;
+                          }
+                          :: !edits
+                      end
+                  | _ -> ()))
+            inner_alignment.entries;
+          List.iter
+            (fun (after_mi, ri) ->
+              if ri < Array.length inner_replace_arr then begin
+                let repl_text =
+                  Tree.text pattern.replace_source inner_replace_arr.(ri)
+                in
+                let kind, insert_byte, separator, insert_col =
+                  insertion_spec ~after_mi
+                in
+                let inst =
+                  instantiate_with_indent ~pattern ~match_result
+                    ~source_column:insert_col repl_text
+                in
+                let replacement =
+                  insertion_replacement ~kind ~separator ~instantiated:inst
+                in
+                edits :=
+                  { start_byte = insert_byte; end_byte = insert_byte; replacement }
+                  :: !edits
+              end)
+            inner_alignment.insertions;
+          List.rev !edits
+
   (** Apply alignment edits using a correspondence map (pattern child → source
-      child). Used for partial mode where matching is unordered. *)
+      child). Used for partial mode where matching is unordered. For EReplace
+      pairs whose match and replace nodes share the same node type, recurses
+      into the container rather than replacing it wholesale, so that only the
+      actually-changed children are touched. *)
   let apply_with_correspondences ~pattern ~(match_result : match_result) ~source
-      alignment (source_arr : Tree.src Tree.t array)
+      ~match_children_list alignment (source_arr : Tree.src Tree.t array)
       (replace_arr : Tree.pat Tree.t array) =
     let corr_map = Hashtbl.create 16 in
     List.iter
@@ -409,8 +553,91 @@ module Alignment = struct
       insertion_spec_with_correspondences ~source ~match_result source_arr
         ~after_mi ~best_source_after
     in
-    apply_alignment ~pattern ~match_result alignment ~source_index_of_pattern
-      ~insertion_spec source_arr replace_arr
+    let edits = ref [] in
+    List.iter
+      (fun (mi, action) ->
+        match action with
+        | EKeep -> ()
+        | ERemove -> (
+            match source_index_of_pattern mi with
+            | Some si when si < Array.length source_arr ->
+                let start_b, end_b = removal_range source_arr si in
+                edits :=
+                  { start_byte = start_b; end_byte = end_b; replacement = "" }
+                  :: !edits
+            | _ -> ())
+        | EReplace ri -> (
+            match source_index_of_pattern mi with
+            | Some si
+              when si < Array.length source_arr && ri < Array.length replace_arr
+              ->
+                let src_child = source_arr.(si) in
+                let m_ch = List.nth match_children_list mi in
+                let r_ch = replace_arr.(ri) in
+                if Tree.node_type m_ch = Tree.node_type r_ch
+                   && (Tree.named_children m_ch <> []
+                       || Tree.named_children r_ch <> [])
+                then begin
+                  (* Same-type container: try surgical recursive descent *)
+                  let sub =
+                    apply_partial_recursive ~pattern ~match_result ~source m_ch
+                      r_ch src_child
+                  in
+                  if sub <> [] then edits := sub @ !edits
+                  else begin
+                    (* Recursion produced nothing (leaf or re-match failed):
+                       wholesale replacement *)
+                    let repl_text = Tree.text pattern.replace_source r_ch in
+                    let instantiated =
+                      instantiate_with_indent ~pattern ~match_result
+                        ~source_column:src_child.Tree.start_point.column
+                        repl_text
+                    in
+                    edits :=
+                      {
+                        start_byte = src_child.Tree.start_byte;
+                        end_byte = src_child.Tree.end_byte;
+                        replacement = instantiated;
+                      }
+                      :: !edits
+                  end
+                end else begin
+                  (* Different types or true leaf: wholesale replacement *)
+                  let repl_text = Tree.text pattern.replace_source r_ch in
+                  let instantiated =
+                    instantiate_with_indent ~pattern ~match_result
+                      ~source_column:src_child.Tree.start_point.column repl_text
+                  in
+                  edits :=
+                    {
+                      start_byte = src_child.Tree.start_byte;
+                      end_byte = src_child.Tree.end_byte;
+                      replacement = instantiated;
+                    }
+                    :: !edits
+                end
+            | _ -> ()))
+      alignment.entries;
+    List.iter
+      (fun (after_mi, ri) ->
+        if ri < Array.length replace_arr then begin
+          let repl_text = Tree.text pattern.replace_source replace_arr.(ri) in
+          let kind, insert_byte, separator, insert_col =
+            insertion_spec ~after_mi
+          in
+          let instantiated =
+            instantiate_with_indent ~pattern ~match_result
+              ~source_column:insert_col repl_text
+          in
+          let replacement =
+            insertion_replacement ~kind ~separator ~instantiated
+          in
+          edits :=
+            { start_byte = insert_byte; end_byte = insert_byte; replacement }
+            :: !edits
+        end)
+      alignment.insertions;
+    List.rev !edits
 
   (** Apply alignment edits using direct index mapping (pattern child i → source
       child i). Used for field mode where matching is exact/ordered within each
@@ -445,7 +672,7 @@ let compute_edits_partial ~pattern ~(match_result : match_result) ~source =
       let source_arr = Array.of_list source_children in
       let replace_arr = Array.of_list replace_children in
       Alignment.apply_with_correspondences ~pattern ~match_result ~source
-        alignment source_arr replace_arr
+        ~match_children_list:match_children alignment source_arr replace_arr
 
 (** Find the end byte of the last child for a given field name in a field list.
     Returns None if the field is not present. *)
