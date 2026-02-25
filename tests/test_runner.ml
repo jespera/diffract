@@ -11,5 +11,6 @@ let () =
       ("Match (Field)", Test_match.field_tests);
       ("Match (Ellipsis)", Test_match.ellipsis_tests);
       ("Transform", Test_match.transform_tests);
+      ("Expansion", Test_match.expansion_tests);
       ("Tree diff", Test_tree_diff.tests);
     ]

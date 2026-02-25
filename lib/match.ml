@@ -14,6 +14,7 @@ let build_index = Match_search.build_index
 let find_matches_with_index = Match_search.find_matches_with_index
 let find_matches_multi = Match_search.find_matches_multi
 let transform = Match_transform.transform
+let transform_nested = Match_transform.transform_nested
 let transform_file = Match_transform.transform_file
 let generate_diff = Match_transform.generate_diff
 let apply_edits = Match_transform.apply_edits

@@ -73,7 +73,16 @@ let parse_preamble text =
       String.sub after_first (closing_pos + 2)
         (String.length after_first - closing_pos - 2)
     in
-    let pattern_body = String.trim pattern_body in
+    (* Strip only surrounding newlines (not spaces) so that a leading space on
+       the first body line is preserved as the role-indicator prefix. *)
+    let pattern_body =
+      let n = String.length pattern_body in
+      let is_nl c = c = '\n' || c = '\r' in
+      let i = ref 0 and j = ref (n - 1) in
+      while !i < n && is_nl pattern_body.[!i] do incr i done;
+      while !j >= !i && is_nl pattern_body.[!j] do decr j done;
+      if !j < !i then "" else String.sub pattern_body !i (!j - !i + 1)
+    in
     (* Parse preamble lines *)
     let lines = String.split_on_char '\n' vars_section in
     let parsed = List.filter_map parse_preamble_line lines in
@@ -254,18 +263,39 @@ let preprocess_ellipsis text =
   done;
   (Buffer.contents result, List.rev !substitutions)
 
+(** True if [c] can serve as an expansion-line prefix. Column 0 of a pattern
+    line is always a role indicator (like unified diff), so any character that
+    is not already a reserved role marker is a valid expansion separator.
+    Reserved: '-', '+', ' ', '\t' (spatch roles), and characters that start
+    identifiers/metavars ('$', letters, digits, '_'). *)
+let is_expansion_prefix c =
+  c <> '-' && c <> '+' && c <> ' ' && c <> '\t' && c <> '$'
+  && not (c >= 'a' && c <= 'z')
+  && not (c >= 'A' && c <= 'Z')
+  && not (c >= '0' && c <= '9')
+  && c <> '_'
+
 (** Classify and preprocess spatch lines in a single pass. Lines prefixed with
     "- " are match-only (minus lines). Lines prefixed with "+ " are replace-only
     (plus lines). Lines with " " prefix or no prefix are context (appear in
-    both). Ellipsis in context/minus lines becomes placeholders and is bound.
-    Ellipsis in plus-only lines is rejected (unbound). Returns (match_text,
-    replace_template, ellipsis_subs, is_transform). *)
-let classify_and_preprocess_spatch body =
+    both). A line whose first character satisfies [is_expansion_prefix] and
+    whose content (rest of the line, trimmed) contains at least one declared
+    sequence metavar is an expansion line: the prefix character is the join
+    separator ('~' stands for newline), and the line becomes a placeholder in
+    replace_lines only. Lines with expansion-prefix characters but NO declared
+    sequence metavar are treated as ordinary context lines so that code lines
+    starting with characters like '{' or '(' are never misidentified.
+    Ellipsis in context/minus lines becomes placeholders and is bound. Ellipsis
+    in plus-only lines is rejected (unbound). Returns
+    (match_text, replace_template, ellipsis_subs, expansion_slots, is_transform). *)
+let classify_and_preprocess_spatch ~sequence_metavars body =
   let lines = String.split_on_char '\n' body in
   let match_lines = ref [] in
   let replace_lines = ref [] in
   let substitutions = ref [] in
   let counter = ref 0 in
+  let expand_counter = ref 0 in
+  let expansion_slots = ref [] in
   let replace_ellipsis_in_line line =
     let len = String.length line in
     let buf = Buffer.create len in
@@ -325,6 +355,49 @@ let classify_and_preprocess_spatch body =
             "Ellipsis (...) in replacement-only line is not bound by match";
         replace_lines := content :: !replace_lines
       end
+      else if String.length line >= 2 && is_expansion_prefix line.[0] && line.[1] = ' ' then begin
+        (* Potential expansion line: prefix char is separator, rest is content.
+           The second character must be a space so that code lines starting with
+           punctuation (e.g. PHP '($ARGS)') are not misidentified. *)
+        let sep_char = line.[0] in
+        let content =
+          String.trim (String.sub line 1 (String.length line - 1))
+        in
+        let vars = find_metavars_in_text content in
+        (* Only treat as expansion when content contains a declared sequence
+           metavar; otherwise the line is an ordinary context line (no vars)
+           or an error (vars present but none are sequence metavars). *)
+        let has_seq_var =
+          List.exists (fun v -> List.mem v sequence_metavars) vars
+        in
+        if vars = [] then begin
+          (* No metavars at all — treat as a normal context line *)
+          let transformed = replace_ellipsis_in_line line in
+          match_lines := transformed :: !match_lines;
+          replace_lines := transformed :: !replace_lines
+        end else if not has_seq_var then begin
+          (* Has metavars but none are sequence — user likely intended an
+             expansion line but used a single metavar; raise a clear error. *)
+          let bad = List.find (fun v -> not (List.mem v sequence_metavars)) vars in
+          failwith (Printf.sprintf
+            "Variable '%s' in expansion line must be declared as sequence metavar"
+            bad)
+        end else begin
+          (* Expansion line: replace with a unique placeholder in replace side *)
+          let separator =
+            if sep_char = '~' then "\n" else String.make 1 sep_char
+          in
+          let n = !expand_counter in
+          let placeholder = Printf.sprintf "__expand_%d__" n in
+          incr expand_counter;
+          expansion_slots :=
+            { exp_placeholder = placeholder; exp_separator = separator;
+              exp_vars = vars }
+            :: !expansion_slots;
+          replace_lines := placeholder :: !replace_lines
+          (* Not added to match_lines — replace-only, like a '+' line *)
+        end
+      end
       else begin
         let content =
           if String.length line >= 1 && line.[0] = ' ' then
@@ -339,14 +412,19 @@ let classify_and_preprocess_spatch body =
   let match_text = String.concat "\n" (List.rev !match_lines) in
   let replace_template = String.concat "\n" (List.rev !replace_lines) in
   let is_transform =
-    List.exists
-      (fun line ->
-        String.length line >= 2
-        && (line.[0] = '-' || line.[0] = '+')
-        && line.[1] = ' ')
-      lines
+    !expansion_slots <> []
+    || List.exists
+         (fun line ->
+           String.length line >= 2
+           && (line.[0] = '-' || line.[0] = '+')
+           && line.[1] = ' ')
+         lines
   in
-  (match_text, replace_template, List.rev !substitutions, is_transform)
+  ( match_text,
+    replace_template,
+    List.rev !substitutions,
+    List.rev !expansion_slots,
+    is_transform )
 
 (** Parse a pattern file/string into a pattern structure *)
 let parse_pattern ~ctx ~language pattern_text =
@@ -360,8 +438,10 @@ let parse_pattern ~ctx ~language pattern_text =
           "Pattern must specify match mode (match: strict, match: field, or \
            match: partial)"
   in
-  let pattern_body, replace_template, ellipsis_subs, is_transform =
-    classify_and_preprocess_spatch preamble.p_pattern_body
+  let pattern_body, replace_template, ellipsis_subs, expansion_slots,
+      is_transform =
+    classify_and_preprocess_spatch
+      ~sequence_metavars:preamble.p_sequence_metavars preamble.p_pattern_body
   in
   validate_metavars preamble.p_metavars pattern_body;
   (* Then substitute declared metavars *)
@@ -392,6 +472,25 @@ let parse_pattern ~ctx ~language pattern_text =
         failwith
           (Printf.sprintf "Metavars in replacement not bound in match: %s"
              (String.concat ", " undefined));
+      (* Validate expansion slots: vars must be sequence metavars and bound in match *)
+      List.iter
+        (fun slot ->
+          List.iter
+            (fun var ->
+              if not (List.mem var preamble.p_sequence_metavars) then
+                failwith
+                  (Printf.sprintf
+                     "Variable '%s' in expansion line must be declared as \
+                      sequence metavar"
+                     var);
+              if not (List.mem var match_metavars) then
+                failwith
+                  (Printf.sprintf
+                     "Variable '%s' in expansion line not bound in match \
+                      pattern"
+                     var))
+            slot.exp_vars)
+        expansion_slots;
       (* Substitute metavars in replacement template *)
       let replace_transformed, _ =
         substitute_metavars preamble.p_metavars replace_template
@@ -415,6 +514,7 @@ let parse_pattern ~ctx ~language pattern_text =
     is_transform;
     replace_tree;
     replace_source;
+    expansion_slots;
   }
 
 (** Split pattern text into sections.

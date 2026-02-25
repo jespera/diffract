@@ -366,6 +366,136 @@ mention them:
 | `partial` | Individual matched children | Preserved |
 | `field` | Children within matched fields | Preserved (other fields kept) |
 
+### Expansion transforms
+
+Expansion transforms let you join or restructure the elements of a sequence
+metavar in the replacement. Two capabilities are unlocked:
+
+1. **Verbatim expansion** — join all elements with a separator character.
+2. **Per-element transform** — apply a nested patch to each element and join the results.
+
+#### Separator-prefix lines
+
+Instead of `+ `, use a separator character followed by a space as the line
+prefix in the replace side. Any punctuation character that is not a reserved
+spatch role marker (`-`, `+`, space, tab) and not an identifier character
+(`$`, letters, digits, `_`) is accepted. The prefix character IS the join
+string between elements, except `~` which stands for newline (`\n`).
+
+Common conventions:
+
+| Prefix | Join string |
+|--------|-------------|
+| `~ `   | newline     |
+| `, `   | `,`         |
+| `; `   | `;`         |
+| `\| `  | `\|`        |
+
+Other punctuation characters like `!`, `&`, `.`, `/` work the same way — the
+character itself becomes the separator. The second character of the line must
+be a space, which prevents code lines starting with punctuation (e.g. `($ARGS)`)
+from being misidentified as expansion lines.
+
+The variable on the expansion line must be declared as `metavar $VAR: sequence`.
+
+#### Example: splitting a named import
+
+Move one named export to a different package, comma-joining the remaining names:
+
+```
+@@
+match: strict
+metavar $BEFORE: sequence
+metavar $AFTER: sequence
+@@
+- import { $BEFORE Stack $AFTER } from "@mui/system";
++ import {
+,   $BEFORE $AFTER
++ } from "@mui/system";
++ import { Stack } from "@mui/not.system";
+```
+
+Given `import { Box, Stack, Paper } from "@mui/system";`, the patch produces:
+
+```typescript
+import {
+Box,Paper
+} from "@mui/system";
+import { Stack } from "@mui/not.system";
+```
+
+`$BEFORE` binds to `[Box,]` and `$AFTER` binds to `[Paper]`; their elements are
+gathered together and joined with `,`.
+
+#### Example: converting a match expression to a method chain
+
+Convert `matchStringExhaustive(tag, { A: () => 1, B: () => 2 })` into a fluent
+chain `match(tag).with("A", () => 1).with("B", () => 2).exhaustive()`.
+
+This requires a **two-section pattern**: the outer section captures the whole
+call and names the sequence of case pairs; the inner section (prefixed with
+`on $CASES`) describes how to transform each individual pair.
+
+```
+@@
+match: strict
+metavar $TAG: single
+metavar $CASES: sequence
+@@
+- matchStringExhaustive($TAG, {
+-   $CASES
+- });
++ match($TAG)
+~   $CASES
++   .exhaustive();
+@@
+match: field
+on $CASES
+metavar $KEY: single
+metavar $VAL: single
+@@
+- $KEY: $VAL
++ .with("$KEY", $VAL)
+```
+
+Step by step:
+- The outer `@@` section matches the `matchStringExhaustive(...)` call and binds
+  `$TAG` to the first argument and `$CASES` to all `key: value` pairs inside the
+  object literal.
+- `~ $CASES` is an expansion line: each element of `$CASES` is transformed by
+  the inner section and the results are joined with newlines.
+- The inner `@@` section (with `on $CASES`) applies to each pair: `A: () => 1`
+  becomes `.with("A", () => 1)`.
+
+Given:
+```typescript
+matchStringExhaustive(tag, {
+  A: () => 1,
+  B: () => 2,
+});
+```
+
+The result is:
+```typescript
+match(tag)
+.with("A", () => 1)
+.with("B", () => 2)
+.exhaustive();
+```
+
+Use `Match.transform_nested` (instead of `Match.transform`) when the pattern
+contains two or more `@@` sections used for expansion.
+
+#### Constraints
+
+- Expansion prefix lines are only valid in the replacement side (like `+ ` lines).
+  The second character must be a space.
+- An expansion variable must be declared as `sequence` — using a `single`
+  metavar on an expansion line is an error.
+- Expansion variables must also appear in the match (`-` or context) side.
+- Inner sections used for per-element transforms cannot themselves use expansion
+  lines.
+
 ### Rules
 
 - Every metavariable used on the `+` side must also appear on the `-` or
@@ -428,4 +558,30 @@ if result.edits <> [] then begin
     ~transformed:result.transformed_source in
   print_string diff
 end
+
+(* Apply a multi-section expansion patch — use transform_nested *)
+let patch = {|@@
+match: strict
+metavar $TAG: single
+metavar $CASES: sequence
+@@
+- matchStringExhaustive($TAG, {
+-   $CASES
+- });
++ match($TAG)
+~   $CASES
++   .exhaustive();
+@@
+match: field
+on $CASES
+metavar $KEY: single
+metavar $VAL: single
+@@
+- $KEY: $VAL
++ .with("$KEY", $VAL)|} in
+let result = Diffract.Match.transform_nested
+  ~language:"typescript"
+  ~pattern_text:patch
+  ~source_text:code in
+print_string result.transformed_source
 ```

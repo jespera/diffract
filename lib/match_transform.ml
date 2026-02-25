@@ -98,29 +98,44 @@ let get_replace_template pattern =
     String.sub pattern.replace_source front_trim content_len
   else pattern.replace_source
 
-(** Compute edits for strict-mode transform. The entire matched node's byte
-    range gets replaced with the instantiated template. *)
-let compute_edits_strict ~pattern ~(match_result : match_result) =
-  let template = get_replace_template pattern in
-  (* Instantiate metavars in the template (replace_source has placeholders) *)
-  let instantiated =
-    instantiate_template ~substitutions:pattern.substitutions
-      ~text_bindings:match_result.bindings template
+(** Filter overlapping edits: keep first in document order (by start_byte).
+    Assumes edits are sorted by start_byte ascending. *)
+let filter_overlapping edits =
+  let rec go acc last_end = function
+    | [] -> List.rev acc
+    | edit :: rest ->
+        if edit.start_byte < last_end then
+          (* Overlaps with previous accepted edit - skip *)
+          go acc last_end rest
+        else go (edit :: acc) edit.end_byte rest
   in
-  (* Adjust indentation to match source location *)
-  let source_col = match_result.start_point.column in
-  let tmpl_col = template_base_column template in
-  let replacement =
-    adjust_indentation ~source_column:source_col ~template_base_column:tmpl_col
-      instantiated
+  match edits with
+  | [] -> []
+  | first :: rest -> go [ first ] first.end_byte rest
+
+(** Apply edits to source text. Sorts edits by start_byte descending and applies
+    bottom-to-top to avoid offset invalidation. Filters overlapping edits first.
+*)
+let apply_edits source edits =
+  (* Sort by start_byte ascending for overlap filtering *)
+  let sorted_asc =
+    List.sort
+      (fun a b ->
+        let c = compare a.start_byte b.start_byte in
+        if c <> 0 then c else compare b.end_byte a.end_byte)
+      edits
   in
-  [
-    {
-      start_byte = match_result.node.start_byte;
-      end_byte = match_result.node.end_byte;
-      replacement;
-    };
-  ]
+  let non_overlapping = filter_overlapping sorted_asc in
+  (* Apply in reverse order (bottom-to-top) *)
+  let sorted_desc = List.rev non_overlapping in
+  List.fold_left
+    (fun s edit ->
+      let before = String.sub s 0 edit.start_byte in
+      let after =
+        String.sub s edit.end_byte (String.length s - edit.end_byte)
+      in
+      before ^ edit.replacement ^ after)
+    source sorted_desc
 
 (** {1 Partial/field-mode transform support} *)
 
@@ -653,27 +668,6 @@ module Alignment = struct
       ~insertion_spec source_arr replace_arr
 end
 
-(** Compute edits for partial-mode transform. Uses correspondences to map
-    pattern children to source children, then applies alignment-based edits to
-    individual children. *)
-let compute_edits_partial ~pattern ~(match_result : match_result) ~source =
-  match pattern.replace_tree with
-  | None -> compute_edits_strict ~pattern ~match_result
-  | Some replace_tree ->
-      let match_content = Tree.unwrap_root pattern.tree.root in
-      let replace_content = Tree.unwrap_root replace_tree.root in
-      let match_children = Tree.named_children match_content in
-      let replace_children = Tree.named_children replace_content in
-      let alignment =
-        Alignment.align_children ~match_source:pattern.source
-          ~replace_source:pattern.replace_source match_children replace_children
-      in
-      let source_children = Tree.named_children match_result.node in
-      let source_arr = Array.of_list source_children in
-      let replace_arr = Array.of_list replace_children in
-      Alignment.apply_with_correspondences ~pattern ~match_result ~source
-        ~match_children_list:match_children alignment source_arr replace_arr
-
 (** Find the end byte of the last child for a given field name in a field list.
     Returns None if the field is not present. *)
 let field_end_byte fields field_name =
@@ -834,14 +828,189 @@ let compute_field_removal_edits ~(match_result : match_result) match_fields
       removed_fields;
     List.rev !edits
 
+(** Try to match [inner_pattern] against [node] and, if it succeeds and the
+    pattern is a transform, return the transformed text. Returns [None] if the
+    pattern does not match or is not a transform. *)
+let rec try_match_and_transform ~inner_pattern ~source node =
+  if not inner_pattern.is_transform then None
+  else
+    let node_start = node.Tree.start_byte in
+    let node_text = Tree.text source node in
+    let apply_relative edits =
+      let adjusted =
+        List.map
+          (fun e ->
+            {
+              e with
+              start_byte = e.start_byte - node_start;
+              end_byte = e.end_byte - node_start;
+            })
+          edits
+      in
+      Some (apply_edits node_text adjusted)
+    in
+    (* First: traverse into the element node to find all inner matches *)
+    let subtree_matches =
+      Match_search.find_matches_in_subtree ~pattern:inner_pattern
+        ~inherited_bindings:Match_engine.empty_bindings ~source
+        ~root_node:node
+    in
+    if subtree_matches <> [] then
+      let edits =
+        List.concat_map
+          (fun m ->
+            match inner_pattern.match_mode with
+            | Strict ->
+                compute_edits_strict ~pattern:inner_pattern ~match_result:m
+                  ~source ~inner_patterns:[]
+            | Partial ->
+                compute_edits_partial ~pattern:inner_pattern ~match_result:m
+                  ~source ~inner_patterns:[]
+            | Field ->
+                compute_edits_field ~pattern:inner_pattern ~match_result:m
+                  ~source ~inner_patterns:[])
+          subtree_matches
+      in
+      apply_relative edits
+    else
+      (* Fallback: match pattern children directly against element node children
+         in strict order, ignoring the top-level node type. This handles the
+         case where the pattern parses to a different AST node type than the
+         source element (e.g., 'key: value' parses as labeled_statement in TS
+         but source elements inside object literals are pair nodes). *)
+      match
+        Match_engine.try_match_children_directly ~pattern:inner_pattern ~source
+          node
+      with
+      | None -> None
+      | Some mb ->
+          let mr =
+            {
+              node;
+              bindings = mb.text_bindings;
+              node_bindings = mb.node_bindings;
+              sequence_node_bindings = mb.sequence_node_bindings;
+              correspondences = mb.correspondences;
+              start_point = Tree.start_point node;
+              end_point = Tree.end_point node;
+            }
+          in
+          let edits =
+            compute_edits_strict ~pattern:inner_pattern ~match_result:mr
+              ~source ~inner_patterns:[]
+          in
+          apply_relative edits
+
+(** Expand the [slot]'s sequence vars by looking them up in
+    [sequence_node_bindings]. If [inner_pattern] is provided, it is applied to
+    each element node; otherwise the raw source text is used. Elements across
+    all vars on the line are gathered in order and joined with [slot.exp_separator]. *)
+and expand_slot ~slot ~source ~sequence_node_bindings ~inner_pattern_opt =
+  let node_to_text node =
+    match inner_pattern_opt with
+    | Some ip -> (
+        match try_match_and_transform ~inner_pattern:ip ~source node with
+        | Some text -> text
+        | None -> Tree.text source node)
+    | None -> Tree.text source node
+  in
+  let texts =
+    List.concat_map
+      (fun var ->
+        match List.assoc_opt var sequence_node_bindings with
+        | Some nodes -> List.map node_to_text nodes
+        | None -> [])
+      slot.exp_vars
+  in
+  String.concat slot.exp_separator texts
+
+(** Resolve all expansion slots in [template], using [inner_patterns] for
+    transform expansion when an inner section's [on_var] targets a slot's vars. *)
+and apply_expansion_slots ~expansion_slots ~source ~sequence_node_bindings
+    ~inner_patterns template =
+  List.fold_left
+    (fun tmpl slot ->
+      let inner_pattern_opt =
+        List.find_opt
+          (fun p ->
+            match p.on_var with
+            | Some v -> List.mem v slot.exp_vars
+            | None -> false)
+          inner_patterns
+      in
+      let joined =
+        expand_slot ~slot ~source ~sequence_node_bindings ~inner_pattern_opt
+      in
+      string_replace_all ~needle:slot.exp_placeholder ~replacement:joined tmpl)
+    template expansion_slots
+
+(** Compute edits for strict-mode transform. The entire matched node's byte
+    range gets replaced with the instantiated template. *)
+and compute_edits_strict ~pattern ~(match_result : match_result) ~source ~inner_patterns =
+  let template = get_replace_template pattern in
+  let template =
+    apply_expansion_slots
+      ~expansion_slots:pattern.expansion_slots
+      ~source
+      ~sequence_node_bindings:match_result.sequence_node_bindings
+      ~inner_patterns
+      template
+  in
+  (* Instantiate metavars in the template (replace_source has placeholders) *)
+  let instantiated =
+    instantiate_template ~substitutions:pattern.substitutions
+      ~text_bindings:match_result.bindings template
+  in
+  (* Adjust indentation to match source location *)
+  let source_col = match_result.start_point.column in
+  let tmpl_col = template_base_column template in
+  let replacement =
+    adjust_indentation ~source_column:source_col ~template_base_column:tmpl_col
+      instantiated
+  in
+  [
+    {
+      start_byte = match_result.node.start_byte;
+      end_byte = match_result.node.end_byte;
+      replacement;
+    };
+  ]
+
+(** Compute edits for partial-mode transform. Uses correspondences to map
+    pattern children to source children, then applies alignment-based edits to
+    individual children. *)
+and compute_edits_partial ~pattern ~(match_result : match_result) ~source ~inner_patterns =
+  match pattern.replace_tree with
+  | None -> compute_edits_strict ~pattern ~match_result ~source ~inner_patterns
+  | Some replace_tree ->
+      let match_content = Tree.unwrap_root pattern.tree.root in
+      let replace_content = Tree.unwrap_root replace_tree.root in
+      let match_children = Tree.named_children match_content in
+      let replace_children = Tree.named_children replace_content in
+      let alignment =
+        Alignment.align_children ~match_source:pattern.source
+          ~replace_source:pattern.replace_source match_children replace_children
+      in
+      let source_children = Tree.named_children match_result.node in
+      let source_arr = Array.of_list source_children in
+      let replace_arr = Array.of_list replace_children in
+      Alignment.apply_with_correspondences ~pattern ~match_result ~source
+        ~match_children_list:match_children alignment source_arr replace_arr
+
 (** Compute edits for field-mode transform. Groups children by field name and
     applies alignment within each field group. Pattern child i within a group
     maps directly to source child i (exact matching). Handles field additions
     (fields only in replace) and removals (fields only in match) by computing
     span-based edits between anchor fields. *)
-let compute_edits_field ~pattern ~(match_result : match_result) ~source =
-  match pattern.replace_tree with
-  | None -> compute_edits_strict ~pattern ~match_result
+and compute_edits_field ~pattern ~(match_result : match_result) ~source ~inner_patterns =
+  (* If the pattern contains expansion slots, fall back to strict replacement so
+     that apply_expansion_slots is invoked. Field-mode field-by-field alignment
+     cannot resolve expansion placeholders, so strict (whole-node) replacement is
+     used instead. *)
+  if pattern.expansion_slots <> [] then
+    compute_edits_strict ~pattern ~match_result ~source ~inner_patterns
+  else match pattern.replace_tree with
+  | None -> compute_edits_strict ~pattern ~match_result ~source ~inner_patterns
   | Some replace_tree ->
       let match_content = Tree.unwrap_root pattern.tree.root in
       let replace_content = Tree.unwrap_root replace_tree.root in
@@ -911,50 +1080,11 @@ let compute_edits_field ~pattern ~(match_result : match_result) ~source =
       List.rev !edits
 
 (** Compute edits for a single match, dispatching by match mode *)
-let compute_edits ~pattern ~(match_result : match_result) ~source =
+let compute_edits ~pattern ~(match_result : match_result) ~source ~inner_patterns =
   match pattern.match_mode with
-  | Strict -> compute_edits_strict ~pattern ~match_result
-  | Partial -> compute_edits_partial ~pattern ~match_result ~source
-  | Field -> compute_edits_field ~pattern ~match_result ~source
-
-(** Filter overlapping edits: keep first in document order (by start_byte).
-    Assumes edits are sorted by start_byte ascending. *)
-let filter_overlapping edits =
-  let rec go acc last_end = function
-    | [] -> List.rev acc
-    | edit :: rest ->
-        if edit.start_byte < last_end then
-          (* Overlaps with previous accepted edit - skip *)
-          go acc last_end rest
-        else go (edit :: acc) edit.end_byte rest
-  in
-  match edits with
-  | [] -> []
-  | first :: rest -> go [ first ] first.end_byte rest
-
-(** Apply edits to source text. Sorts edits by start_byte descending and applies
-    bottom-to-top to avoid offset invalidation. Filters overlapping edits first.
-*)
-let apply_edits source edits =
-  (* Sort by start_byte ascending for overlap filtering *)
-  let sorted_asc =
-    List.sort
-      (fun a b ->
-        let c = compare a.start_byte b.start_byte in
-        if c <> 0 then c else compare b.end_byte a.end_byte)
-      edits
-  in
-  let non_overlapping = filter_overlapping sorted_asc in
-  (* Apply in reverse order (bottom-to-top) *)
-  let sorted_desc = List.rev non_overlapping in
-  List.fold_left
-    (fun s edit ->
-      let before = String.sub s 0 edit.start_byte in
-      let after =
-        String.sub s edit.end_byte (String.length s - edit.end_byte)
-      in
-      before ^ edit.replacement ^ after)
-    source sorted_desc
+  | Strict -> compute_edits_strict ~pattern ~match_result ~source ~inner_patterns
+  | Partial -> compute_edits_partial ~pattern ~match_result ~source ~inner_patterns
+  | Field -> compute_edits_field ~pattern ~match_result ~source ~inner_patterns
 
 (** Transform source text using a semantic patch pattern. Returns a
     transform_result with all edits and the transformed source. *)
@@ -976,11 +1106,40 @@ let transform ~ctx ~language ~pattern_text ~source_text =
     in
     let edits =
       List.concat_map
-        (fun m -> compute_edits ~pattern ~match_result:m ~source)
+        (fun m -> compute_edits ~pattern ~match_result:m ~source ~inner_patterns:[])
         matches
     in
     let transformed = apply_edits source_text edits in
     { edits; original_source = source_text; transformed_source = transformed }
+
+(** Transform source text using a multi-section semantic patch. The first
+    section is the outer match/replace pattern. Subsequent sections with
+    [on_var] matching an expansion slot are used as per-element transforms. *)
+let transform_nested ~ctx ~language ~pattern_text ~source_text =
+  let nested = Match_parse.parse_nested_pattern ~ctx ~language pattern_text in
+  match nested.patterns with
+  | [] ->
+      { edits = []; original_source = source_text; transformed_source = source_text }
+  | outer_pattern :: inner_patterns ->
+      if not outer_pattern.is_transform then
+        { edits = []; original_source = source_text; transformed_source = source_text }
+      else
+        let source_tree = Tree.parse ~ctx ~language source_text in
+        let source = source_tree.source in
+        let matches =
+          Match_search.find_matches_in_subtree ~pattern:outer_pattern
+            ~inherited_bindings:Match_engine.empty_bindings ~source
+            ~root_node:source_tree.root
+        in
+        let edits =
+          List.concat_map
+            (fun m ->
+              compute_edits ~pattern:outer_pattern ~match_result:m ~source
+                ~inner_patterns)
+            matches
+        in
+        let transformed = apply_edits source_text edits in
+        { edits; original_source = source_text; transformed_source = transformed }
 
 (** Transform a file using a semantic patch pattern. Returns a transform_result.
 *)
