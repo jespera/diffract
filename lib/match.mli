@@ -204,6 +204,18 @@ val transform :
     patch to the source. Patterns with [-]/[+] prefixed lines produce edits;
     patterns without them return the source unchanged. *)
 
+val transform_nested :
+  ctx:Context.t ->
+  language:string ->
+  pattern_text:string ->
+  source_text:string ->
+  transform_result
+(** [transform_nested ~ctx ~language ~pattern_text ~source_text] applies a
+    multi-section semantic patch. The first section is the outer match/replace
+    pattern; subsequent sections whose [on_var] matches an expansion slot's var
+    are applied per-element as transform expansions. Single-section patterns
+    behave identically to [transform]. *)
+
 val transform_file :
   ctx:Context.t ->
   language:string ->

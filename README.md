@@ -7,7 +7,8 @@ An OCaml library and CLI tool for parsing source files using [tree-sitter](https
 - Parse source files to S-expressions using tree-sitter grammars
 - Pattern matching with concrete syntax and metavariables
 - Semantic patch transforms (find-and-replace at the AST level)
-- Support for TypeScript, Kotlin, and other languages (extensible)
+- Expansion transforms: join or restructure each element of a matched sequence
+- Support for TypeScript, Kotlin, PHP, Scala, and other languages (extensible)
 
 ## Building
 
@@ -121,8 +122,67 @@ Lines prefixed with `- ` are matched and removed; lines with `+ ` are inserted.
 Unprefixed (or space-prefixed) lines are context that appears in both match and replace.
 Metavariables carry values from the match side to the replace side.
 
+### Expansion transforms
+
+Use a separator character as a line prefix (instead of `+ `) to expand each
+element of a sequence metavar and join the results. Any punctuation character
+that isn't a reserved spatch marker or identifier character works; `~` stands
+for newline, every other character is used literally as the join string:
+
+**patch.txt** — move one export, comma-join the rest:
+```
+@@
+match: strict
+metavar $BEFORE: sequence
+metavar $AFTER: sequence
+@@
+- import { $BEFORE Stack $AFTER } from "@mui/system";
++ import {
+,   $BEFORE $AFTER
++ } from "@mui/system";
++ import { Stack } from "@mui/not.system";
+```
+
+For per-element transforms (e.g. converting a match expression to a method
+chain), use a two-section pattern and `Match.transform_nested`:
+
+```
+@@
+match: strict
+metavar $TAG: single
+metavar $CASES: sequence
+@@
+- matchStringExhaustive($TAG, {
+-   $CASES
+- });
++ match($TAG)
+~   $CASES
++   .exhaustive();
+@@
+match: field
+on $CASES
+metavar $KEY: single
+metavar $VAL: single
+@@
+- $KEY: $VAL
++ .with("$KEY", $VAL)
+```
+
+Applied to:
+```typescript
+matchStringExhaustive(tag, { A: () => 1, B: () => 2 });
+```
+
+Produces:
+```typescript
+match(tag)
+.with("A", () => 1)
+.with("B", () => 2)
+.exhaustive();
+```
+
 See [Transform documentation](docs/patterns.md#transforms-semantic-patches) for
-partial-mode and field-mode transforms.
+partial-mode, field-mode, and expansion transforms.
 
 ### Directory Scanning
 

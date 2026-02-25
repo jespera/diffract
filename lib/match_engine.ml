@@ -415,3 +415,18 @@ let rematch_partial_correspondences ~pattern ~pattern_source ~source
     content. *)
 let get_pattern_content pattern : Tree.pat Tree.t =
   Tree.unwrap_root pattern.tree.root
+
+(** Try to match inner pattern children directly against source element children
+    in strict (ordered) mode, bypassing the top-level node type check. This is
+    used as a fallback when the pattern parses to a different AST node type than
+    the source element (e.g., 'key: value' parses as labeled_statement but
+    source nodes are pair). Returns None if the pattern has no children or if
+    children don't match. *)
+let try_match_children_directly ~pattern ~source (source_node : Tree.src Tree.t) =
+  let pattern_node = get_pattern_content pattern in
+  let pattern_children = Tree.named_children pattern_node in
+  if pattern_children = [] then None
+  else
+    let source_children = Tree.named_children source_node in
+    match_children_exact ~pattern ~pattern_source:pattern.source ~source
+      ~substitutions:pattern.substitutions pattern_children source_children
