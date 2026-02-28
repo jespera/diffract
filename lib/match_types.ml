@@ -25,6 +25,17 @@ type transform_result = {
 }
 (** Result of applying transforms *)
 
+type expansion_slot = {
+  exp_placeholder : string;
+      (** Unique placeholder inserted in replace_source, e.g. "__expand_0__" *)
+  exp_separator : string;
+      (** Separator string used to join expanded elements, e.g. "\n" or "," *)
+  exp_vars : string list;
+      (** Sequence metavar names whose elements are expanded on this line *)
+}
+(** An expansion slot: a replacement line whose prefix encodes a join separator
+*)
+
 type pattern = {
   metavars : string list;  (** Original metavar names (e.g., ["$msg"; "$fn"]) *)
   sequence_metavars : string list;
@@ -44,6 +55,9 @@ type pattern = {
       (** Parsed replacement tree, if is_transform *)
   replace_source : string;
       (** Transformed replacement source (with placeholders) *)
+  expansion_slots : expansion_slot list;
+      (** Expansion lines (separator-prefix lines) in the replacement template
+      *)
 }
 (** A parsed pattern with metavariable information *)
 

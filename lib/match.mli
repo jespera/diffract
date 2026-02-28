@@ -4,7 +4,13 @@ include module type of Match_types
 
 (** {1 Pattern parsing} *)
 
-val parse_pattern : ctx:Context.t -> language:string -> string -> pattern
+val parse_pattern :
+  ctx:Context.t ->
+  language:string ->
+  ?inherited_metavars:string list ->
+  ?inherited_sequences:string list ->
+  string ->
+  pattern
 (** [parse_pattern ~ctx ~language pattern_text] parses a pattern file.
     Pattern format:
     {v
@@ -18,6 +24,14 @@ val parse_pattern : ctx:Context.t -> language:string -> string -> pattern
     Metavars declared between @@ markers are replaced with valid identifiers
     before parsing, allowing patterns to work across all languages.
     Raises [Failure] if any metavar in the pattern body is not declared.
+
+    {2 Global Scope and Unification}
+
+    Metavariables share a global scope across all sections of a pattern.
+    Shadowing is not permitted; declaring a metavariable that was already
+    defined in a previous section is an error. Every occurrence of a
+    metavariable in a match pattern must bind to structurally identical nodes
+    (Unification).
 
     {2 Sequence metavars}
 
@@ -203,6 +217,18 @@ val transform :
 (** [transform ~ctx ~language ~pattern_text ~source_text] applies a semantic
     patch to the source. Patterns with [-]/[+] prefixed lines produce edits;
     patterns without them return the source unchanged. *)
+
+val transform_nested :
+  ctx:Context.t ->
+  language:string ->
+  pattern_text:string ->
+  source_text:string ->
+  transform_result
+(** [transform_nested ~ctx ~language ~pattern_text ~source_text] applies a
+    multi-section semantic patch. The first section is the outer match/replace
+    pattern; subsequent sections whose [on_var] matches an expansion slot's var
+    are applied per-element as transform expansions. Single-section patterns
+    behave identically to [transform]. *)
 
 val transform_file :
   ctx:Context.t ->

@@ -8,6 +8,16 @@ let empty_bindings =
     correspondences = [];
   }
 
+(** Check if two lists of source nodes are structurally identical *)
+let nodes_equal source (l1 : Tree.src Tree.t list) (l2 : Tree.src Tree.t list) =
+  let rec check = function
+    | [], [] -> true
+    | n1 :: r1, n2 :: r2 ->
+        if Tree.equal source n1 source n2 then check (r1, r2) else false
+    | _ -> false
+  in
+  check (l1, l2)
+
 (** Merge text bindings, checking that same var doesn't bind to different values
 *)
 let check_and_merge_text_bindings existing new_bindings =
@@ -17,29 +27,51 @@ let check_and_merge_text_bindings existing new_bindings =
         match List.assoc_opt var acc with
         | Some existing_value when existing_value <> value ->
             None (* Conflict *)
-        | _ -> merge ((var, value) :: acc) rest)
+        | Some _ -> merge acc rest (* Already present and same *)
+        | None -> merge ((var, value) :: acc) rest)
   in
   merge existing new_bindings
 
-(** Merge match_bindings, checking text binding consistency *)
-let check_and_merge_bindings existing new_bindings =
+(** Merge match_bindings, checking text and sequence binding consistency *)
+let check_and_merge_bindings ~source existing new_bindings =
   match
     check_and_merge_text_bindings existing.text_bindings
       new_bindings.text_bindings
   with
   | None -> None
-  | Some merged_text ->
-      (* Node bindings don't need consistency check - just accumulate *)
-      Some
-        {
-          text_bindings = merged_text;
-          node_bindings = existing.node_bindings @ new_bindings.node_bindings;
-          sequence_node_bindings =
-            existing.sequence_node_bindings
-            @ new_bindings.sequence_node_bindings;
-          correspondences =
-            existing.correspondences @ new_bindings.correspondences;
-        }
+  | Some merged_text -> (
+      (* Merge node bindings (single) *)
+      let merged_nodes =
+        List.fold_left
+          (fun acc (var, node) ->
+            if List.mem_assoc var acc then acc else (var, node) :: acc)
+          existing.node_bindings new_bindings.node_bindings
+      in
+      (* Check and merge sequence node bindings *)
+      let rec merge_sequences acc = function
+        | [] -> Some acc
+        | (var, nodes) :: rest -> (
+            match List.assoc_opt var acc with
+            | Some existing_nodes
+              when not (nodes_equal source existing_nodes nodes) ->
+                None (* Conflict in sequence binding *)
+            | Some _ -> merge_sequences acc rest (* Identical, skip *)
+            | None -> merge_sequences ((var, nodes) :: acc) rest)
+      in
+      match
+        merge_sequences existing.sequence_node_bindings
+          new_bindings.sequence_node_bindings
+      with
+      | None -> None
+      | Some merged_sequences ->
+          Some
+            {
+              text_bindings = merged_text;
+              node_bindings = merged_nodes;
+              sequence_node_bindings = merged_sequences;
+              correspondences =
+                existing.correspondences @ new_bindings.correspondences;
+            })
 
 (** Check if a pattern node's text is a placeholder, return the original metavar
     name if so. Also handles wrapper nodes (like expression_statement) that
@@ -112,11 +144,11 @@ let precompute_cumulative_texts source (arr : Tree.src Tree.t array) start len =
   if len = 0 then [| "" |]
   else
     let result = Array.make (len + 1) "" in
-    let buf = Buffer.create 256 in
-    for i = 0 to len - 1 do
-      if i > 0 then Buffer.add_char buf ' ';
-      Buffer.add_string buf (Tree.text source arr.(start + i));
-      result.(i + 1) <- Buffer.contents buf
+    for i = 1 to len do
+      let first = arr.(start) in
+      let last = arr.(start + i - 1) in
+      result.(i) <-
+        String.sub source first.start_byte (last.end_byte - first.start_byte)
     done;
     result
 
@@ -124,19 +156,22 @@ let precompute_cumulative_texts source (arr : Tree.src Tree.t array) start len =
     match succeeds, None otherwise. Bindings include both text (for
     display/consistency) and nodes (for 'on $VAR'). *)
 let rec match_node ~pattern ~pattern_source ~source ~substitutions
-    (pattern_node : Tree.pat Tree.t) (source_node : Tree.src Tree.t) =
+    ?(bindings = empty_bindings) (pattern_node : Tree.pat Tree.t)
+    (source_node : Tree.src Tree.t) =
   (* Check if pattern node is a metavar placeholder *)
   match is_placeholder substitutions pattern_source pattern_node with
   | Some var_name ->
       (* This is a metavar - bind it to the source node's text and node *)
       let source_text = Tree.text source source_node in
-      Some
+      let new_bindings =
         {
           text_bindings = [ (var_name, source_text) ];
           node_bindings = [ (var_name, source_node) ];
           sequence_node_bindings = [];
           correspondences = [];
         }
+      in
+      check_and_merge_bindings ~source bindings new_bindings
   | None ->
       (* Not a metavar - must match structurally *)
       let pattern_type = Tree.node_type pattern_node in
@@ -152,18 +187,18 @@ let rec match_node ~pattern ~pattern_source ~source ~substitutions
           else
             let pattern_text = Tree.text pattern_source pattern_node in
             let source_text = Tree.text source source_node in
-            if pattern_text = source_text then Some empty_bindings else None
+            if pattern_text = source_text then Some bindings else None
         else if pattern_children = [] then
           (* Pattern is leaf but source has children - no match *)
           None
         else
           (* Both have children - match them *)
           match_children ~pattern ~pattern_source ~source ~substitutions
-            pattern_node source_node pattern_children source_children
+            pattern_node source_node pattern_children source_children bindings
 
 (** Match lists of children using arrays for O(n) sequence matching. Sequence
-    metavars (marked with : sequence in preamble) can match 0 or more source
-    children. Match mode determines the matching strategy:
+    metavars (marked with : sequence in preamble) can match 0 or more sibling
+    nodes:
     - Strict: exact positional matching, no extra children allowed
     - Field: match by field name, extras in other fields ignored, ordered within
       fields
@@ -171,24 +206,24 @@ let rec match_node ~pattern ~pattern_source ~source ~substitutions
 and match_children ~pattern ~pattern_source ~source ~substitutions
     (pattern_node : Tree.pat Tree.t) (source_node : Tree.src Tree.t)
     (pattern_children : Tree.pat Tree.t list)
-    (source_children : Tree.src Tree.t list) =
+    (source_children : Tree.src Tree.t list) bindings =
   match pattern.match_mode with
   | Field ->
       match_children_field ~pattern ~pattern_source ~source ~substitutions
-        pattern_node source_node
+        pattern_node source_node bindings
   | Partial ->
       match_children_partial ~pattern ~pattern_source ~source ~substitutions
-        pattern_children source_children
+        pattern_children source_children bindings
   | Strict ->
       match_children_exact ~pattern ~pattern_source ~source ~substitutions
-        pattern_children source_children
+        pattern_children source_children bindings
 
 (** Exact (ordered) child matching with index-based optimization. When a
     sequence is followed by a concrete pattern element, we only try split points
     where that element's node type appears in source. *)
 and match_children_exact ~pattern ~pattern_source ~source ~substitutions
     (pattern_children : Tree.pat Tree.t list)
-    (source_children : Tree.src Tree.t list) =
+    (source_children : Tree.src Tree.t list) bindings =
   (* Convert to arrays for efficient indexing *)
   let pattern_arr = Array.of_list pattern_children in
   let source_arr = Array.of_list source_children in
@@ -265,7 +300,9 @@ and match_children_exact ~pattern ~pattern_source ~source ~substitutions
                       correspondences = seq_corrs;
                     }
                   in
-                  match check_and_merge_bindings bindings seq_binding with
+                  match
+                    check_and_merge_bindings ~source bindings seq_binding
+                  with
                   | None -> try_positions rest (* Binding conflict *)
                   | Some merged -> (
                       match match_from merged (pi + 1) (si + n) with
@@ -279,30 +316,25 @@ and match_children_exact ~pattern ~pattern_source ~source ~substitutions
       then None
       else
         match
-          match_node ~pattern ~pattern_source ~source ~substitutions p
+          match_node ~pattern ~pattern_source ~source ~substitutions ~bindings p
             source_arr.(si)
         with
         | None -> None
-        | Some new_bindings -> (
+        | Some merged ->
             let corr = { pattern_index = pi; source_index = si } in
-            let new_bindings =
-              {
-                new_bindings with
-                correspondences = corr :: new_bindings.correspondences;
-              }
+            let merged =
+              { merged with correspondences = corr :: merged.correspondences }
             in
-            match check_and_merge_bindings bindings new_bindings with
-            | None -> None
-            | Some merged -> match_from merged (pi + 1) (si + 1))
+            match_from merged (pi + 1) (si + 1)
   in
-  match_from empty_bindings 0 0
+  match_from bindings 0 0
 
 (** Partial (unordered subset) child matching. Each pattern child must find a
     matching source child (any position, consumed once matched). Extra source
     children are ignored. Order doesn't matter. *)
 and match_children_partial ~pattern ~pattern_source ~source ~substitutions
     (pattern_children : Tree.pat Tree.t list)
-    (source_children : Tree.src Tree.t list) =
+    (source_children : Tree.src Tree.t list) bindings =
   let source_arr = Array.of_list source_children in
   let source_len = Array.length source_arr in
   (* Track which source children have been consumed *)
@@ -324,39 +356,40 @@ and match_children_partial ~pattern ~pattern_source ~source ~substitutions
             else if used.(si) then try_source (si + 1)
             else
               match
-                match_node ~pattern ~pattern_source ~source ~substitutions p
-                  source_arr.(si)
+                match_node ~pattern ~pattern_source ~source ~substitutions
+                  ~bindings p source_arr.(si)
               with
               | None -> try_source (si + 1)
-              | Some new_bindings -> (
+              | Some merged -> (
                   let corr = { pattern_index = pi; source_index = si } in
-                  (* Only keep our top-level correspondence; discard inner ones from
-                 recursive matching — they use a different index space and would
-                 corrupt the pattern_index → source_index mapping used by
+                  (* Keep accumulated outer correspondences plus our new top-level
+                 one; discard inner ones from recursive matching — they use a
+                 different index space and would corrupt the
+                 pattern_index → source_index mapping used by
                  apply_alignment_with_correspondences in transforms. *)
-                  let new_bindings =
-                    { new_bindings with correspondences = [ corr ] }
+                  let merged =
+                    {
+                      merged with
+                      correspondences = bindings.correspondences @ [ corr ];
+                    }
                   in
-                  match check_and_merge_bindings bindings new_bindings with
-                  | None -> try_source (si + 1) (* Binding conflict, try next *)
-                  | Some merged -> (
-                      used.(si) <- true;
-                      match match_all merged (pi + 1) rest with
-                      | Some result -> Some result
-                      | None ->
-                          used.(si) <- false;
-                          try_source (si + 1)))
+                  used.(si) <- true;
+                  match match_all merged (pi + 1) rest with
+                  | Some result -> Some result
+                  | None ->
+                      used.(si) <- false;
+                      try_source (si + 1))
           in
           try_source 0
   in
-  match_all empty_bindings 0 pattern_children
+  match_all bindings 0 pattern_children
 
 (** Field-based child matching. Matches children by tree-sitter field name
     instead of position. Children with the same field name are matched in order
     within that field group. Extra source fields (not in pattern) are ignored.
     Children without field names are matched positionally within their group. *)
 and match_children_field ~pattern ~pattern_source ~source ~substitutions
-    (pattern_node : Tree.pat Tree.t) (source_node : Tree.src Tree.t) =
+    (pattern_node : Tree.pat Tree.t) (source_node : Tree.src Tree.t) bindings =
   let pattern_children = Tree.named_children_with_fields pattern_node in
   let source_children = Tree.named_children_with_fields source_node in
 
@@ -387,18 +420,45 @@ and match_children_field ~pattern ~pattern_source ~source ~substitutions
         (* Use exact matching within field group - order matters within a field *)
         match
           match_children_exact ~pattern ~pattern_source ~source ~substitutions
-            pat_nodes src_nodes
+            pat_nodes src_nodes bindings
         with
         | None -> None
-        | Some new_bindings -> (
-            match check_and_merge_bindings bindings new_bindings with
-            | None -> None
-            | Some merged -> match_groups merged rest))
+        | Some merged -> match_groups merged rest)
   in
-  match_groups empty_bindings pattern_grouped
+  match_groups bindings pattern_grouped
+
+(** Re-run partial matching on [pattern_children] against [source_children] and
+    return the resulting correspondences. Used by the transform step to recover
+    the pattern→source child mapping inside container nodes that were initially
+    aligned as same-type EReplace pairs. *)
+let rematch_partial_correspondences ~pattern ~pattern_source ~source
+    ~substitutions pattern_children source_children =
+  match
+    match_children_partial ~pattern ~pattern_source ~source ~substitutions
+      pattern_children source_children empty_bindings
+  with
+  | None -> None
+  | Some bindings -> Some bindings.correspondences
 
 (** Get the innermost meaningful node from a pattern. Unwraps
     program/module/expression_statement wrappers to get to the actual pattern
     content. *)
 let get_pattern_content pattern : Tree.pat Tree.t =
   Tree.unwrap_root pattern.tree.root
+
+(** Try to match inner pattern children directly against source element children
+    in strict (ordered) mode, bypassing the top-level node type check. This is
+    used as a fallback when the pattern parses to a different AST node type than
+    the source element (e.g., 'key: value' parses as labeled_statement but
+    source nodes are pair). Returns None if the pattern has no children or if
+    children don't match. *)
+let try_match_children_directly ~pattern ~source (source_node : Tree.src Tree.t)
+    =
+  let pattern_node = get_pattern_content pattern in
+  let pattern_children = Tree.named_children pattern_node in
+  if pattern_children = [] then None
+  else
+    let source_children = Tree.named_children source_node in
+    match_children_exact ~pattern ~pattern_source:pattern.source ~source
+      ~substitutions:pattern.substitutions pattern_children source_children
+      empty_bindings
