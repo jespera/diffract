@@ -98,3 +98,79 @@ Matching modes (required - must specify one):
 - `match: strict` - Exact positional matching (no extra children allowed, ordered). Use for function calls, arrays.
 - `match: partial` - Subset matching (ignores extra children, unordered). Use for object literals, JSX attributes.
 - `match: field` - Field-based matching (matches children by tree-sitter field name instead of position, ignores extra source fields not in pattern, preserves order within each field). Use for definitions with decorators/attributes.
+
+### Expansion lines
+
+A replacement line may use a separator character as its prefix instead of `+`,
+followed by a space. The prefix character IS the join string between expanded
+elements, except `~` which stands for newline. The line must reference at least
+one `sequence` metavar.
+
+Any punctuation character that is not a reserved spatch role marker (`-`, `+`,
+space, tab) and not an identifier character (`$`, letters, digits, `_`) is valid.
+Common conventions:
+
+```
+~   $VAR      — expand $VAR, joining with newline (~ stands for \n)
+,   $VAR      — expand $VAR, joining with ","
+;   $VAR      — expand $VAR, joining with ";"
+|   $VAR      — expand $VAR, joining with "|"
+```
+
+Other characters like `!`, `&`, `.` also work and are used literally as the separator.
+
+The sequence variable(s) must be declared as `metavar $VAR: sequence` in the preamble.
+
+**Verbatim expansion** (no following section): elements are joined with the specified separator and substituted directly. Use `Match.transform` as normal.
+
+**Transform expansion** (with following `@@` section): if a subsequent section declares `on $VAR` matching an expansion line's variable, that section's transform is applied to each element and the results are joined. Use `Match.transform_nested` to enable this.
+
+#### Example — comma-join (verbatim expansion)
+
+```
+@@
+match: strict
+metavar $BEFORE: sequence
+metavar $AFTER: sequence
+@@
+- import { $BEFORE Stack $AFTER } from "@mui/system";
++ import {
+,   $BEFORE $AFTER
++ } from "@mui/system";
++ import { Stack } from "@mui/not.system";
+```
+
+`$BEFORE` and `$AFTER` elements are gathered and comma-joined.
+
+#### Example — method chain (transform expansion, requires `transform_nested`)
+
+```
+@@
+match: strict
+metavar $TAG: single
+metavar $PROPS: sequence
+@@
+- matchStringExhaustive($TAG, {
+-   $PROPS
+- });
++ match($TAG)
+~   $PROPS
++   .exhaustive();
+@@
+match: field
+on $PROPS
+metavar $KEY: single
+metavar $VAL: single
+@@
+- $KEY: $VAL
++ .with("$KEY", $VAL)
+```
+
+The inner section's transform (`- $KEY: $VAL` / `+ .with("$KEY", $VAL)`) is applied to each element node in `$PROPS`; results are joined with newline.
+
+#### Constraints
+
+- Expansion prefix lines are valid only in the replacement side (like `+` lines).
+- Expansion vars must be declared as `sequence` metavars and must appear in the match side.
+- Inner sections used for transform expansion cannot themselves contain expansion lines.
+- `on $VAR` in an inner section targets an expansion slot when the var matches; this is distinct from context-nesting use of `on $VAR`.

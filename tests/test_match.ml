@@ -583,7 +583,7 @@ let test_partial_object_matching () =
 match: partial
 metavar $X: single
 @@
-{ someField: $X }|}
+ { someField: $X }|}
   in
   let source_text = {|({ someField: 1, other: 2 })|} in
   let results =
@@ -609,7 +609,7 @@ match: partial
 on $OBJ
 metavar $X: single
 @@
-{ someField: $X }|}
+ { someField: $X }|}
   in
   let source_text = {|foo({ someField: 1, other: 2 })|} in
   let results =
@@ -630,7 +630,7 @@ let test_nested_partial_objects () =
 match: partial
 metavar $X: single
 @@
-{ f1: { f2: $X } }|}
+ { f1: { f2: $X } }|}
   in
   let source_text = {|({ f1: { f2: 42, f3: "extra" }, other: true })|} in
   let results =
@@ -649,7 +649,7 @@ let test_exact_object_match () =
 match: strict
 metavar $X: single
 @@
-{ someField: $X }|}
+ { someField: $X }|}
   in
   let source_text = {|({ someField: 1, other: 2 })|} in
   let results =
@@ -907,7 +907,7 @@ match: strict
 metavar $PARAM: single
 metavar $BODY: single
 @@
-{ $PARAM -> $BODY }|}
+ { $PARAM -> $BODY }|}
   in
   let source_text =
     {|
@@ -2260,7 +2260,7 @@ let test_ellipsis_typescript_spread () =
 match: strict
 metavar $OBJ: single
 @@
-{ ...$OBJ }|} in
+ { ...$OBJ }|} in
   let source =
     {|
 const copy = { ...original };
@@ -3492,7 +3492,7 @@ match: partial
 metavar $K: single
 metavar $V: single
 @@
-{ $K: $V, y: 1 }|}
+ { $K: $V, y: 1 }|}
   in
   let source_text = {|const obj = { y: 1, x: 2 }|} in
   let results =
@@ -3536,6 +3536,107 @@ metavar $BODY: sequence
         (Match.find_matches ~ctx ~language:"typescript" ~pattern_text
            ~source_text:"const obj = { a: 1, b: 2 };"))
 
+(* Test: partial mode transform that restructures the surrounding expression
+   drops unmentioned properties from inner objects.
+
+   Use case: Refactoring `useHook({ select: fn, enabled: cond, extra: val })`
+   to `useAppMemo(useHook({ enabled: cond, extra: val }), fn)`.
+
+   Partial matching correctly identifies the call even when the object has extra
+   properties beyond `select` and `enabled`. But the transform replaces the
+   entire call expression, so properties not captured by a metavar are lost.
+
+   Simple same-level partial transforms (e.g., renaming a property) preserve
+   extras because the alignment operates on the matched node's direct children,
+   and unmatched source children are left untouched.
+
+   But when the transform *restructures* the expression (changing which node the
+   object lives in), the replacement template is instantiated from metavar
+   bindings alone — it has no way to splice in unmatched source children that
+   were inside a replaced subtree.
+
+   A "surgical partial" mode would need to:
+   1. Recognize that the inner object `{ enabled: $COND }` in the replacement
+      corresponds to the matched object `{ select: $FN, enabled: $COND, ... }`
+   2. Preserve the unmatched properties (extra: 42) in the replacement object
+   This likely requires tracking correspondences through nested structures. *)
+let test_partial_restructure_loses_extra_properties () =
+  let pattern_text =
+    {|@@
+match: partial
+metavar $FN: single
+metavar $COND: single
+@@
+- f({ select: $FN, enabled: $COND })
++ g(f({ enabled: $COND }), $FN)|}
+  in
+  (* Source has an extra property "extra: 42" not mentioned in the pattern *)
+  let source_text = {|f({ select: fn, enabled: true, extra: 42 })|} in
+  let result =
+    Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text
+  in
+  Alcotest.(check bool) "produces edits" true (result.edits <> []);
+  (* The restructuring works *)
+  Alcotest.(check bool)
+    "has wrapper call" true
+    (string_contains ~needle:"g(f(" result.transformed_source);
+  Alcotest.(check bool)
+    "select extracted as argument" true
+    (string_contains ~needle:", fn)" result.transformed_source);
+  Alcotest.(check bool)
+    "enabled preserved in inner call" true
+    (string_contains ~needle:"enabled: true" result.transformed_source);
+
+  (* BUG: extra: 42 is lost because the entire call expression is replaced
+     from the metavar-instantiated template, which has no knowledge of
+     unmatched source children inside replaced subtrees.
+
+     A "surgical partial" mode would preserve it:
+       g(f({ enabled: true, extra: 42 }), fn)
+
+     For now, we assert the current (broken) behavior so the test documents
+     the problem and will break when the fix lands. *)
+  Alcotest.(check bool)
+    "KNOWN ISSUE: extra property is lost" false
+    (string_contains ~needle:"extra: 42" result.transformed_source)
+
+(* Test: partial mode - surgically remove one property from an object even when
+   the pattern has surrounding context (const x = {...}).
+
+   The pattern marks only `b: $X` for removal. The surrounding `const x = {}`
+   is context. The source has extra properties `a` and `c` that are not
+   mentioned in the pattern at all.
+
+   Without a fix the alignment operates at the variable_declarator level:
+   both match and replace contain a variable_declarator (same type, different
+   text), so align_children makes them an EReplace pair and the whole
+   declarator gets swapped out for `x = {}`, losing every property. With the
+   fix the transform descends recursively into same-type container nodes until
+   it reaches the object level, where only the `b` property is removed. *)
+let test_transform_partial_remove_nested () =
+  let pattern_text =
+    {|@@
+match: partial
+metavar $X: single
+@@
+const x = {
+-   b: $X,
+}|}
+  in
+  let source_text = {|const x = { a: 1, b: 2, c: 3 }|} in
+  let result =
+    Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text
+  in
+  Alcotest.(check bool)
+    "preserves a: 1" true
+    (string_contains ~needle:"a: 1" result.transformed_source);
+  Alcotest.(check bool)
+    "removes b: 2" false
+    (string_contains ~needle:"b: 2" result.transformed_source);
+  Alcotest.(check bool)
+    "preserves c: 3" true
+    (string_contains ~needle:"c: 3" result.transformed_source)
+
 let transform_tests =
   [
     Alcotest.test_case "simple rename" `Quick test_transform_simple_rename;
@@ -3577,4 +3678,774 @@ let transform_tests =
       test_transform_partial_multiline_indent;
     Alcotest.test_case "partial rejects sequence" `Quick
       test_partial_rejects_sequence_metavar;
+    Alcotest.test_case "partial restructure loses extras" `Quick
+      test_partial_restructure_loses_extra_properties;
+    Alcotest.test_case "partial remove nested" `Quick
+      test_transform_partial_remove_nested;
+  ]
+
+(* ===== Expansion tests ===== *)
+
+(* Test: verbatim newline expansion via ~ prefix *)
+let test_expansion_verbatim_newline () =
+  (* ~ prefix joins sequence elements with newline instead of space *)
+  let pattern_text =
+    {|@@
+match: strict
+metavar $NAME: single
+metavar $STMTS: sequence
+@@
+- function $NAME() {
+-   $STMTS
+- }
++ const $NAME = [
+~   $STMTS
++ ];|}
+  in
+  let source_text = {|function setup() {
+  a();
+  b();
+  c();
+}|} in
+  let result =
+    Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text
+  in
+  Alcotest.(check int) "one edit" 1 (List.length result.edits);
+  (* Each statement should appear on its own line *)
+  Alcotest.(check bool)
+    "contains a();" true
+    (string_contains ~needle:"a();" result.transformed_source);
+  Alcotest.(check bool)
+    "contains b();" true
+    (string_contains ~needle:"b();" result.transformed_source);
+  (* Elements joined with newline, not space *)
+  Alcotest.(check bool)
+    "a and b are on separate lines" true
+    (string_contains ~needle:"a();\nb();" result.transformed_source
+    || string_contains ~needle:"a();\n" result.transformed_source)
+
+(* Test: verbatim comma expansion via , prefix *)
+let test_expansion_verbatim_comma () =
+  (* , prefix joins sequence elements with comma *)
+  let pattern_text =
+    {|@@
+match: strict
+metavar $NAME: single
+metavar $STMTS: sequence
+@@
+- function $NAME() {
+-   $STMTS
+- }
++ result($NAME, [
+,   $STMTS
++ ]);|}
+  in
+  let source_text = {|function greet() {
+  hello();
+  world();
+}|} in
+  let result =
+    Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text
+  in
+  Alcotest.(check int) "one edit" 1 (List.length result.edits);
+  Alcotest.(check bool)
+    "contains greet" true
+    (string_contains ~needle:"greet" result.transformed_source);
+  (* Comma-joined: hello(); and world(); should be comma-separated *)
+  Alcotest.(check bool)
+    "hello and world joined with comma" true
+    (string_contains ~needle:"hello();" result.transformed_source
+    && string_contains ~needle:"world();" result.transformed_source)
+
+(* Test: empty sequence expansion produces empty string *)
+let test_expansion_empty_sequence () =
+  let pattern_text =
+    {|@@
+match: strict
+metavar $ITEMS: sequence
+@@
+- wrap($ITEMS)
++ [
+~   $ITEMS
++ ]|}
+  in
+  let source_text = {|wrap()|} in
+  let result =
+    Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text
+  in
+  Alcotest.(check int) "one edit" 1 (List.length result.edits);
+  (* Expansion of empty sequence produces empty string — no extra newlines *)
+  Alcotest.(check bool)
+    "no wrap in output" false
+    (string_contains ~needle:"wrap(" result.transformed_source)
+
+(* Test: multiple sequence vars on one expansion line *)
+let test_expansion_multiple_vars_on_line () =
+  (* Both $BEFORE and $AFTER elements gathered in order, comma-joined *)
+  let pattern_text =
+    {|@@
+match: strict
+metavar $BEFORE: sequence
+metavar $AFTER: sequence
+@@
+- foo($BEFORE, sep, $AFTER)
++ bar(
+,   $BEFORE $AFTER
++ )|}
+  in
+  let source_text = {|foo(a, b, sep, c, d)|} in
+  let result =
+    Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text
+  in
+  Alcotest.(check int) "one edit" 1 (List.length result.edits);
+  Alcotest.(check bool)
+    "contains a" true
+    (string_contains ~needle:"a" result.transformed_source);
+  Alcotest.(check bool)
+    "contains c" true
+    (string_contains ~needle:"c" result.transformed_source);
+  Alcotest.(check bool)
+    "comma separator present" true
+    (string_contains ~needle:"," result.transformed_source)
+
+(* Test: expansion line not triggered when no sequence metavar is found in content *)
+let test_expansion_no_metavar_is_context () =
+  (* A line starting with ~ but containing no $UPPERCASE var is a context line *)
+  let pattern_text =
+    {|@@
+match: strict
+metavar $X: single
+@@
+- foo($X)
++ bar($X)|}
+  in
+  let source_text = {|foo(42)|} in
+  let result =
+    Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text
+  in
+  Alcotest.(check int) "one edit" 1 (List.length result.edits);
+  Alcotest.(check bool)
+    "renamed to bar" true
+    (string_contains ~needle:"bar(42)" result.transformed_source)
+
+(* Test: expansion var must be a sequence metavar — error on single metavar *)
+let test_expansion_single_metavar_rejected () =
+  let pattern_text =
+    {|@@
+match: strict
+metavar $X: single
+@@
+- foo($X)
++ bar(
+~   $X
++ )|}
+  in
+  Alcotest.check_raises "single metavar in expansion rejected"
+    (Failure
+       "Variable '$X' in expansion line must be declared as sequence metavar")
+    (fun () ->
+      ignore
+        (Match.transform ~ctx ~language:"typescript" ~pattern_text
+           ~source_text:"foo(1)"))
+
+(* Test: transform expansion — inner section applied per element via transform_nested *)
+let test_expansion_transform_nested () =
+  (* Outer: match function with sequence body; replace with method chain.
+     Inner: per-element transform applied to each body statement. *)
+  let pattern_text =
+    {|@@
+match: strict
+metavar $NAME: single
+metavar $STMTS: sequence
+@@
+- function $NAME() {
+-   $STMTS
+- }
++ const $NAME = chain()
+~   $STMTS
++   .build();
+@@
+match: strict
+on $STMTS
+metavar $FN: single
+metavar $ARGS: sequence
+@@
+- $FN($ARGS)
++ .step($FN, [$ARGS])|}
+  in
+  let source_text = {|function init() {
+  alpha(1);
+  beta(2, 3);
+}|} in
+  let result =
+    Match.transform_nested ~ctx ~language:"typescript" ~pattern_text
+      ~source_text
+  in
+  Alcotest.(check int) "one edit" 1 (List.length result.edits);
+  (* Inner transform: alpha(1) → .step(alpha, [1]), beta(2,3) → .step(beta, [2,3]) *)
+  Alcotest.(check bool)
+    "contains .step(alpha" true
+    (string_contains ~needle:".step(alpha" result.transformed_source);
+  Alcotest.(check bool)
+    "contains .step(beta" true
+    (string_contains ~needle:".step(beta" result.transformed_source);
+  Alcotest.(check bool)
+    "contains .build()" true
+    (string_contains ~needle:".build()" result.transformed_source);
+  Alcotest.(check bool)
+    "no more function keyword" false
+    (string_contains ~needle:"function" result.transformed_source)
+
+(* Test: transform_nested with single section behaves like transform *)
+let test_expansion_transform_nested_single_section () =
+  let pattern_text =
+    {|@@
+match: strict
+metavar $MSG: single
+@@
+- console.log($MSG)
++ logger.info($MSG)|}
+  in
+  let source_text = {|console.log("hi")|} in
+  let result =
+    Match.transform_nested ~ctx ~language:"typescript" ~pattern_text
+      ~source_text
+  in
+  Alcotest.(check int) "one edit" 1 (List.length result.edits);
+  Alcotest.(check bool)
+    "renamed to logger.info" true
+    (string_contains ~needle:{|logger.info("hi")|} result.transformed_source)
+
+(* Test: transform_nested inner section with no match passes element through unchanged *)
+let test_expansion_inner_no_match_passthrough () =
+  let pattern_text =
+    {|@@
+match: strict
+metavar $NAME: single
+metavar $STMTS: sequence
+@@
+- function $NAME() {
+-   $STMTS
+- }
++ const $NAME = run(
+~   $STMTS
++ );
+@@
+match: strict
+on $STMTS
+metavar $FN: single
+@@
+- only_this($FN)
++ .wrapped($FN)|}
+  in
+  let source_text =
+    {|function go() {
+  only_this(a);
+  something_else(b);
+}|}
+  in
+  let result =
+    Match.transform_nested ~ctx ~language:"typescript" ~pattern_text
+      ~source_text
+  in
+  Alcotest.(check int) "one edit" 1 (List.length result.edits);
+  (* only_this(a) gets transformed; something_else(b) passes through as-is *)
+  Alcotest.(check bool)
+    "only_this transformed" true
+    (string_contains ~needle:".wrapped(a)" result.transformed_source);
+  Alcotest.(check bool)
+    "something_else passed through" true
+    (string_contains ~needle:"something_else(b);" result.transformed_source)
+
+(* Test: configureApp with object of route handlers converted to a method chain.
+   configureApp({ home: homeFn, about: aboutFn }) →
+   app().route("home", homeFn).route("about", aboutFn).build()
+   Each key-value pair in the config object becomes a .route() call via the
+   inner field-mode section. *)
+let test_expansion_deeply_nested () =
+  let pattern_text =
+    {|@@
+match: strict
+metavar $ROUTES: sequence
+@@
+- configureApp({ $ROUTES });
++ app()
+~   $ROUTES
++   .build();
+@@
+match: field
+on $ROUTES
+metavar $K: single
+metavar $V: single
+@@
+- $K: $V
++ .route("$K", $V)|}
+  in
+  let source_text = {|configureApp({ home: homeFn, about: aboutFn });|} in
+  let result =
+    Match.transform_nested ~ctx ~language:"typescript" ~pattern_text
+      ~source_text
+  in
+  Printf.printf "transformed: [%s]\n" result.transformed_source;
+  Alcotest.(check int) "one edit" 1 (List.length result.edits);
+  Alcotest.(check bool)
+    "starts with app()" true
+    (string_contains ~needle:"app()" result.transformed_source);
+  Alcotest.(check bool)
+    "has .route home" true
+    (string_contains ~needle:{|.route("home", homeFn)|}
+       result.transformed_source);
+  Alcotest.(check bool)
+    "has .route about" true
+    (string_contains ~needle:{|.route("about", aboutFn)|}
+       result.transformed_source);
+  Alcotest.(check bool)
+    "ends with .build()" true
+    (string_contains ~needle:".build()" result.transformed_source)
+
+(* Test: outer match: field with verbatim expansion — expansion slots must be
+   resolved even when the outer pattern uses field mode. Without the fix,
+   __expand_0__ would appear literally in the output. *)
+let test_expansion_field_outer () =
+  let pattern_text =
+    {|@@
+match: field
+metavar $NAME: single
+metavar $STMTS: sequence
+@@
+- function $NAME() { $STMTS }
++ const $NAME = () => {
+~   $STMTS
++ };|}
+  in
+  let source_text = {|function greet() { hello(); bye(); }|} in
+  let result =
+    Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text
+  in
+  Alcotest.(check int) "one edit" 1 (List.length result.edits);
+  Alcotest.(check bool)
+    "no __expand__ placeholder in output" false
+    (string_contains ~needle:"__expand" result.transformed_source);
+  Alcotest.(check bool)
+    "converted to arrow function" true
+    (string_contains ~needle:"const greet" result.transformed_source);
+  Alcotest.(check bool)
+    "hello() preserved" true
+    (string_contains ~needle:"hello()" result.transformed_source);
+  Alcotest.(check bool)
+    "bye() preserved" true
+    (string_contains ~needle:"bye()" result.transformed_source)
+
+(* Test: inner match: partial in expansion — each element is an object; the
+   inner partial transform changes one property and preserves the rest. *)
+let test_expansion_inner_partial () =
+  let pattern_text =
+    {|@@
+match: strict
+metavar $ITEMS: sequence
+@@
+- setup([$ITEMS])
++ init([
+~   $ITEMS
++ ])
+@@
+match: partial
+on $ITEMS
+metavar $V: single
+@@
+- { x: $V }
++ { x: doubled($V) }|}
+  in
+  (* Each element is an object; inner partial match transforms 'x' while keeping 'extra' *)
+  let source_text = {|setup([{ x: 1, extra: 99 }, { x: 2, extra: 98 }])|} in
+  let result =
+    Match.transform_nested ~ctx ~language:"typescript" ~pattern_text
+      ~source_text
+  in
+  Alcotest.(check int) "one edit" 1 (List.length result.edits);
+  Alcotest.(check bool)
+    "has doubled(1)" true
+    (string_contains ~needle:"doubled(1)" result.transformed_source);
+  Alcotest.(check bool)
+    "has doubled(2)" true
+    (string_contains ~needle:"doubled(2)" result.transformed_source);
+  Alcotest.(check bool)
+    "extra property preserved in first element" true
+    (string_contains ~needle:"extra: 99" result.transformed_source);
+  Alcotest.(check bool)
+    "extra property preserved in second element" true
+    (string_contains ~needle:"extra: 98" result.transformed_source)
+
+(* ── Kotlin expansion tests ── *)
+
+(* Test 1: verbatim ~ expansion — listOf(a, b, c) → buildList { a; b; c }
+   Each argument becomes its own line inside the block.  No inner transform. *)
+let test_expansion_kotlin_verbatim () =
+  let pattern_text =
+    {|@@
+match: strict
+metavar $ITEMS: sequence
+@@
+- listOf($ITEMS)
++ buildList {
+~   $ITEMS
++ }|}
+  in
+  let source_text = {|listOf(alpha, beta, gamma)|} in
+  let result =
+    Match.transform ~ctx ~language:"kotlin" ~pattern_text ~source_text
+  in
+  Alcotest.(check int) "one edit" 1 (List.length result.edits);
+  Alcotest.(check bool)
+    "no __expand__ placeholder" false
+    (string_contains ~needle:"__expand" result.transformed_source);
+  Alcotest.(check bool)
+    "has buildList" true
+    (string_contains ~needle:"buildList" result.transformed_source);
+  Alcotest.(check bool)
+    "has alpha" true
+    (string_contains ~needle:"alpha" result.transformed_source);
+  Alcotest.(check bool)
+    "has beta" true
+    (string_contains ~needle:"beta" result.transformed_source);
+  Alcotest.(check bool)
+    "has gamma" true
+    (string_contains ~needle:"gamma" result.transformed_source)
+
+(* Test 2: transform ~ expansion — execute(step1, step2, step3) converted to a
+   pipeline builder by wrapping each argument with .addStep() per the inner section. *)
+let test_expansion_kotlin_transform () =
+  let pattern_text =
+    {|@@
+match: strict
+metavar $STEPS: sequence
+@@
+- execute($STEPS)
++ Pipeline()
+~   $STEPS
++   .run()
+@@
+match: strict
+on $STEPS
+metavar $STEP: single
+@@
+- $STEP
++ .addStep($STEP)|}
+  in
+  let source_text = {|execute(step1, step2, step3)|} in
+  let result =
+    Match.transform_nested ~ctx ~language:"kotlin" ~pattern_text ~source_text
+  in
+  Alcotest.(check int) "one edit" 1 (List.length result.edits);
+  Alcotest.(check bool)
+    "has Pipeline()" true
+    (string_contains ~needle:"Pipeline()" result.transformed_source);
+  Alcotest.(check bool)
+    "has .addStep(step1)" true
+    (string_contains ~needle:".addStep(step1)" result.transformed_source);
+  Alcotest.(check bool)
+    "has .addStep(step2)" true
+    (string_contains ~needle:".addStep(step2)" result.transformed_source);
+  Alcotest.(check bool)
+    "has .addStep(step3)" true
+    (string_contains ~needle:".addStep(step3)" result.transformed_source);
+  Alcotest.(check bool)
+    "has .run()" true
+    (string_contains ~needle:".run()" result.transformed_source)
+
+(* Test 3: verbatim , expansion of two sequence vars — remove a pivot literal
+   and comma-join the elements on both sides of it.
+   combine(a, b, SEP, c, d) → joined(\na,b,c,d\n) *)
+let test_expansion_kotlin_comma_join () =
+  let pattern_text =
+    {|@@
+match: strict
+metavar $BEFORE: sequence
+metavar $AFTER: sequence
+@@
+- combine($BEFORE, SEP, $AFTER)
++ joined(
+,   $BEFORE $AFTER
++ )|}
+  in
+  let source_text = {|combine(a, b, SEP, c, d)|} in
+  let result =
+    Match.transform ~ctx ~language:"kotlin" ~pattern_text ~source_text
+  in
+  Alcotest.(check int) "one edit" 1 (List.length result.edits);
+  Alcotest.(check bool)
+    "has joined(" true
+    (string_contains ~needle:"joined(" result.transformed_source);
+  Alcotest.(check bool)
+    "no SEP in output" false
+    (string_contains ~needle:"SEP" result.transformed_source);
+  Alcotest.(check bool)
+    "a and b comma-joined" true
+    (string_contains ~needle:"a,b" result.transformed_source);
+  Alcotest.(check bool)
+    "c and d comma-joined" true
+    (string_contains ~needle:"c,d" result.transformed_source)
+
+(* Test: two independent expansion slots, each with its own inner section *)
+let test_expansion_two_slots () =
+  (* Convert registerHandlers([...handlers], [...middlewares]) into a
+     fluent builder chain where each list gets its own method name. *)
+  let pattern_text =
+    {|@@
+match: strict
+metavar $HANDLERS: sequence
+metavar $MIDDLEWARES: sequence
+@@
+- registerHandlers([$HANDLERS], [$MIDDLEWARES])
++ setup()
+~   $HANDLERS
+~   $MIDDLEWARES
++   .run()
+@@
+match: strict
+on $HANDLERS
+metavar $H: single
+@@
+- $H
++ .addHandler($H)
+@@
+match: strict
+on $MIDDLEWARES
+metavar $M: single
+@@
+- $M
++ .addMiddleware($M)|}
+  in
+  let source_text = "registerHandlers([handler1, handler2], [mwA, mwB])" in
+  let result =
+    Match.transform_nested ~ctx ~language:"typescript" ~pattern_text
+      ~source_text
+  in
+  Alcotest.(check int) "one edit" 1 (List.length result.edits);
+  Alcotest.(check bool)
+    "handler1 transformed" true
+    (string_contains ~needle:".addHandler(handler1)" result.transformed_source);
+  Alcotest.(check bool)
+    "handler2 transformed" true
+    (string_contains ~needle:".addHandler(handler2)" result.transformed_source);
+  Alcotest.(check bool)
+    "mwA transformed" true
+    (string_contains ~needle:".addMiddleware(mwA)" result.transformed_source);
+  Alcotest.(check bool)
+    "mwB transformed" true
+    (string_contains ~needle:".addMiddleware(mwB)" result.transformed_source);
+  Alcotest.(check bool)
+    "contains .run()" true
+    (string_contains ~needle:".run()" result.transformed_source)
+
+let expansion_tests =
+  [
+    Alcotest.test_case "verbatim newline expansion" `Quick
+      test_expansion_verbatim_newline;
+    Alcotest.test_case "verbatim comma expansion" `Quick
+      test_expansion_verbatim_comma;
+    Alcotest.test_case "empty sequence expansion" `Quick
+      test_expansion_empty_sequence;
+    Alcotest.test_case "multiple vars on expansion line" `Quick
+      test_expansion_multiple_vars_on_line;
+    Alcotest.test_case "no metavar is context line" `Quick
+      test_expansion_no_metavar_is_context;
+    Alcotest.test_case "single metavar rejected" `Quick
+      test_expansion_single_metavar_rejected;
+    Alcotest.test_case "transform expansion nested" `Quick
+      test_expansion_transform_nested;
+    Alcotest.test_case "transform_nested single section" `Quick
+      test_expansion_transform_nested_single_section;
+    Alcotest.test_case "inner no-match passthrough" `Quick
+      test_expansion_inner_no_match_passthrough;
+    Alcotest.test_case "deeply nested source" `Quick
+      test_expansion_deeply_nested;
+    Alcotest.test_case "field outer with expansion" `Quick
+      test_expansion_field_outer;
+    Alcotest.test_case "inner partial mode" `Quick test_expansion_inner_partial;
+    Alcotest.test_case "kotlin verbatim expansion" `Quick
+      test_expansion_kotlin_verbatim;
+    Alcotest.test_case "kotlin transform expansion" `Quick
+      test_expansion_kotlin_transform;
+    Alcotest.test_case "kotlin comma join" `Quick
+      test_expansion_kotlin_comma_join;
+    Alcotest.test_case "two expansion slots" `Quick test_expansion_two_slots;
+  ]
+
+(* ===== Semantics tests (Shadowing, Unification, Scope) ===== *)
+
+let test_semantics_no_shadowing () =
+  let pattern_text =
+    {|@@
+match: strict
+metavar $X: single
+@@
+- foo($X)
++ bar($X)
+@@
+match: strict
+on $X
+metavar $X: single
+@@
+- 1
++ 2|}
+  in
+  Alcotest.check_raises "duplicate metavar declaration rejected"
+    (Failure
+       "Metavariable '$X' is already declared in a previous section. Shadowing \
+        is not permitted.") (fun () ->
+      ignore
+        (Match.transform_nested ~ctx ~language:"typescript" ~pattern_text
+           ~source_text:"foo(1)"))
+
+let test_semantics_global_scope () =
+  let pattern_text =
+    {|@@
+match: strict
+metavar $OUTER: single
+metavar $SEQ: sequence
+@@
+- wrap($OUTER, [$SEQ])
++ wrapped($OUTER, [
+~   $SEQ
++ ])
+@@
+match: strict
+on $SEQ
+@@
+- item($OUTER)
++ item_of($OUTER)|}
+  in
+  let source_text = "wrap(ctx, [item(ctx), item(other)])" in
+  let result =
+    Match.transform_nested ~ctx ~language:"typescript" ~pattern_text
+      ~source_text
+  in
+  (* item(ctx) matches because $OUTER is 'ctx'. item(other) does NOT match. *)
+  Alcotest.(check bool)
+    "item(ctx) transformed" true
+    (string_contains ~needle:"item_of(ctx)" result.transformed_source);
+  Alcotest.(check bool)
+    "item(other) preserved" true
+    (string_contains ~needle:"item(other)" result.transformed_source)
+
+let test_semantics_unification_single () =
+  let pattern_text =
+    {|@@
+match: strict
+metavar $X: single
+@@
+- compare($X, $X)
++ equal($X)|}
+  in
+  let source_text = "compare(a + b, a + b); compare(1, 2);" in
+  let result =
+    Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text
+  in
+  Alcotest.(check int) "one edit" 1 (List.length result.edits);
+  Alcotest.(check bool)
+    "first one transformed" true
+    (string_contains ~needle:"equal(a + b)" result.transformed_source);
+  Alcotest.(check bool)
+    "second one preserved" true
+    (string_contains ~needle:"compare(1, 2)" result.transformed_source)
+
+let test_semantics_unification_sequence () =
+  let pattern_text =
+    {|@@
+match: strict
+metavar $S: sequence
+@@
+- pair([$S], [$S])
++ double([$S])|}
+  in
+  let source_text = "pair([1, 2], [1, 2]); pair([1], [2]);" in
+  let result =
+    Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text
+  in
+  Alcotest.(check int) "one edit" 1 (List.length result.edits);
+  Alcotest.(check bool)
+    "identical sequences transformed" true
+    (string_contains ~needle:"double([1, 2])" result.transformed_source);
+  Alcotest.(check bool)
+    "different sequences preserved" true
+    (string_contains ~needle:"pair([1], [2])" result.transformed_source)
+
+(* Test: multiple 'on $VAR' sections in plain matching (no transforms).
+   Section 1 binds $A and $B; section 2 constrains $A; section 3 constrains $B.
+   Only calls where BOTH $A and $B satisfy their respective constraints match. *)
+let test_semantics_multiple_on_var_search () =
+  let pattern_text =
+    {|@@
+match: strict
+metavar $A: single
+metavar $B: single
+@@
+foo($A, $B)
+
+@@
+match: strict
+on $A
+@@
+true
+
+@@
+match: strict
+on $B
+@@
+false|}
+  in
+  let source_text = "foo(true, false); foo(true, true); foo(false, false);" in
+  let results =
+    Match.find_nested_matches ~ctx ~language:"typescript" ~pattern_text
+      ~source_text
+  in
+  (* Only foo(true, false) satisfies both constraints *)
+  Alcotest.(check int) "exactly one match" 1 (List.length results);
+  let m = List.hd results in
+  let b_of name = List.assoc_opt name m.bindings in
+  Alcotest.(check (option string)) "$A is true" (Some "true") (b_of "$A");
+  Alcotest.(check (option string)) "$B is false" (Some "false") (b_of "$B")
+
+let test_semantics_inner_transform_needs_on_var () =
+  let pattern_text =
+    {|@@
+match: strict
+metavar $TAG: single
+metavar $CASES: sequence
+@@
+- matchIt($TAG, { $CASES });
++ match($TAG)
+~   $CASES
++   .exhaustive()
+
+@@
+match: field
+metavar $KEY: single
+metavar $VAL: single
+@@
+- $KEY: $VAL
++ .with("$KEY", $VAL)|}
+  in
+  (* Inner section has transforms but no 'on $VAR' — should fail at parse time *)
+  Alcotest.check_raises "missing on $VAR raises"
+    (Failure
+       "Section 2 has transform lines (- / +) but no 'on $VAR' declaration. \
+        Inner section transforms are only applied when targeting an expansion \
+        variable via 'on $VAR'.") (fun () ->
+      ignore
+        (Match.parse_nested_pattern ~ctx ~language:"typescript" pattern_text))
+
+let semantics_tests =
+  [
+    Alcotest.test_case "no shadowing" `Quick test_semantics_no_shadowing;
+    Alcotest.test_case "global scope" `Quick test_semantics_global_scope;
+    Alcotest.test_case "unification single" `Quick
+      test_semantics_unification_single;
+    Alcotest.test_case "unification sequence" `Quick
+      test_semantics_unification_sequence;
+    Alcotest.test_case "inner transform needs on $VAR" `Quick
+      test_semantics_inner_transform_needs_on_var;
+    Alcotest.test_case "multiple on $VAR in search" `Quick
+      test_semantics_multiple_on_var_search;
   ]

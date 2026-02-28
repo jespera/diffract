@@ -54,8 +54,7 @@ let is_matched_after mapping (n : Tree.src Tree.t) =
 let get_match_forward mapping (n : Tree.src Tree.t) =
   Hashtbl.find_opt mapping.forward (key_of_node n)
 
-let add_match mapping (before_n : Tree.src Tree.t) (after_n : Tree.src Tree.t)
-    =
+let add_match mapping (before_n : Tree.src Tree.t) (after_n : Tree.src Tree.t) =
   let bk = key_of_node before_n in
   let ak = key_of_node after_n in
   if not (Hashtbl.mem mapping.forward bk || Hashtbl.mem mapping.backward ak)
@@ -79,14 +78,15 @@ let build_hash_index (root : Tree.src Tree.t) =
 
 (** {1 Step 2: Match unique-hash subtrees} *)
 
-(** Recursively match all descendants of two structurally identical subtrees
-    by walking them in parallel. *)
+(** Recursively match all descendants of two structurally identical subtrees by
+    walking them in parallel. *)
 let rec match_descendants mapping (before_n : Tree.src Tree.t)
     (after_n : Tree.src Tree.t) =
   add_match mapping before_n after_n;
   let before_children = before_n.named_children in
   let after_children = after_n.named_children in
-  List.iter2 (fun bn an -> match_descendants mapping bn an)
+  List.iter2
+    (fun bn an -> match_descendants mapping bn an)
     before_children after_children
 
 (** Match subtrees whose hash appears exactly once in each tree. *)
@@ -129,12 +129,12 @@ let dice_similarity mapping (before_n : Tree.src Tree.t)
         | Some ak ->
             (* Check if the matched after-node is a descendant of after_n *)
             let _, as_byte, ae_byte = ak in
-            if as_byte >= after_n.start_byte && ae_byte <= after_n.end_byte
-            then incr shared
+            if as_byte >= after_n.start_byte && ae_byte <= after_n.end_byte then
+              incr shared
         | None -> ())
       before_n;
     let s = float_of_int !shared in
-    (2.0 *. s) /. float_of_int (before_desc + after_desc)
+    2.0 *. s /. float_of_int (before_desc + after_desc)
 
 (** Align children of a matched pair. Uses already-matched children as anchors,
     then matches remaining children by type + similarity. *)
@@ -168,7 +168,8 @@ let align_children mapping ~before_source ~after_source
   (* Phase B: Match remaining by type + similarity *)
   let similarity_threshold = 0.4 in
   for bi = 0 to blen - 1 do
-    if before_anchor.(bi) = -1 && not (is_matched_before mapping before_arr.(bi))
+    if
+      before_anchor.(bi) = -1 && not (is_matched_before mapping before_arr.(bi))
     then begin
       let best_ai = ref (-1) in
       let best_sim = ref neg_infinity in
@@ -178,9 +179,7 @@ let align_children mapping ~before_source ~after_source
           && (not (is_matched_after mapping after_arr.(ai)))
           && before_arr.(bi).node_type = after_arr.(ai).node_type
         then begin
-          let sim =
-            dice_similarity mapping before_arr.(bi) after_arr.(ai)
-          in
+          let sim = dice_similarity mapping before_arr.(bi) after_arr.(ai) in
           if sim > !best_sim then begin
             best_sim := sim;
             best_ai := ai
@@ -192,7 +191,9 @@ let align_children mapping ~before_source ~after_source
         after_used.(!best_ai) <- true;
         add_match mapping before_arr.(bi) after_arr.(!best_ai)
       end
-      else if !best_ai >= 0 && before_arr.(bi).node_type = after_arr.(!best_ai).node_type
+      else if
+        !best_ai >= 0
+        && before_arr.(bi).node_type = after_arr.(!best_ai).node_type
       then begin
         (* Same type but low similarity — still pair them if there's some
            shared structure or they're the only candidate of that type *)
@@ -222,12 +223,8 @@ let align_children mapping ~before_source ~after_source
       while !next_after < ai do
         if not after_used.(!next_after) then begin
           (* This after-child was claimed by similarity match, skip *)
-          if
-            not
-              (Array.exists
-                 (fun a -> a = !next_after)
-                 before_anchor)
-          then result := Added { node = after_arr.(!next_after) } :: !result
+          if not (Array.exists (fun a -> a = !next_after) before_anchor) then
+            result := Added { node = after_arr.(!next_after) } :: !result
         end;
         incr next_after
       done;
@@ -237,7 +234,11 @@ let align_children mapping ~before_source ~after_source
       else
         result :=
           Changed
-            { before = before_arr.(bi); after = after_arr.(ai); change = Replaced }
+            {
+              before = before_arr.(bi);
+              after = after_arr.(ai);
+              change = Replaced;
+            }
           :: !result;
       next_after := ai + 1
     end
@@ -319,8 +320,8 @@ let rec derive_change mapping ~before_source ~after_source
         derive_child_changes mapping ~before_source ~after_source
           before_children after_children
       in
-      if List.for_all (function Same _ -> true | _ -> false) child_changes then
-        Unchanged
+      if List.for_all (function Same _ -> true | _ -> false) child_changes
+      then Unchanged
       else Modified { child_changes }
 
 (** Derive child_change list from the mapping. *)

@@ -26,14 +26,12 @@ type node_change =
 
 (** How a child position changed *)
 and child_change =
-  | Same of { node : Tree.src Tree.t }
-      (** Child is unchanged *)
+  | Same of { node : Tree.src Tree.t }  (** Child is unchanged *)
   | Changed of {
       before : Tree.src Tree.t;
       after : Tree.src Tree.t;
       change : node_change;
-    }
-      (** Child exists in both trees but differs *)
+    }  (** Child exists in both trees but differs *)
   | Removed of { node : Tree.src Tree.t }
       (** Child exists only in the before tree *)
   | Added of { node : Tree.src Tree.t }
