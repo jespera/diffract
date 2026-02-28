@@ -225,13 +225,13 @@ let format_tree tree =
     in program nodes. *)
 let unwrap_root (node : 'kind t) : 'kind t =
   let rec unwrap node =
-    let children = named_children node in
-    match (node.node_type, children) with
+    let named = named_children node in
+    match (node.node_type, named) with
     | ("program" | "module" | "source_file" | "compilation_unit"), [ child ] ->
         unwrap child
     | "expression_statement", [ child ] -> unwrap child
-    | "program", first :: rest when first.node_type = "php_tag" -> (
-        match rest with [ child ] -> unwrap child | _ -> node)
+    | "program", first :: second :: _ when first.node_type = "php_tag" ->
+        unwrap second
     | _ -> node
   in
   unwrap node

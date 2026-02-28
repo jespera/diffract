@@ -195,6 +195,64 @@ line 12: Math.floor(x + 1)
 
 Metavariables are pre-processed before parsing, so they work across all supported languages regardless of whether `$name` is valid syntax in that language.
 
+## Metavariable Scoping
+
+### Global scope across sections
+
+Metavariables share a **global scope** across all sections of a multi-section pattern. A metavar declared in an outer section is automatically in scope for all inner sections — you do not need to (and must not) re-declare it:
+
+```
+@@
+match: strict
+metavar $CLASS: single
+metavar $BODY: single
+@@
+class $CLASS { $BODY }
+
+@@
+match: strict
+@@
+console.log($CLASS)
+```
+
+Here the inner section uses `$CLASS` (declared in the outer section) directly in its pattern body without re-declaring it. This matches only `console.log` calls whose argument is the same identifier as the enclosing class name.
+
+### No shadowing
+
+Declaring a metavar in an inner section that was already declared in an outer section is an error:
+
+```
+@@
+match: strict
+metavar $X: single
+@@
+foo($X)
+
+@@
+match: strict
+metavar $X: single   (* ERROR: $X was already declared above *)
+@@
+bar($X)
+```
+
+This raises a `Failure` exception at parse time. Use the existing binding from the outer section instead.
+
+### Unification
+
+When the same metavar appears in more than one position in a match pattern, all occurrences must bind to **structurally identical** nodes. This applies both within a single section and across sections:
+
+```
+@@
+match: strict
+metavar $X: single
+@@
+compare($X, $X)
+```
+
+This only matches calls where both arguments are identical (e.g. `compare(a, a)`), not `compare(a, b)`.
+
+Across sections, the outer binding constrains the inner match. In the `console.log($CLASS)` example above, only calls where the argument text matches the previously bound `$CLASS` will match.
+
 ## Transforms (Semantic Patches)
 
 Patterns can describe code transformations using `-`/`+` line prefixes, similar
