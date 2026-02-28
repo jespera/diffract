@@ -79,8 +79,12 @@ let parse_preamble text =
       let n = String.length pattern_body in
       let is_nl c = c = '\n' || c = '\r' in
       let i = ref 0 and j = ref (n - 1) in
-      while !i < n && is_nl pattern_body.[!i] do incr i done;
-      while !j >= !i && is_nl pattern_body.[!j] do decr j done;
+      while !i < n && is_nl pattern_body.[!i] do
+        incr i
+      done;
+      while !j >= !i && is_nl pattern_body.[!j] do
+        decr j
+      done;
       if !j < !i then "" else String.sub pattern_body !i (!j - !i + 1)
     in
     (* Parse preamble lines *)
@@ -270,9 +274,9 @@ let preprocess_ellipsis text =
     identifiers/metavars ('$', letters, digits, '_'). *)
 let is_expansion_prefix c =
   c <> '-' && c <> '+' && c <> ' ' && c <> '\t' && c <> '$'
-  && not (c >= 'a' && c <= 'z')
-  && not (c >= 'A' && c <= 'Z')
-  && not (c >= '0' && c <= '9')
+  && (not (c >= 'a' && c <= 'z'))
+  && (not (c >= 'A' && c <= 'Z'))
+  && (not (c >= '0' && c <= '9'))
   && c <> '_'
 
 (** Classify and preprocess spatch lines in a single pass. Lines prefixed with
@@ -355,7 +359,11 @@ let classify_and_preprocess_spatch ~sequence_metavars body =
             "Ellipsis (...) in replacement-only line is not bound by match";
         replace_lines := content :: !replace_lines
       end
-      else if String.length line >= 2 && is_expansion_prefix line.[0] && line.[1] = ' ' then begin
+      else if
+        String.length line >= 2
+        && is_expansion_prefix line.[0]
+        && line.[1] = ' '
+      then begin
         (* Potential expansion line: prefix char is separator, rest is content.
            The second character must be a space so that code lines starting with
            punctuation (e.g. PHP '($ARGS)') are not misidentified. *)
@@ -375,14 +383,20 @@ let classify_and_preprocess_spatch ~sequence_metavars body =
           let transformed = replace_ellipsis_in_line line in
           match_lines := transformed :: !match_lines;
           replace_lines := transformed :: !replace_lines
-        end else if not has_seq_var then begin
+        end
+        else if not has_seq_var then begin
           (* Has metavars but none are sequence — user likely intended an
              expansion line but used a single metavar; raise a clear error. *)
-          let bad = List.find (fun v -> not (List.mem v sequence_metavars)) vars in
-          failwith (Printf.sprintf
-            "Variable '%s' in expansion line must be declared as sequence metavar"
-            bad)
-        end else begin
+          let bad =
+            List.find (fun v -> not (List.mem v sequence_metavars)) vars
+          in
+          failwith
+            (Printf.sprintf
+               "Variable '%s' in expansion line must be declared as sequence \
+                metavar"
+               bad)
+        end
+        else begin
           (* Expansion line: replace with a unique placeholder in replace side *)
           let separator =
             if sep_char = '~' then "\n" else String.make 1 sep_char
@@ -391,8 +405,11 @@ let classify_and_preprocess_spatch ~sequence_metavars body =
           let placeholder = Printf.sprintf "__expand_%d__" n in
           incr expand_counter;
           expansion_slots :=
-            { exp_placeholder = placeholder; exp_separator = separator;
-              exp_vars = vars }
+            {
+              exp_placeholder = placeholder;
+              exp_separator = separator;
+              exp_vars = vars;
+            }
             :: !expansion_slots;
           replace_lines := placeholder :: !replace_lines
           (* Not added to match_lines — replace-only, like a '+' line *)
@@ -426,9 +443,25 @@ let classify_and_preprocess_spatch ~sequence_metavars body =
     List.rev !expansion_slots,
     is_transform )
 
-(** Parse a pattern file/string into a pattern structure *)
-let parse_pattern ~ctx ~language pattern_text =
+(** Parse a pattern file/string into a pattern structure. [inherited_metavars]
+    and [inherited_sequences] are from previous sections. *)
+let parse_pattern ~ctx ~language ?(inherited_metavars = [])
+    ?(inherited_sequences = []) pattern_text =
   let preamble = parse_preamble pattern_text in
+  (* Check for re-declarations (No Shadowing Rule) *)
+  List.iter
+    (fun var ->
+      if List.mem var inherited_metavars then
+        failwith
+          (Printf.sprintf
+             "Metavariable '%s' is already declared in a previous section. \
+              Shadowing is not permitted."
+             var))
+    preamble.p_metavars;
+
+  let all_metavars = inherited_metavars @ preamble.p_metavars in
+  let all_sequences = inherited_sequences @ preamble.p_sequence_metavars in
+
   (* Require explicit match mode *)
   let match_mode =
     match preamble.p_match_mode with
@@ -438,15 +471,19 @@ let parse_pattern ~ctx ~language pattern_text =
           "Pattern must specify match mode (match: strict, match: field, or \
            match: partial)"
   in
-  let pattern_body, replace_template, ellipsis_subs, expansion_slots,
-      is_transform =
-    classify_and_preprocess_spatch
-      ~sequence_metavars:preamble.p_sequence_metavars preamble.p_pattern_body
+  let ( pattern_body,
+        replace_template,
+        ellipsis_subs,
+        expansion_slots,
+        is_transform ) =
+    classify_and_preprocess_spatch ~sequence_metavars:all_sequences
+      preamble.p_pattern_body
   in
-  validate_metavars preamble.p_metavars pattern_body;
+  (* Validate all used metavars are declared in current or parent scope *)
+  validate_metavars all_metavars pattern_body;
   (* Then substitute declared metavars *)
   let transformed_source, metavar_subs =
-    substitute_metavars preamble.p_metavars pattern_body
+    substitute_metavars all_metavars pattern_body
   in
   (* Combine substitutions *)
   let all_substitutions = metavar_subs @ ellipsis_subs in
@@ -455,18 +492,27 @@ let parse_pattern ~ctx ~language pattern_text =
   (* Parse the transformed pattern with tree-sitter (typed as pattern tree) *)
   let tree = Tree.parse_as_pattern ~ctx ~language transformed_source in
   (* Add ellipsis var names to sequence_metavars *)
-  let sequence_metavars = preamble.p_sequence_metavars @ ellipsis_var_names in
-  (* Disallow sequence metavars in partial mode (including ellipsis) *)
-  if match_mode = Partial && sequence_metavars <> [] then
-    failwith "Sequence metavars are not supported in match: partial";
+  let all_sequences = all_sequences @ ellipsis_var_names in
+  (* Disallow locally-declared sequence metavars in partial mode.
+     Inherited sequences (from outer sections) are fine — they are used only
+     in expansion lines, not as match patterns. *)
+  if match_mode = Partial then begin
+    let local_sequences = preamble.p_sequence_metavars @ ellipsis_var_names in
+    if local_sequences <> [] then
+      failwith "Sequence metavars are not supported in match: partial"
+  end;
   (* Handle replacement template if this is a transform *)
   let replace_tree, replace_source =
     if is_transform then begin
       (* Validate: metavars in + lines must appear in - or context lines *)
       let replace_metavars = find_metavars_in_text replace_template in
       let match_metavars = find_metavars_in_text pattern_body in
+      (* For transform, replace_metavars must be in match_metavars OR inherited *)
       let undefined =
-        List.filter (fun v -> not (List.mem v match_metavars)) replace_metavars
+        List.filter
+          (fun v ->
+            not (List.mem v match_metavars || List.mem v inherited_metavars))
+          replace_metavars
       in
       if undefined <> [] then
         failwith
@@ -477,13 +523,17 @@ let parse_pattern ~ctx ~language pattern_text =
         (fun slot ->
           List.iter
             (fun var ->
-              if not (List.mem var preamble.p_sequence_metavars) then
+              if not (List.mem var all_sequences) then
                 failwith
                   (Printf.sprintf
                      "Variable '%s' in expansion line must be declared as \
                       sequence metavar"
                      var);
-              if not (List.mem var match_metavars) then
+              if
+                not
+                  (List.mem var match_metavars
+                  || List.mem var inherited_metavars)
+              then
                 failwith
                   (Printf.sprintf
                      "Variable '%s' in expansion line not bound in match \
@@ -493,7 +543,7 @@ let parse_pattern ~ctx ~language pattern_text =
         expansion_slots;
       (* Substitute metavars in replacement template *)
       let replace_transformed, _ =
-        substitute_metavars preamble.p_metavars replace_template
+        substitute_metavars all_metavars replace_template
       in
       let replace_tree =
         Tree.parse_as_pattern ~ctx ~language replace_transformed
@@ -503,8 +553,8 @@ let parse_pattern ~ctx ~language pattern_text =
     else (None, "")
   in
   {
-    metavars = preamble.p_metavars;
-    sequence_metavars;
+    metavars = all_metavars;
+    sequence_metavars = all_sequences;
     substitutions = all_substitutions;
     tree;
     source = transformed_source;
@@ -556,5 +606,29 @@ let split_pattern_sections text =
 (** Parse a nested pattern from text with multiple @@ sections *)
 let parse_nested_pattern ~ctx ~language pattern_text =
   let sections = split_pattern_sections pattern_text in
-  let patterns = List.map (parse_pattern ~ctx ~language) sections in
+  let rec parse_all inherited_vars inherited_seqs = function
+    | [] -> []
+    | s :: rest ->
+        let p =
+          parse_pattern ~ctx ~language ~inherited_metavars:inherited_vars
+            ~inherited_sequences:inherited_seqs s
+        in
+        (* Pass all cumulative metavars to next sections. Note that p.metavars 
+           already contains inherited_vars because we passed them in. *)
+        p :: parse_all p.metavars p.sequence_metavars rest
+  in
+  let patterns = parse_all [] [] sections in
+  (* Validate: a non-first section with transform lines but no 'on $VAR'
+     declaration has transforms that can never be applied. This is almost
+     certainly a mistake (forgotten 'on $VAR'). *)
+  List.iteri
+    (fun i p ->
+      if i > 0 && p.is_transform && p.on_var = None then
+        failwith
+          (Printf.sprintf
+             "Section %d has transform lines (- / +) but no 'on $VAR' \
+              declaration. Inner section transforms are only applied when \
+              targeting an expansion variable via 'on $VAR'."
+             (i + 1)))
+    patterns;
   { patterns }

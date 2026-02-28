@@ -33,7 +33,8 @@ type expansion_slot = {
   exp_vars : string list;
       (** Sequence metavar names whose elements are expanded on this line *)
 }
-(** An expansion slot: a replacement line whose prefix encodes a join separator *)
+(** An expansion slot: a replacement line whose prefix encodes a join separator
+*)
 
 type pattern = {
   metavars : string list;  (** Original metavar names (e.g., ["$msg"; "$fn"]) *)
@@ -55,7 +56,8 @@ type pattern = {
   replace_source : string;
       (** Transformed replacement source (with placeholders) *)
   expansion_slots : expansion_slot list;
-      (** Expansion lines (separator-prefix lines) in the replacement template *)
+      (** Expansion lines (separator-prefix lines) in the replacement template
+      *)
 }
 (** A parsed pattern with metavariable information *)
 

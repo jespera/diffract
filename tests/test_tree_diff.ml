@@ -3,7 +3,6 @@
 open Diffract
 
 let ctx = Context.create ()
-
 let parse source = Diffract.parse_tree ~ctx ~language:"typescript" source
 
 (** Helper: check if a node_change is Unchanged *)
@@ -30,7 +29,8 @@ let test_identical_trees () =
   let before = parse source in
   let after = parse source in
   let d = Tree_diff.diff ~before ~after in
-  Alcotest.(check bool) "identical trees are Unchanged" true
+  Alcotest.(check bool)
+    "identical trees are Unchanged" true
     (is_unchanged d.root_change)
 
 (* Test: Single leaf change drills down to the changed node *)
@@ -38,7 +38,8 @@ let test_single_leaf_change () =
   let before = parse "const x = 1;" in
   let after = parse "const x = 2;" in
   let d = Tree_diff.diff ~before ~after in
-  Alcotest.(check bool) "root is not Unchanged" false
+  Alcotest.(check bool)
+    "root is not Unchanged" false
     (is_unchanged d.root_change);
   (* Should drill down to the number literal *)
   let pairs = Tree_diff.change_pairs d in
@@ -126,7 +127,8 @@ let test_formatting_only () =
   let before = parse "function f() { return 1; }" in
   let after = parse "function f() {\n  return 1;\n}" in
   let d = Tree_diff.diff ~before ~after in
-  Alcotest.(check bool) "formatting only is Unchanged" true
+  Alcotest.(check bool)
+    "formatting only is Unchanged" true
     (is_unchanged d.root_change)
 
 (* Test: change_pairs extracts leaf-level pairs *)

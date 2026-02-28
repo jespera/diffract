@@ -207,9 +207,9 @@ let scan_directory ~ctx ~language ~pattern_text ~include_pattern ~exclude_dirs
 
 (* Transform a single file and return (had_changes, diff_text) *)
 let transform_file ~ctx ~language ~pattern_text ~in_place file_path =
+  let source_text = In_channel.with_open_text file_path In_channel.input_all in
   let result =
-    Diffract.Match.transform_file ~ctx ~language ~pattern_text
-      ~source_path:file_path
+    Diffract.Match.transform_nested ~ctx ~language ~pattern_text ~source_text
   in
   if result.edits = [] then (false, "")
   else
@@ -233,9 +233,12 @@ let scan_directory_transform ~ctx ~language ~pattern_text ~include_pattern
   List.iter
     (fun file_path ->
       try
+        let source_text =
+          In_channel.with_open_text file_path In_channel.input_all
+        in
         let result =
-          Diffract.Match.transform_file ~ctx ~language ~pattern_text
-            ~source_path:file_path
+          Diffract.Match.transform_nested ~ctx ~language ~pattern_text
+            ~source_text
         in
         if result.edits <> [] then begin
           incr files_changed;

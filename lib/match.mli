@@ -4,7 +4,13 @@ include module type of Match_types
 
 (** {1 Pattern parsing} *)
 
-val parse_pattern : ctx:Context.t -> language:string -> string -> pattern
+val parse_pattern :
+  ctx:Context.t ->
+  language:string ->
+  ?inherited_metavars:string list ->
+  ?inherited_sequences:string list ->
+  string ->
+  pattern
 (** [parse_pattern ~ctx ~language pattern_text] parses a pattern file.
     Pattern format:
     {v
@@ -18,6 +24,14 @@ val parse_pattern : ctx:Context.t -> language:string -> string -> pattern
     Metavars declared between @@ markers are replaced with valid identifiers
     before parsing, allowing patterns to work across all languages.
     Raises [Failure] if any metavar in the pattern body is not declared.
+
+    {2 Global Scope and Unification}
+
+    Metavariables share a global scope across all sections of a pattern.
+    Shadowing is not permitted; declaring a metavariable that was already
+    defined in a previous section is an error. Every occurrence of a
+    metavariable in a match pattern must bind to structurally identical nodes
+    (Unification).
 
     {2 Sequence metavars}
 

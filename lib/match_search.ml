@@ -6,29 +6,27 @@ let find_matches_in_subtree ~pattern ~inherited_bindings ~source
     ~(root_node : Tree.src Tree.t) =
   let pattern_node = Match_engine.get_pattern_content pattern in
   let results = ref [] in
-  root_node
-  |> Tree.traverse (fun source_node ->
+  Tree.traverse
+    (fun node ->
       match
         Match_engine.match_node ~pattern ~pattern_source:pattern.source ~source
-          ~substitutions:pattern.substitutions pattern_node source_node
+          ~substitutions:pattern.substitutions ~bindings:inherited_bindings
+          pattern_node node
       with
-      | Some mb -> (
-          (* Check if new bindings are consistent with inherited ones *)
-          match Match_engine.check_and_merge_bindings inherited_bindings mb with
-          | Some merged ->
-              results :=
-                {
-                  node = source_node;
-                  bindings = merged.text_bindings;
-                  node_bindings = merged.node_bindings;
-                  sequence_node_bindings = merged.sequence_node_bindings;
-                  correspondences = merged.correspondences;
-                  start_point = Tree.start_point source_node;
-                  end_point = Tree.end_point source_node;
-                }
-                :: !results
-          | None -> () (* Binding conflict - skip this match *))
-      | None -> ());
+      | Some mb ->
+          results :=
+            {
+              node;
+              bindings = mb.text_bindings;
+              node_bindings = mb.node_bindings;
+              sequence_node_bindings = mb.sequence_node_bindings;
+              correspondences = mb.correspondences;
+              start_point = Tree.start_point node;
+              end_point = Tree.end_point node;
+            }
+            :: !results
+      | None -> ())
+    root_node;
   List.rev !results
 
 (** Find matches for a pattern, respecting the 'on $VAR' directive. If pattern
@@ -94,11 +92,32 @@ let rec find_nested_matches_impl ~source ~inherited_bindings
       in
       List.map
         (fun (m : match_result) ->
+          (* Merge target bindings with inherited ones from contexts *)
+          let final_mb =
+            match
+              Match_engine.check_and_merge_bindings ~source inherited_bindings
+                {
+                  text_bindings = m.bindings;
+                  node_bindings = m.node_bindings;
+                  sequence_node_bindings = m.sequence_node_bindings;
+                  correspondences = m.correspondences;
+                }
+            with
+            | Some merged -> merged
+            | None ->
+                (* Should not happen if target matched, but for safety *)
+                {
+                  text_bindings = m.bindings;
+                  node_bindings = m.node_bindings;
+                  sequence_node_bindings = m.sequence_node_bindings;
+                  correspondences = m.correspondences;
+                }
+          in
           {
             node = m.node;
-            bindings = m.bindings;
-            node_bindings = m.node_bindings;
-            sequence_node_bindings = m.sequence_node_bindings;
+            bindings = final_mb.text_bindings;
+            node_bindings = final_mb.node_bindings;
+            sequence_node_bindings = final_mb.sequence_node_bindings;
             contexts = List.rev accumulated_contexts;
             start_point = m.start_point;
             end_point = m.end_point;
@@ -122,12 +141,24 @@ let rec find_nested_matches_impl ~source ~inherited_bindings
             }
           in
           let new_inherited =
-            {
-              text_bindings = ctx_match.bindings;
-              node_bindings = ctx_match.node_bindings;
-              sequence_node_bindings = ctx_match.sequence_node_bindings;
-              correspondences = ctx_match.correspondences;
-            }
+            match
+              Match_engine.check_and_merge_bindings ~source inherited_bindings
+                {
+                  text_bindings = ctx_match.bindings;
+                  node_bindings = ctx_match.node_bindings;
+                  sequence_node_bindings = ctx_match.sequence_node_bindings;
+                  correspondences = ctx_match.correspondences;
+                }
+            with
+            | Some merged -> merged
+            | None ->
+                (* Should not happen if context matched, but for safety: *)
+                {
+                  text_bindings = ctx_match.bindings;
+                  node_bindings = ctx_match.node_bindings;
+                  sequence_node_bindings = ctx_match.sequence_node_bindings;
+                  correspondences = ctx_match.correspondences;
+                }
           in
           find_nested_matches_impl ~source ~inherited_bindings:new_inherited
             ~accumulated_contexts:(ctx_record :: accumulated_contexts)
