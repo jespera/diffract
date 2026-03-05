@@ -81,13 +81,13 @@ static value alloc_tree(TSTree *tree) {
 
 /* ============ Parser functions ============ */
 
-CAMLprim value ts_helper_parser_new(value v_unit) {
+CAMLprim value tsh_parser_new(value v_unit) {
     CAMLparam1(v_unit);
     TSParser *parser = ts_parser_new();
     CAMLreturn(caml_copy_nativeint((intnat)parser));
 }
 
-CAMLprim value ts_helper_parser_delete(value v_parser) {
+CAMLprim value tsh_parser_delete(value v_parser) {
     CAMLparam1(v_parser);
     TSParser *parser = (TSParser *)Nativeint_val(v_parser);
     if (parser) {
@@ -96,7 +96,7 @@ CAMLprim value ts_helper_parser_delete(value v_parser) {
     CAMLreturn(Val_unit);
 }
 
-CAMLprim value ts_helper_parser_set_language(value v_parser, value v_language) {
+CAMLprim value tsh_parser_set_language(value v_parser, value v_language) {
     CAMLparam2(v_parser, v_language);
     TSParser *parser = (TSParser *)Nativeint_val(v_parser);
     const TSLanguage *language = (const TSLanguage *)Nativeint_val(v_language);
@@ -107,7 +107,7 @@ CAMLprim value ts_helper_parser_set_language(value v_parser, value v_language) {
 /* ============ Tree functions ============ */
 
 /* Parse and return a tree (with GC-managed lifetime) */
-CAMLprim value ts_helper_parse(value v_parser, value v_source) {
+CAMLprim value tsh_parse(value v_parser, value v_source) {
     CAMLparam2(v_parser, v_source);
 
     TSParser *parser = (TSParser *)Nativeint_val(v_parser);
@@ -123,7 +123,7 @@ CAMLprim value ts_helper_parse(value v_parser, value v_source) {
 }
 
 /* Get root node of a tree */
-CAMLprim value ts_helper_tree_root_node(value v_tree) {
+CAMLprim value tsh_tree_root_node(value v_tree) {
     CAMLparam1(v_tree);
     TSTree *tree = Tree_val(v_tree);
     TSNode root = ts_tree_root_node(tree);
@@ -133,7 +133,7 @@ CAMLprim value ts_helper_tree_root_node(value v_tree) {
 /* ============ Node functions ============ */
 
 /* Get the type of a node as a string */
-CAMLprim value ts_helper_node_type(value v_node) {
+CAMLprim value tsh_node_type(value v_node) {
     CAMLparam1(v_node);
     TSNodeWrapper *wrapper = Node_wrapper_val(v_node);
     const char *type = ts_node_type(wrapper->node);
@@ -141,7 +141,7 @@ CAMLprim value ts_helper_node_type(value v_node) {
 }
 
 /* Get the S-expression representation */
-CAMLprim value ts_helper_node_string(value v_node) {
+CAMLprim value tsh_node_string(value v_node) {
     CAMLparam1(v_node);
     CAMLlocal1(v_result);
     TSNodeWrapper *wrapper = Node_wrapper_val(v_node);
@@ -152,21 +152,21 @@ CAMLprim value ts_helper_node_string(value v_node) {
 }
 
 /* Check if node is named (vs anonymous like punctuation) */
-CAMLprim value ts_helper_node_is_named(value v_node) {
+CAMLprim value tsh_node_is_named(value v_node) {
     CAMLparam1(v_node);
     TSNodeWrapper *wrapper = Node_wrapper_val(v_node);
     CAMLreturn(Val_bool(ts_node_is_named(wrapper->node)));
 }
 
 /* Check if node is null */
-CAMLprim value ts_helper_node_is_null(value v_node) {
+CAMLprim value tsh_node_is_null(value v_node) {
     CAMLparam1(v_node);
     TSNodeWrapper *wrapper = Node_wrapper_val(v_node);
     CAMLreturn(Val_bool(ts_node_is_null(wrapper->node)));
 }
 
 /* Get child count (all children including anonymous) */
-CAMLprim value ts_helper_node_child_count(value v_node) {
+CAMLprim value tsh_node_child_count(value v_node) {
     CAMLparam1(v_node);
     TSNodeWrapper *wrapper = Node_wrapper_val(v_node);
     uint32_t count = ts_node_child_count(wrapper->node);
@@ -174,7 +174,7 @@ CAMLprim value ts_helper_node_child_count(value v_node) {
 }
 
 /* Get named child count */
-CAMLprim value ts_helper_node_named_child_count(value v_node) {
+CAMLprim value tsh_node_named_child_count(value v_node) {
     CAMLparam1(v_node);
     TSNodeWrapper *wrapper = Node_wrapper_val(v_node);
     uint32_t count = ts_node_named_child_count(wrapper->node);
@@ -182,7 +182,7 @@ CAMLprim value ts_helper_node_named_child_count(value v_node) {
 }
 
 /* Get child by index */
-CAMLprim value ts_helper_node_child(value v_node, value v_index) {
+CAMLprim value tsh_node_child(value v_node, value v_index) {
     CAMLparam2(v_node, v_index);
     TSNodeWrapper *wrapper = Node_wrapper_val(v_node);
     uint32_t index = Int_val(v_index);
@@ -191,7 +191,7 @@ CAMLprim value ts_helper_node_child(value v_node, value v_index) {
 }
 
 /* Get named child by index */
-CAMLprim value ts_helper_node_named_child(value v_node, value v_index) {
+CAMLprim value tsh_node_named_child(value v_node, value v_index) {
     CAMLparam2(v_node, v_index);
     TSNodeWrapper *wrapper = Node_wrapper_val(v_node);
     uint32_t index = Int_val(v_index);
@@ -200,7 +200,7 @@ CAMLprim value ts_helper_node_named_child(value v_node, value v_index) {
 }
 
 /* Get child by field name */
-CAMLprim value ts_helper_node_child_by_field_name(value v_node, value v_name) {
+CAMLprim value tsh_node_child_by_field_name(value v_node, value v_name) {
     CAMLparam2(v_node, v_name);
     TSNodeWrapper *wrapper = Node_wrapper_val(v_node);
     const char *name = String_val(v_name);
@@ -210,7 +210,7 @@ CAMLprim value ts_helper_node_child_by_field_name(value v_node, value v_name) {
 }
 
 /* Get field name for child at index (returns None if no field name) */
-CAMLprim value ts_helper_node_field_name_for_child(value v_node, value v_index) {
+CAMLprim value tsh_node_field_name_for_child(value v_node, value v_index) {
     CAMLparam2(v_node, v_index);
     CAMLlocal1(v_some);
     TSNodeWrapper *wrapper = Node_wrapper_val(v_node);
@@ -226,7 +226,7 @@ CAMLprim value ts_helper_node_field_name_for_child(value v_node, value v_index) 
 }
 
 /* Get parent node */
-CAMLprim value ts_helper_node_parent(value v_node) {
+CAMLprim value tsh_node_parent(value v_node) {
     CAMLparam1(v_node);
     TSNodeWrapper *wrapper = Node_wrapper_val(v_node);
     TSNode parent = ts_node_parent(wrapper->node);
@@ -234,7 +234,7 @@ CAMLprim value ts_helper_node_parent(value v_node) {
 }
 
 /* Get next sibling */
-CAMLprim value ts_helper_node_next_sibling(value v_node) {
+CAMLprim value tsh_node_next_sibling(value v_node) {
     CAMLparam1(v_node);
     TSNodeWrapper *wrapper = Node_wrapper_val(v_node);
     TSNode sibling = ts_node_next_sibling(wrapper->node);
@@ -242,7 +242,7 @@ CAMLprim value ts_helper_node_next_sibling(value v_node) {
 }
 
 /* Get previous sibling */
-CAMLprim value ts_helper_node_prev_sibling(value v_node) {
+CAMLprim value tsh_node_prev_sibling(value v_node) {
     CAMLparam1(v_node);
     TSNodeWrapper *wrapper = Node_wrapper_val(v_node);
     TSNode sibling = ts_node_prev_sibling(wrapper->node);
@@ -250,7 +250,7 @@ CAMLprim value ts_helper_node_prev_sibling(value v_node) {
 }
 
 /* Get next named sibling */
-CAMLprim value ts_helper_node_next_named_sibling(value v_node) {
+CAMLprim value tsh_node_next_named_sibling(value v_node) {
     CAMLparam1(v_node);
     TSNodeWrapper *wrapper = Node_wrapper_val(v_node);
     TSNode sibling = ts_node_next_named_sibling(wrapper->node);
@@ -258,7 +258,7 @@ CAMLprim value ts_helper_node_next_named_sibling(value v_node) {
 }
 
 /* Get previous named sibling */
-CAMLprim value ts_helper_node_prev_named_sibling(value v_node) {
+CAMLprim value tsh_node_prev_named_sibling(value v_node) {
     CAMLparam1(v_node);
     TSNodeWrapper *wrapper = Node_wrapper_val(v_node);
     TSNode sibling = ts_node_prev_named_sibling(wrapper->node);
@@ -267,20 +267,20 @@ CAMLprim value ts_helper_node_prev_named_sibling(value v_node) {
 
 /* ============ Position functions ============ */
 
-CAMLprim value ts_helper_node_start_byte(value v_node) {
+CAMLprim value tsh_node_start_byte(value v_node) {
     CAMLparam1(v_node);
     TSNodeWrapper *wrapper = Node_wrapper_val(v_node);
     CAMLreturn(Val_int(ts_node_start_byte(wrapper->node)));
 }
 
-CAMLprim value ts_helper_node_end_byte(value v_node) {
+CAMLprim value tsh_node_end_byte(value v_node) {
     CAMLparam1(v_node);
     TSNodeWrapper *wrapper = Node_wrapper_val(v_node);
     CAMLreturn(Val_int(ts_node_end_byte(wrapper->node)));
 }
 
 /* Returns (row, column) as a pair */
-CAMLprim value ts_helper_node_start_point(value v_node) {
+CAMLprim value tsh_node_start_point(value v_node) {
     CAMLparam1(v_node);
     CAMLlocal1(v_pair);
     TSNodeWrapper *wrapper = Node_wrapper_val(v_node);
@@ -291,7 +291,7 @@ CAMLprim value ts_helper_node_start_point(value v_node) {
     CAMLreturn(v_pair);
 }
 
-CAMLprim value ts_helper_node_end_point(value v_node) {
+CAMLprim value tsh_node_end_point(value v_node) {
     CAMLparam1(v_node);
     CAMLlocal1(v_pair);
     TSNodeWrapper *wrapper = Node_wrapper_val(v_node);
@@ -302,9 +302,42 @@ CAMLprim value ts_helper_node_end_point(value v_node) {
     CAMLreturn(v_pair);
 }
 
+/* ============ Language getters for statically linked grammars ============ */
+
+extern const TSLanguage *tree_sitter_typescript(void);
+extern const TSLanguage *tree_sitter_tsx(void);
+extern const TSLanguage *tree_sitter_kotlin(void);
+extern const TSLanguage *tree_sitter_php(void);
+extern const TSLanguage *tree_sitter_scala(void);
+
+CAMLprim value tsh_typescript_language(value v_unit) {
+    CAMLparam1(v_unit);
+    CAMLreturn(caml_copy_nativeint((intnat)tree_sitter_typescript()));
+}
+
+CAMLprim value tsh_tsx_language(value v_unit) {
+    CAMLparam1(v_unit);
+    CAMLreturn(caml_copy_nativeint((intnat)tree_sitter_tsx()));
+}
+
+CAMLprim value tsh_kotlin_language(value v_unit) {
+    CAMLparam1(v_unit);
+    CAMLreturn(caml_copy_nativeint((intnat)tree_sitter_kotlin()));
+}
+
+CAMLprim value tsh_php_language(value v_unit) {
+    CAMLparam1(v_unit);
+    CAMLreturn(caml_copy_nativeint((intnat)tree_sitter_php()));
+}
+
+CAMLprim value tsh_scala_language(value v_unit) {
+    CAMLparam1(v_unit);
+    CAMLreturn(caml_copy_nativeint((intnat)tree_sitter_scala()));
+}
+
 /* ============ Legacy function for backward compatibility ============ */
 
-CAMLprim value ts_helper_parse_to_sexp(value v_parser, value v_source) {
+CAMLprim value tsh_parse_to_sexp(value v_parser, value v_source) {
     CAMLparam2(v_parser, v_source);
     CAMLlocal1(v_result);
 

@@ -8,9 +8,9 @@ diffract/
 │   ├── diffract.ml          # Main module, re-exports submodules
 │   ├── tree.ml             # Pure OCaml tree representation
 │   ├── tree_sitter_bindings.ml  # Low-level ctypes FFI
-│   ├── ts_helper.c         # C helper functions for tree-sitter
+│   ├── tree_sitter_helper.c         # C helper functions for tree-sitter
 │   ├── node.ml             # FFI-based tree traversal (internal)
-│   ├── languages.ml        # Dynamic grammar loading
+│   ├── languages.ml        # Static grammar registry
 │   ├── match.ml            # Public match API (facade)
 │   ├── match_types.ml      # Match-related types
 │   ├── match_parse.ml      # Pattern parsing and preamble handling
@@ -19,7 +19,7 @@ diffract/
 ├── bin/                    # CLI
 │   └── main.ml
 ├── grammars/               # Tree-sitter grammars
-│   ├── build-grammars.sh   # Script to build grammar .so files
+│   ├── build-grammars.sh   # Script to build grammar static archives
 │   └── lib/                # Compiled grammar libraries
 └── tests/                  # Alcotest unit tests
 ```
@@ -58,7 +58,7 @@ The tree is constructed once during parsing by traversing the tree-sitter nodes 
 
 Tree-sitter is a C library that provides incremental parsing with concrete syntax trees. The integration involves several layers:
 
-### 1. C Helper Layer (`lib/ts_helper.c`)
+### 1. C Helper Layer (`lib/tree_sitter_helper.c`)
 
 Tree-sitter's `TSNode` is a 32-byte struct passed by value, which is problematic for OCaml's ctypes FFI (libffi doesn't support large structs by value). We solve this with a C helper layer that:
 
@@ -82,51 +82,46 @@ typedef struct {
 ```
 
 Key functions:
-- `ts_helper_parse`: Parse source code, return tree custom block
-- `ts_helper_tree_root_node`: Get root node from tree
-- `ts_helper_node_child`: Navigate to child nodes
-- `ts_helper_node_type`: Get node's grammar type name
-- `ts_helper_node_string`: Get S-expression representation
+- `tsh_parse`: Parse source code, return tree custom block
+- `tsh_tree_root_node`: Get root node from tree
+- `tsh_node_child`: Navigate to child nodes
+- `tsh_node_type`: Get node's grammar type name
+- `tsh_node_string`: Get S-expression representation
 
 ### 2. OCaml FFI Bindings (`lib/tree_sitter_bindings.ml`)
 
-Uses ctypes-foreign to bind to both libtree-sitter and our C helpers:
+Uses `external` declarations to bind to the C helper functions:
 
 ```ocaml
-(* Bind to tree-sitter core *)
-let parser_new = foreign "ts_parser_new" (void @-> returning nativeint)
-let parser_set_language = foreign "ts_parser_set_language"
-  (nativeint @-> nativeint @-> returning bool)
-
-(* Bind to our C helpers *)
-external parse : nativeint -> string -> tree = "ts_helper_parse"
-external node_type : t -> string = "ts_helper_node_type"
+external parser_new : unit -> nativeint = "tsh_parser_new"
+external parser_set_language : nativeint -> nativeint -> bool = "tsh_parser_set_language"
+external parse_to_sexp : nativeint -> string -> string = "tsh_parse_to_sexp"
 ```
 
-### 3. Dynamic Grammar Loading (`lib/languages.ml`)
+### 3. Static Grammar Registry (`lib/languages.ml`)
 
-Grammars are loaded at runtime using `dlopen`:
+Grammar language functions are statically linked into the binary. Each grammar is exposed via a thin C wrapper in `tree_sitter_helper.c` and bound with an OCaml `external` declaration:
+
+```c
+/* tree_sitter_helper.c */
+extern const TSLanguage *tree_sitter_typescript(void);
+CAMLprim value tsh_typescript_language(value v_unit) {
+    CAMLparam1(v_unit);
+    CAMLreturn(caml_copy_nativeint((intnat)tree_sitter_typescript()));
+}
+```
 
 ```ocaml
-let try_load_library lib_basename =
-  let lib_name = "lib" ^ lib_basename ^ ".so" in
-  (* Search multiple paths *)
-  let rec try_paths = function
-    | [] -> None
-    | path :: rest ->
-      try Some (Dl.dlopen ~filename:(path / lib_name) ~flags:[Dl.RTLD_NOW])
-      with Dl.DL_error _ -> try_paths rest
-  in
-  try_paths library_search_paths
+(* languages.ml *)
+external typescript_language : unit -> nativeint = "tsh_typescript_language"
 
-let load_language lib_basename func_name =
-  match try_load_library lib_basename with
-  | Some lib ->
-    (* Each grammar exports a function like tree_sitter_typescript() *)
-    let fn = foreign func_name (void @-> returning (ptr void)) ~from:lib in
-    fn ()
-  | None -> failwith "Grammar not found"
+let canonical_info = [
+  ("typescript", ["ts"], typescript_language);
+  ...
+]
 ```
+
+The grammar `.a` static archives are built by `grammars/build-grammars.sh`, copied into the dune build tree, and linked via `(foreign_archives ...)` in `lib/dune`. The binary is fully self-contained with no runtime library search.
 
 ### 4. Node Traversal API (`lib/node.ml`)
 
@@ -275,20 +270,43 @@ let matches = Match.find_matches_with_index ~index ~pattern
 
 ## Adding a New Language
 
-1. Add grammar info to `lib/languages.ml`:
+1. Add a C wrapper to `lib/tree_sitter_helper.c`:
+```c
+extern const TSLanguage *tree_sitter_ruby(void);
+CAMLprim value tsh_ruby_language(value v_unit) {
+    CAMLparam1(v_unit);
+    CAMLreturn(caml_copy_nativeint((intnat)tree_sitter_ruby()));
+}
+```
+
+2. Add the `external` binding and registry entry to `lib/languages.ml`:
 ```ocaml
-let language_info = [
+external ruby_language : unit -> nativeint = "tsh_ruby_language"
+
+let canonical_info = [
   ...
-  ("ruby", ("tree-sitter-ruby", "tree_sitter_ruby"));
+  ("ruby", [], ruby_language);
 ]
 ```
 
-2. Update `grammars/build-grammars.sh` to build the grammar:
+3. Add a copy rule and `(foreign_archives ...)` entry to `lib/dune`:
+```
+(rule (target libtree-sitter-ruby.a)
+ (deps ../grammars/lib/libtree-sitter-ruby.a)
+ (action (copy %{deps} %{target})))
+```
+And add `tree-sitter-ruby` to the `(foreign_archives ...)` list in the library stanza.
+
+4. Update `grammars/build-grammars.sh` to build the static archive:
 ```bash
 npm install tree-sitter-ruby
-cc -shared -fPIC -o lib/libtree-sitter-ruby.so \
-  node_modules/tree-sitter-ruby/src/parser.c \
+cc -O2 -c -o "$TMPDIR_LOCAL/ruby_parser.o" \
+  -I node_modules/tree-sitter-ruby/src \
+  node_modules/tree-sitter-ruby/src/parser.c
+cc -O2 -c -o "$TMPDIR_LOCAL/ruby_scanner.o" \
+  -I node_modules/tree-sitter-ruby/src \
   node_modules/tree-sitter-ruby/src/scanner.c
+ar rcs lib/libtree-sitter-ruby.a "$TMPDIR_LOCAL/ruby_parser.o" "$TMPDIR_LOCAL/ruby_scanner.o"
 ```
 
-3. Rebuild grammars: `cd grammars && ./build-grammars.sh`
+5. Rebuild: `cd grammars && ./build-grammars.sh && cd .. && dune build`

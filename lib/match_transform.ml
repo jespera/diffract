@@ -93,16 +93,18 @@ let instantiate_template ~substitutions ~text_bindings template =
     template substitutions
 
 (** Apply edits with overlap protection (keep first) *)
-let apply_edits source edits =
+let apply_edits_flagged source edits =
   let sorted = List.sort (fun a b -> compare a.start_byte b.start_byte) edits in
   let filtered = ref [] in
   let last_end = ref (-1) in
+  let had_overlaps = ref false in
   List.iter
     (fun e ->
       if e.start_byte >= !last_end then begin
         filtered := e :: !filtered;
         last_end := e.end_byte
-      end)
+      end else
+        had_overlaps := true)
     sorted;
   let to_apply =
     List.sort (fun a b -> compare b.start_byte a.start_byte) !filtered
@@ -116,7 +118,9 @@ let apply_edits source edits =
         in
         apply (prefix ^ e.replacement ^ suffix) rest
   in
-  apply source to_apply
+  (apply source to_apply, !had_overlaps)
+
+let apply_edits source edits = fst (apply_edits_flagged source edits)
 
 let get_replace_template pattern =
   let match_content = Tree.unwrap_root pattern.tree.root in
@@ -1035,14 +1039,15 @@ and compute_field_removal_edits ~(match_result : match_result) match_fields
       removed_fields;
     List.rev !edits
 
-let transform ~ctx ~language ~pattern_text ~source_text =
+let transform_with_overlap_flag ~ctx ~language ~pattern_text ~source_text =
   let pattern = Match_parse.parse_pattern ~ctx ~language pattern_text in
   if not pattern.is_transform then
-    {
-      edits = [];
-      original_source = source_text;
-      transformed_source = source_text;
-    }
+    ( {
+        edits = [];
+        original_source = source_text;
+        transformed_source = source_text;
+      },
+      false )
   else
     let source_tree = Tree.parse ~ctx ~language source_text in
     let source = source_tree.source in
@@ -1057,8 +1062,20 @@ let transform ~ctx ~language ~pattern_text ~source_text =
           compute_edits ~pattern ~match_result:m ~source ~inner_patterns:[])
         matches
     in
-    let transformed = apply_edits source_text edits in
-    { edits; original_source = source_text; transformed_source = transformed }
+    let transformed, had_overlaps = apply_edits_flagged source_text edits in
+    ( { edits; original_source = source_text; transformed_source = transformed },
+      had_overlaps )
+
+let transform ~ctx ~language ~pattern_text ~source_text =
+  let rec loop source =
+    let result, had_overlaps =
+      transform_with_overlap_flag ~ctx ~language ~pattern_text ~source_text:source
+    in
+    if had_overlaps then loop result.transformed_source
+    else result
+  in
+  let result = loop source_text in
+  { result with original_source = source_text }
 
 let transform_nested ~ctx ~language ~pattern_text ~source_text =
   let nested = Match_parse.parse_nested_pattern ~ctx ~language pattern_text in

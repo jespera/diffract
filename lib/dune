@@ -12,16 +12,47 @@
    %{targets}
    (bash "echo '('$(pkg-config --libs tree-sitter)')'"))))
 
+(rule
+ (target libtree-sitter-typescript.a)
+ (deps ../grammars/lib/libtree-sitter-typescript.a)
+ (action (copy %{deps} %{target})))
+
+(rule
+ (target libtree-sitter-tsx.a)
+ (deps ../grammars/lib/libtree-sitter-tsx.a)
+ (action (copy %{deps} %{target})))
+
+(rule
+ (target libtree-sitter-kotlin.a)
+ (deps ../grammars/lib/libtree-sitter-kotlin.a)
+ (action (copy %{deps} %{target})))
+
+(rule
+ (target libtree-sitter-php.a)
+ (deps ../grammars/lib/libtree-sitter-php.a)
+ (action (copy %{deps} %{target})))
+
+(rule
+ (target libtree-sitter-scala.a)
+ (deps ../grammars/lib/libtree-sitter-scala.a)
+ (action (copy %{deps} %{target})))
+
 (library
  (name diffract)
  (public_name diffract)
- (libraries ctypes ctypes.foreign)
+ (modes native)
  (foreign_stubs
   (language c)
-  (names ts_helper)
+  (names tree_sitter_helper)
   (flags
    (:standard)
    (:include c_flags.sexp)))
+ (foreign_archives
+  tree-sitter-typescript
+  tree-sitter-tsx
+  tree-sitter-kotlin
+  tree-sitter-php
+  tree-sitter-scala)
  (c_library_flags
   (:standard)
   (:include c_library_flags.sexp)))

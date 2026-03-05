@@ -216,7 +216,11 @@ val transform :
   transform_result
 (** [transform ~ctx ~language ~pattern_text ~source_text] applies a semantic
     patch to the source. Patterns with [-]/[+] prefixed lines produce edits;
-    patterns without them return the source unchanged. *)
+    patterns without them return the source unchanged.
+
+    All occurrences of the pattern are replaced. When matches overlap in the
+    source (as can happen with left-recursive constructs like nested member
+    expressions), the transform iterates until no overlapping matches remain. *)
 
 val transform_nested :
   ctx:Context.t ->

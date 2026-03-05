@@ -3,14 +3,14 @@
 ## Project Structure & Module Organization
 - `lib/`: core OCaml library (tree-sitter bindings, tree model, matching engine).
 - `bin/`: CLI entry point (`main.ml`).
-- `grammars/`: tree-sitter grammars and build script (`build-grammars.sh`), compiled `.so` in `grammars/lib/`.
+- `grammars/`: tree-sitter grammars and build script (`build-grammars.sh`), compiled `.a` static archives in `grammars/lib/`.
 - `tests/`: Alcotest unit tests (see `tests/test_runner.exe`).
 - `benchmarks/`: performance benchmarks and results.
 - `docs/`: internal architecture and pattern format references.
 
 ## Build, Test, and Development Commands
 - `opam install . --deps-only --with-test`: install OCaml deps (include test/benchmark deps).
-- `cd grammars && ./build-grammars.sh && cd ..`: build grammar `.so` libraries (requires `npm`).
+- `cd grammars && ./build-grammars.sh && cd ..`: build grammar static archives (requires `npm`).
 - `dune build`: build library + CLI.
 - `dune test`: run full test suite.
 - `dune exec tests/test_runner.exe -- test Match`: run a test group.
@@ -18,7 +18,7 @@
 - `dune exec benchmarks/bench_match.exe`: run pattern-matching benchmarks.
 
 ## Coding Style & Naming Conventions
-- Language: OCaml (plus small C helper in `lib/ts_helper.c`).
+- Language: OCaml (plus small C helper in `lib/tree_sitter_helper.c`).
 - Indentation: follow existing OCaml style in `lib/` and `tests/` (2-space indentation).
 - Naming: modules and functions use `snake_case`; types and modules use `CamelCase` when appropriate.
 - No repo-wide formatter is configured; keep diffs consistent with nearby code.
@@ -34,4 +34,4 @@
 
 ## Architecture Notes
 - Core parsing flow: tree-sitter -> C helper wrappers -> OCaml bindings -> pure OCaml tree (`lib/tree.ml`).
-- Grammar libraries are loaded at runtime from `grammars/lib/`; rebuild when adding languages.
+- Grammar libraries are statically linked into the binary; rebuild grammars and then `dune build` when adding languages.
