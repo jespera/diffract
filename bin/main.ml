@@ -390,7 +390,7 @@ let run_term =
      $ include_pattern $ exclude_patterns $ apply_flag $ in_place_flag))
 
 let cmd =
-  let doc = "Parse and search source files using tree-sitter" in
+  let doc = "Parse, search, and transform source files using tree-sitter" in
   let man =
     [
       `S Manpage.s_description;
@@ -399,6 +399,10 @@ let cmd =
       `I
         ( "Matching",
           "Find code patterns using concrete syntax with metavariables." );
+      `I
+        ( "Transformation",
+          "Apply semantic patches (spatch) to rewrite code, outputting a \
+           unified diff or editing files in place." );
       `S Manpage.s_examples;
       `P "$(b,Parsing:)";
       `Pre "  $(tname) example.ts";

@@ -36,31 +36,54 @@ diffract is an OCaml library and CLI for parsing source files with tree-sitter a
 - `diffract.ml` - Main module, re-exports submodules
 - `tree.ml` - Pure OCaml tree representation (eliminates FFI overhead during traversal)
 - `tree_sitter_bindings.ml` - Low-level ctypes FFI bindings
-- `ts_helper.c` - C helper layer wrapping TSNode in OCaml custom blocks (libffi can't handle 32-byte structs by value)
+- `tree_sitter_helper.c` - C helper layer wrapping TSNode in OCaml custom blocks (libffi can't handle 32-byte structs by value)
 - `node.ml` - FFI-based tree traversal (internal, used during parsing)
-- `languages.ml` - Dynamic grammar loading via dlopen
+- `languages.ml` - Static grammar registry (language name → `external` C binding)
 - `match.ml` - Index-based pattern matching with concrete syntax
 - `pattern.ml` - Pattern matching DSL
 
 **Tree-sitter Integration Flow:**
 1. C helper layer wraps TSNode/TSTree in OCaml custom blocks with finalizers
 2. ctypes-foreign binds to libtree-sitter and C helpers
-3. `languages.ml` loads grammar .so files at runtime via dlopen
+3. `languages.ml` dispatches to grammar language functions statically linked into the binary
 4. `tree.ml` converts FFI nodes to pure OCaml representation once during parsing
 
 ## Adding a New Language
 
-1. Add grammar info to `lib/languages.ml`:
+1. Add C wrapper and `external` binding to `lib/tree_sitter_helper.c` and `lib/languages.ml`:
+```c
+/* lib/tree_sitter_helper.c */
+extern const TSLanguage *tree_sitter_ruby(void);
+CAMLprim value tsh_ruby_language(value v_unit) {
+    CAMLparam1(v_unit); CAMLreturn(caml_copy_nativeint((intnat)tree_sitter_ruby())); }
+```
 ```ocaml
-let language_info = [
-  ...
-  ("ruby", ("tree-sitter-ruby", "tree_sitter_ruby"));
-]
+(* lib/languages.ml *)
+external ruby_language : unit -> nativeint = "tsh_ruby_language"
+(* add to canonical_info: ("ruby", [], ruby_language) *)
 ```
 
-2. Update `grammars/build-grammars.sh` with the compilation command
+2. Update `grammars/build-grammars.sh` with the compilation command:
+```bash
+npm install tree-sitter-ruby
+cc -O2 -c -o "$TMPDIR_LOCAL/ruby_parser.o" \
+  -I node_modules/tree-sitter-ruby/src \
+  node_modules/tree-sitter-ruby/src/parser.c
+cc -O2 -c -o "$TMPDIR_LOCAL/ruby_scanner.o" \
+  -I node_modules/tree-sitter-ruby/src \
+  node_modules/tree-sitter-ruby/src/scanner.c
+ar rcs lib/libtree-sitter-ruby.a "$TMPDIR_LOCAL/ruby_parser.o" "$TMPDIR_LOCAL/ruby_scanner.o"
+```
 
-3. Rebuild: `cd grammars && ./build-grammars.sh`
+3. Add copy rule and `(foreign_archives ...)` entry to `lib/dune`:
+```
+(rule (target libtree-sitter-ruby.a)
+ (deps ../grammars/lib/libtree-sitter-ruby.a)
+ (action (copy %{deps} %{target})))
+```
+And add `tree-sitter-ruby` to the `(foreign_archives ...)` list.
+
+4. Rebuild: `cd grammars && ./build-grammars.sh && cd .. && dune build`
 
 ## Pattern File Format
 

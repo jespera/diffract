@@ -3637,6 +3637,25 @@ const x = {
     "preserves c: 3" true
     (string_contains ~needle:"c: 3" result.transformed_source)
 
+(* Test: nested overlapping matches are all replaced via fixpoint iteration.
+   $X.foo on a.foo.b.foo: both .foo occurrences are nested (left-recursive AST),
+   so their edits overlap. transform iterates until all are resolved. *)
+let test_transform_fixpoint_nested_member () =
+  let pattern_text =
+    {|@@
+match: strict
+metavar $X: single
+@@
+- $X.foo
++ $X.bar|}
+  in
+  let result =
+    Match.transform ~ctx ~language:"typescript" ~pattern_text
+      ~source_text:"a.foo.b.foo"
+  in
+  Alcotest.(check string)
+    "all .foo replaced" "a.bar.b.bar" result.transformed_source
+
 let transform_tests =
   [
     Alcotest.test_case "simple rename" `Quick test_transform_simple_rename;
@@ -3682,6 +3701,8 @@ let transform_tests =
       test_partial_restructure_loses_extra_properties;
     Alcotest.test_case "partial remove nested" `Quick
       test_transform_partial_remove_nested;
+    Alcotest.test_case "nested overlapping fixpoint" `Quick
+      test_transform_fixpoint_nested_member;
   ]
 
 (* ===== Expansion tests ===== *)

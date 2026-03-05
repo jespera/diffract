@@ -10,43 +10,43 @@ type point = { row : int; column : int }
 
 (** {1 Tree operations} *)
 
-external parse : nativeint -> string -> tree = "ts_helper_parse"
-external root : tree -> t = "ts_helper_tree_root_node"
+external parse : nativeint -> string -> tree = "tsh_parse"
+external root : tree -> t = "tsh_tree_root_node"
 
 (** {1 Node properties} *)
 
-external node_type : t -> string = "ts_helper_node_type"
-external to_sexp : t -> string = "ts_helper_node_string"
-external is_named : t -> bool = "ts_helper_node_is_named"
-external is_null : t -> bool = "ts_helper_node_is_null"
+external node_type : t -> string = "tsh_node_type"
+external to_sexp : t -> string = "tsh_node_string"
+external is_named : t -> bool = "tsh_node_is_named"
+external is_null : t -> bool = "tsh_node_is_null"
 
 (** {1 Child access} *)
 
-external child_count : t -> int = "ts_helper_node_child_count"
-external named_child_count : t -> int = "ts_helper_node_named_child_count"
-external child : t -> int -> t = "ts_helper_node_child"
-external named_child : t -> int -> t = "ts_helper_node_named_child"
+external child_count : t -> int = "tsh_node_child_count"
+external named_child_count : t -> int = "tsh_node_named_child_count"
+external child : t -> int -> t = "tsh_node_child"
+external named_child : t -> int -> t = "tsh_node_named_child"
 
 external child_by_field_name : t -> string -> t
-  = "ts_helper_node_child_by_field_name"
+  = "tsh_node_child_by_field_name"
 
 external field_name_for_child : t -> int -> string option
-  = "ts_helper_node_field_name_for_child"
+  = "tsh_node_field_name_for_child"
 
 (** {1 Tree navigation} *)
 
-external parent : t -> t = "ts_helper_node_parent"
-external next_sibling : t -> t = "ts_helper_node_next_sibling"
-external prev_sibling : t -> t = "ts_helper_node_prev_sibling"
-external next_named_sibling : t -> t = "ts_helper_node_next_named_sibling"
-external prev_named_sibling : t -> t = "ts_helper_node_prev_named_sibling"
+external parent : t -> t = "tsh_node_parent"
+external next_sibling : t -> t = "tsh_node_next_sibling"
+external prev_sibling : t -> t = "tsh_node_prev_sibling"
+external next_named_sibling : t -> t = "tsh_node_next_named_sibling"
+external prev_named_sibling : t -> t = "tsh_node_prev_named_sibling"
 
 (** {1 Position information} *)
 
-external start_byte : t -> int = "ts_helper_node_start_byte"
-external end_byte : t -> int = "ts_helper_node_end_byte"
-external start_point_raw : t -> int * int = "ts_helper_node_start_point"
-external end_point_raw : t -> int * int = "ts_helper_node_end_point"
+external start_byte : t -> int = "tsh_node_start_byte"
+external end_byte : t -> int = "tsh_node_end_byte"
+external start_point_raw : t -> int * int = "tsh_node_start_point"
+external end_point_raw : t -> int * int = "tsh_node_end_point"
 
 let start_point node =
   let row, column = start_point_raw node in

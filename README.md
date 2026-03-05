@@ -4,11 +4,11 @@ An OCaml library and CLI tool for parsing source files using [tree-sitter](https
 
 ## Features
 
-- Parse source files to S-expressions using tree-sitter grammars
+- Parse source using tree-sitter grammars
 - Pattern matching with concrete syntax and metavariables
-- Semantic patch transforms (find-and-replace at the AST level)
+- Generic patch transforms in the style of Coccinelle (not-really semantic patches)
 - Expansion transforms: join or restructure each element of a matched sequence
-- Support for TypeScript, Kotlin, PHP, Scala, and other languages (extensible)
+- Support for TypeScript, TSX, Kotlin, PHP, Scala (extensible)
 
 ## Building
 
