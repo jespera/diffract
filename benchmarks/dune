@@ -1,6 +1,6 @@
 (executable
  (name bench_match)
- (libraries diffract bechamel bechamel-notty notty.unix yojson unix))
+ (libraries diffract bechamel yojson unix))
 
 (executable
  (name bench_compare)

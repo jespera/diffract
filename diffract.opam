@@ -10,15 +10,13 @@ license: "GPL-3.0-or-later"
 homepage: "https://github.com/jespera/diffract"
 bug-reports: "https://github.com/jespera/diffract/issues"
 depends: [
-  "ocaml" {>= "5.2"}
-  "dune" {>= "3.0" & >= "3.0"}
+  "ocaml" {>= "5.4"}
+  "dune" {>= "3.21" & >= "3.21"}
   "cmdliner" {>= "1.2"}
   "ctypes"
   "ctypes-foreign"
   "alcotest" {with-test}
   "bechamel" {with-test}
-  "bechamel-notty" {with-test}
-  "notty" {with-test}
   "yojson" {with-test}
   "odoc" {with-doc}
 ]
@@ -37,3 +35,4 @@ build: [
   ]
 ]
 dev-repo: "git+https://github.com/jespera/diffract.git"
+x-maintenance-intent: ["(latest)"]
