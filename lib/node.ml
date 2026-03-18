@@ -26,9 +26,7 @@ external child_count : t -> int = "tsh_node_child_count"
 external named_child_count : t -> int = "tsh_node_named_child_count"
 external child : t -> int -> t = "tsh_node_child"
 external named_child : t -> int -> t = "tsh_node_named_child"
-
-external child_by_field_name : t -> string -> t
-  = "tsh_node_child_by_field_name"
+external child_by_field_name : t -> string -> t = "tsh_node_child_by_field_name"
 
 external field_name_for_child : t -> int -> string option
   = "tsh_node_field_name_for_child"

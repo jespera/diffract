@@ -18,6 +18,7 @@ depends: [
   "alcotest" {with-test}
   "bechamel" {with-test}
   "yojson" {with-test}
+  "ocamlformat"
   "odoc" {with-doc}
 ]
 build: [

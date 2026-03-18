@@ -103,8 +103,8 @@ let apply_edits_flagged source edits =
       if e.start_byte >= !last_end then begin
         filtered := e :: !filtered;
         last_end := e.end_byte
-      end else
-        had_overlaps := true)
+      end
+      else had_overlaps := true)
     sorted;
   let to_apply =
     List.sort (fun a b -> compare b.start_byte a.start_byte) !filtered
@@ -1069,10 +1069,10 @@ let transform_with_overlap_flag ~ctx ~language ~pattern_text ~source_text =
 let transform ~ctx ~language ~pattern_text ~source_text =
   let rec loop source =
     let result, had_overlaps =
-      transform_with_overlap_flag ~ctx ~language ~pattern_text ~source_text:source
+      transform_with_overlap_flag ~ctx ~language ~pattern_text
+        ~source_text:source
     in
-    if had_overlaps then loop result.transformed_source
-    else result
+    if had_overlaps then loop result.transformed_source else result
   in
   let result = loop source_text in
   { result with original_source = source_text }
