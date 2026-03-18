@@ -365,10 +365,26 @@ let run file1 language list_languages match_pattern include_pattern
     (* Parse mode (single file, no flags) *)
     | None, Some path -> (
         try
+          let open Diffract.Tree in
           let tree = Diffract.parse_file_tree ~ctx ~language path in
-          print_string (Diffract.Tree.format_tree tree);
-          let errors = Diffract.Tree.error_count tree in
-          if errors > 0 then Printf.printf "\n%d parse error(s)\n" errors;
+          print_string (format_tree tree);
+          let error_nodes = get_errors tree in
+          if error_nodes <> [] then begin
+            Printf.printf "\n%d parse error(s):\n" (List.length error_nodes);
+            List.iter
+              (fun node ->
+                let row = node.start_point.row + 1 in
+                let col = node.start_point.column + 1 in
+                let src = tree.source in
+                let snippet =
+                  text src node
+                  |> String.map (fun c -> if c = '\n' then ' ' else c)
+                  |> fun s ->
+                  if String.length s > 60 then String.sub s 0 57 ^ "..." else s
+                in
+                Printf.printf "  %d:%d  %s\n" row col snippet)
+              error_nodes
+          end;
           `Ok ()
         with
         | Sys_error msg ->
