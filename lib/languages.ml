@@ -45,6 +45,5 @@ let list_available () =
     (fun (name, aliases, _) ->
       match aliases with
       | [] -> name
-      | _ ->
-          Printf.sprintf "%s (aliases: %s)" name (String.concat ", " aliases))
+      | _ -> Printf.sprintf "%s (aliases: %s)" name (String.concat ", " aliases))
     canonical_info

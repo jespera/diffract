@@ -21,4 +21,5 @@
   ctypes-foreign
   (alcotest :with-test)
   (bechamel :with-test)
-  (yojson :with-test)))
+  (yojson :with-test)
+  ocamlformat))
