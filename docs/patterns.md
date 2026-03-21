@@ -572,8 +572,11 @@ contains two or more `@@` sections used for expansion.
 ## Library API
 
 ```ocaml
+(* Create a context once at program start and reuse it *)
+let ctx = Diffract.Context.create () in
+
 (* Parse and traverse *)
-let tree = Diffract.parse_tree ~language:"typescript" code in
+let tree = Diffract.parse_tree ~ctx ~language:"typescript" code in
 Diffract.Tree.traverse (fun node ->
   Printf.printf "%s: %s\n"
     node.node_type
@@ -588,6 +591,7 @@ metavar $method: single
 @@
 $obj.$method()|} in
 let matches = Diffract.Match.find_matches
+  ~ctx
   ~language:"typescript"
   ~pattern_text
   ~source_text:code in
@@ -606,6 +610,7 @@ metavar $MSG: single
 - console.log($MSG)
 + logger.info($MSG)|} in
 let result = Diffract.Match.transform
+  ~ctx
   ~language:"typescript"
   ~pattern_text:patch
   ~source_text:code in
@@ -638,6 +643,7 @@ metavar $VAL: single
 - $KEY: $VAL
 + .with("$KEY", $VAL)|} in
 let result = Diffract.Match.transform_nested
+  ~ctx
   ~language:"typescript"
   ~pattern_text:patch
   ~source_text:code in

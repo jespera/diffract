@@ -4,7 +4,7 @@
 `diffract` is an OCaml-based library and CLI tool for parsing source files using [tree-sitter](https://tree-sitter.github.io/tree-sitter/) and performing pattern matching, structural diffing, and semantic transformations (find-and-replace at the AST level).
 
 ### Main Technologies
-- **OCaml (5.2+)**: Core logic and CLI.
+- **OCaml (5.4+)**: Core logic and CLI.
 - **Dune**: Build system.
 - **Tree-sitter**: Used for generating concrete syntax trees (CSTs) for various languages.
 - **Ctypes / C FFI**: For bridging OCaml with the C-based tree-sitter library and custom C helpers (grammar language functions are statically linked, not dynamically loaded).
@@ -14,9 +14,10 @@
 ### Architecture
 - **`lib/`**: Core library containing the matching engine, tree representation, and FFI bindings.
   - `tree.ml`: Pure OCaml representation of the syntax tree to avoid FFI overhead during traversal.
-  - `match_engine.ml`: Core structural matching algorithms (`strict`, `field`, `partial`).
   - `match_parse.ml`: Handles pattern parsing, including metavariables and ellipsis expansion.
-  - `match_search.ml`: Implements search, indexing (for fast multi-pattern matching), and formatting.
+  - `match_engine.ml`: Core structural matching algorithms (`strict`, `field`, `partial`).
+  - `match_search.ml`: Implements search, nested pattern contexts, indexing, and formatting.
+  - `match_transform.ml`: Computes and applies edits from match results (semantic patches).
   - `languages.ml`: Static registry mapping language names to grammar functions statically linked into the binary.
   - `tree_sitter_helper.c`: C wrappers to handle `TSNode` struct-by-value issues and tree-sitter memory management.
 - **`bin/`**: CLI entry point (`main.ml`).

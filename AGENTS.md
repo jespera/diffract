@@ -21,7 +21,7 @@
 - Language: OCaml (plus small C helper in `lib/tree_sitter_helper.c`).
 - Indentation: follow existing OCaml style in `lib/` and `tests/` (2-space indentation).
 - Naming: modules and functions use `snake_case`; types and modules use `CamelCase` when appropriate.
-- No repo-wide formatter is configured; keep diffs consistent with nearby code.
+- Code is formatted with `ocamlformat`. Run `dune fmt` before committing.
 
 ## Testing Guidelines
 - Framework: Alcotest (see `tests/` and `docs/benchmarks.md`).
