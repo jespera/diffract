@@ -149,11 +149,15 @@ Pattern matching is implemented as a pipeline:
 2. **Match**: `match_engine.ml` performs structural matching with three modes
    (`strict`, `field`, `partial`) and supports sequence metavars (except in `partial` mode).
 3. **Search**: `match_search.ml` traverses trees, handles nested patterns, and
-   formats match results. `match.ml` re-exports the public API.
+   formats match results.
+4. **Transform**: `match_transform.ml` computes text edits from match results and
+   applies expansion slots for multi-section semantic patches.
+   `match.ml` re-exports the public API.
 
 Example (public API):
 
 ```ocaml
+let ctx = Diffract.Context.create () in
 let pattern_text = {|@@
 match: strict
 metavar $OBJ: single
@@ -163,6 +167,7 @@ $OBJ.$METHOD()
 |} in
 
 let matches = Diffract.Match.find_matches
+  ~ctx
   ~language:"typescript"
   ~pattern_text
   ~source_text:code in
