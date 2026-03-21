@@ -14,7 +14,7 @@ An OCaml library and CLI tool for parsing source files using [tree-sitter](https
 
 ### Prerequisites
 
-- OCaml 5.2+
+- OCaml 5.4+
 - opam
 - tree-sitter library (`libtree-sitter`) - see below
 - npm (to fetch grammar sources)
@@ -58,8 +58,13 @@ dune fmt
 Formatting is managed via [ocamlformat](https://github.com/ocaml-pp/ocamlformat).
 Run `dune fmt` to reformat all OCaml and dune files before committing.
 
-**Note:** `dune fmt` emits "Stray '@'" warnings for `@@` delimiters appearing
-in doc comments. These are harmless and can be ignored.
+Because of caching, rerunning `dune fmt` might not produce warnings for things like stray `@` in doc comments.
+One can just run `ocamlformat` manually:
+
+```
+ocamlformat --check $(find lib -name '*.ml' -o -name '*.mli')
+```
+
 
 ## Usage
 

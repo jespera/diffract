@@ -42,8 +42,8 @@ let parse_preamble_line line =
     Some (OnVar var))
   else failwith (Printf.sprintf "Invalid preamble line: %s" line)
 
-(** Parse the @@ preamble from pattern text.
-    Format:
+(** Parse the \@@ preamble from pattern text. Format:
+    {v
       @@
       metavar $name: single
       metavar $other: sequence
@@ -51,6 +51,7 @@ let parse_preamble_line line =
       on $var
       @@
       pattern body
+    v}
     Returns parsed preamble or raises Failure if malformed. *)
 let parse_preamble text =
   let text = String.trim text in
@@ -288,10 +289,10 @@ let is_expansion_prefix c =
     separator ('~' stands for newline), and the line becomes a placeholder in
     replace_lines only. Lines with expansion-prefix characters but NO declared
     sequence metavar are treated as ordinary context lines so that code lines
-    starting with characters like '{' or '(' are never misidentified.
+    starting with characters like ['\{'] or ['('] are never misidentified.
     Ellipsis in context/minus lines becomes placeholders and is bound. Ellipsis
-    in plus-only lines is rejected (unbound). Returns
-    (match_text, replace_template, ellipsis_subs, expansion_slots, is_transform). *)
+    in plus-only lines is rejected (unbound). Returns (match_text,
+    replace_template, ellipsis_subs, expansion_slots, is_transform). *)
 let classify_and_preprocess_spatch ~sequence_metavars body =
   let lines = String.split_on_char '\n' body in
   let match_lines = ref [] in
@@ -567,10 +568,10 @@ let parse_pattern ~ctx ~language ?(inherited_metavars = [])
     expansion_slots;
   }
 
-(** Split pattern text into sections.
-    Each section has format: @@ metavars @@ pattern_code
-    A new section starts when we see @@ after having seen two @@ in the current section.
-    Returns list of section strings (each starting with @@). *)
+(** Split pattern text into sections. Each section has format: \@@ metavars \@@
+    pattern_code A new section starts when we see \@@ after having seen two \@@
+    in the current section. Returns list of section strings (each starting with
+    \@@). *)
 let split_pattern_sections text =
   let text = String.trim text in
   if not (String.starts_with ~prefix:"@@" text) then
@@ -603,7 +604,7 @@ let split_pattern_sections text =
     let sections = find_sections [] [] 0 lines in
     if sections = [] then [ text ] else sections
 
-(** Parse a nested pattern from text with multiple @@ sections *)
+(** Parse a nested pattern from text with multiple \@@ sections *)
 let parse_nested_pattern ~ctx ~language pattern_text =
   let sections = split_pattern_sections pattern_text in
   let rec parse_all inherited_vars inherited_seqs = function
@@ -613,7 +614,7 @@ let parse_nested_pattern ~ctx ~language pattern_text =
           parse_pattern ~ctx ~language ~inherited_metavars:inherited_vars
             ~inherited_sequences:inherited_seqs s
         in
-        (* Pass all cumulative metavars to next sections. Note that p.metavars 
+        (* Pass all cumulative metavars to next sections. Note that p.metavars
            already contains inherited_vars because we passed them in. *)
         p :: parse_all p.metavars p.sequence_metavars rest
   in
