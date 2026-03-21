@@ -15,6 +15,7 @@ val parse_pattern :
     format:
     {v
     @@
+    match: strict
     metavar $var1: single
     metavar $var2: single
     @@
@@ -22,22 +23,31 @@ val parse_pattern :
     v}
 
     Metavars declared between \@@ markers are replaced with valid identifiers
-    before parsing, allowing patterns to work across all languages. Raises
-    [Failure] if any metavar in the pattern body is not declared.
+    before parsing, allowing patterns to work across all languages.
 
-    {2 Global Scope and Unification}
+    [match:] is required; choose [strict] (ordered, no extra children),
+    [partial] (unordered subset), or [field] (field-name based).
 
-    Metavariables share a global scope across all sections of a pattern.
-    Shadowing is not permitted; declaring a metavariable that was already
-    defined in a previous section is an error. Every occurrence of a
-    metavariable in a match pattern must bind to structurally identical nodes
-    (Unification).
+    [?inherited_metavars] and [?inherited_sequences] carry metavar declarations
+    from preceding sections; omit them when parsing standalone single-section
+    patterns.
+
+    Raises [Failure] if: the pattern does not start and end with \@@ delimiters;
+    no [match:] mode is specified; a metavar in the pattern body is not
+    declared; or a replacement line references an undeclared metavar.
+
+    {2 Unification}
+
+    Every occurrence of a metavariable in a match pattern must bind to
+    structurally identical nodes (unification). Shadowing a metavar declared in
+    an inherited scope is an error.
 
     {2 Sequence metavars}
 
     Metavars declared with [sequence] type match zero or more sibling nodes:
     {v
     @@
+    match: strict
     metavar $class_name: single
     metavar $body: sequence
     @@
@@ -67,9 +77,11 @@ val parse_pattern :
     {2 Direct matching with 'on'}
 
     Use [on $VAR] to match directly against a previously-bound node instead of
-    traversing. This is used with nested patterns:
+    traversing the subtree. Typically used in inner sections of a nested
+    pattern:
     {v
     @@
+    match: strict
     metavar $OBJ: single
     @@
     foo($OBJ)
@@ -83,7 +95,8 @@ val parse_pattern :
     v}
 
     Section 2 matches directly against the node bound to [$OBJ], not its
-    subtree. *)
+    subtree. If [$OBJ] is a sequence metavar, the pattern is matched against
+    each element in the sequence. *)
 
 val parse_nested_pattern :
   ctx:Context.t -> language:string -> string -> nested_pattern
@@ -93,19 +106,22 @@ val parse_nested_pattern :
     Pattern format for nested matching:
     {v
     @@
-    $class_name $body
+    match: strict
+    metavar $class_name: single
+    metavar $body: sequence
     @@
     class $class_name { $body }
 
     @@
-    $msg
+    match: strict
+    metavar $msg: single
     @@
     console.log($msg)
     v}
 
-    - Each section declares its metavars in the preamble, then the pattern code
-    - If multiple sections exist, each one restricts the search scope for the
-      next
+    - Each section must declare its match mode and metavars in the preamble
+    - If multiple sections exist, each one restricts the search scope to within
+      the AST node matched by the previous section
     - The last section is the target pattern (what we're searching for)
     - All preceding sections are contexts (outer to inner)
     - All metavars share the same binding scope across all sections
@@ -232,9 +248,11 @@ val transform_nested :
   transform_result
 (** [transform_nested ~ctx ~language ~pattern_text ~source_text] applies a
     multi-section semantic patch. The first section is the outer match/replace
-    pattern; subsequent sections whose [on_var] matches an expansion slot's var
-    are applied per-element as transform expansions. Single-section patterns
-    behave identically to [transform]. *)
+    pattern. For each expansion slot (separator-prefix line), if a subsequent
+    section declares [on $VAR] matching that slot's variable, its transform is
+    applied to each element; elements with no matching inner section are passed
+    through unchanged. Single-section patterns behave identically to
+    [transform]. *)
 
 val transform_file :
   ctx:Context.t ->
