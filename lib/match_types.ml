@@ -39,7 +39,7 @@ type expansion_slot = {
 type pattern = {
   metavars : string list;  (** Original metavar names (e.g., ["$msg"; "$fn"]) *)
   sequence_metavars : string list;
-      (** Metavars that match sequences (declared with * suffix) *)
+      (** Metavars that match sequences (declared with [: sequence]) *)
   substitutions : (string * string) list;
       (** Maps original name -> placeholder *)
   tree : Tree.pat Tree.tree;
