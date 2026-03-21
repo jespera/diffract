@@ -16,7 +16,7 @@ type child_correspondence = { pattern_index : int; source_index : int }
 (** A correspondence between a pattern child index and a source child index *)
 
 type text_edit = { start_byte : int; end_byte : int; replacement : string }
-(** A text edit: replace bytes [start_byte, end_byte) with replacement *)
+(** A text edit: replace bytes \[start_byte, end_byte) with replacement *)
 
 type transform_result = {
   edits : text_edit list;

@@ -11,8 +11,8 @@ val parse_pattern :
   ?inherited_sequences:string list ->
   string ->
   pattern
-(** [parse_pattern ~ctx ~language pattern_text] parses a pattern file.
-    Pattern format:
+(** [parse_pattern ~ctx ~language pattern_text] parses a pattern file. Pattern
+    format:
     {v
     @@
     metavar $var1: single
@@ -21,9 +21,9 @@ val parse_pattern :
     code using $var1 and $var2
     v}
 
-    Metavars declared between @@ markers are replaced with valid identifiers
-    before parsing, allowing patterns to work across all languages.
-    Raises [Failure] if any metavar in the pattern body is not declared.
+    Metavars declared between \@@ markers are replaced with valid identifiers
+    before parsing, allowing patterns to work across all languages. Raises
+    [Failure] if any metavar in the pattern body is not declared.
 
     {2 Global Scope and Unification}
 
@@ -45,8 +45,8 @@ val parse_pattern :
     v}
 
     Here [$body] will match any number of children inside the class body,
-    binding their combined text to [$body]. This allows matching classes
-    with multiple methods, statements, etc.
+    binding their combined text to [$body]. This allows matching classes with
+    multiple methods, statements, etc.
 
     {2 Partial matching}
 
@@ -82,12 +82,13 @@ val parse_pattern :
     { someField: $X }
     v}
 
-    Section 2 matches directly against the node bound to [$OBJ], not its subtree. *)
+    Section 2 matches directly against the node bound to [$OBJ], not its
+    subtree. *)
 
 val parse_nested_pattern :
   ctx:Context.t -> language:string -> string -> nested_pattern
 (** [parse_nested_pattern ~ctx ~language pattern_text] parses a pattern with
-    multiple @@ sections for nested/scoped matching.
+    multiple \@@ sections for nested/scoped matching.
 
     Pattern format for nested matching:
     {v
@@ -103,7 +104,8 @@ val parse_nested_pattern :
     v}
 
     - Each section declares its metavars in the preamble, then the pattern code
-    - If multiple sections exist, each one restricts the search scope for the next
+    - If multiple sections exist, each one restricts the search scope for the
+      next
     - The last section is the target pattern (what we're searching for)
     - All preceding sections are contexts (outer to inner)
     - All metavars share the same binding scope across all sections
