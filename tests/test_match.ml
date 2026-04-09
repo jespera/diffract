@@ -2280,6 +2280,94 @@ const another = { ...source };
   Alcotest.(check bool) "found original" true (List.mem "original" objs);
   Alcotest.(check bool) "found source" true (List.mem "source" objs)
 
+(* Test: ellipsis should not require that the last matched element is the last
+   child — trailing extra statements should be implicitly allowed. *)
+let test_ellipsis_implicit_trailing () =
+  let pattern =
+    {|@@
+match: strict
+@@
+function test() {
+    const a = 1;
+    ...
+    const b = 2;
+}|}
+  in
+  let source =
+    {|
+function test() {
+    const a = 1;
+    const x = 0;
+    const b = 2;
+    const c = 3;
+}|}
+  in
+  let results =
+    Match.find_matches ~ctx ~language:"typescript" ~pattern_text:pattern
+      ~source_text:source
+  in
+  Alcotest.(check int) "found match despite trailing extra statements" 1
+    (List.length results)
+
+(* Test: ellipsis should not require that the first matched element is the first
+   child — leading extra statements should be implicitly allowed. *)
+let test_ellipsis_implicit_leading () =
+  let pattern =
+    {|@@
+match: strict
+@@
+function test() {
+    const a = 1;
+    ...
+    const b = 2;
+}|}
+  in
+  let source =
+    {|
+function test() {
+    const z = 0;
+    const a = 1;
+    const x = 0;
+    const b = 2;
+}|}
+  in
+  let results =
+    Match.find_matches ~ctx ~language:"typescript" ~pattern_text:pattern
+      ~source_text:source
+  in
+  Alcotest.(check int) "found match despite leading extra statements" 1
+    (List.length results)
+
+(* Test: ellipsis should work when there are both leading and trailing extra
+   statements — this was the original failing case from the user report. *)
+let test_ellipsis_implicit_leading_and_trailing () =
+  let pattern =
+    {|@@
+match: strict
+@@
+function test() {
+    const a = 1;
+    ...
+    const b = 2;
+}|}
+  in
+  let source =
+    {|
+function test() {
+    const z = 0;
+    const a = 1;
+    const x = 0;
+    const b = 2;
+    const c = 3;
+}|}
+  in
+  let results =
+    Match.find_matches ~ctx ~language:"typescript" ~pattern_text:pattern
+      ~source_text:source
+  in
+  Alcotest.(check int) "found match despite leading and trailing extra statements"
+    1 (List.length results)
+
 let ellipsis_tests =
   [
     Alcotest.test_case "ellipsis statements" `Quick test_ellipsis_statements;
@@ -2295,6 +2383,12 @@ let ellipsis_tests =
     Alcotest.test_case "ellipsis tsx arrow" `Quick test_ellipsis_tsx_arrow;
     Alcotest.test_case "ellipsis typescript spread" `Quick
       test_ellipsis_typescript_spread;
+    Alcotest.test_case "ellipsis implicit trailing" `Quick
+      test_ellipsis_implicit_trailing;
+    Alcotest.test_case "ellipsis implicit leading" `Quick
+      test_ellipsis_implicit_leading;
+    Alcotest.test_case "ellipsis implicit leading and trailing" `Quick
+      test_ellipsis_implicit_leading_and_trailing;
   ]
 
 (* === Scala-specific tests === *)
