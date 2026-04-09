@@ -382,7 +382,7 @@ and compute_edits_strict ~pattern ~(match_result : match_result) ~source
     | _ -> false)
     && pattern_root.Tree.node_type <> match_result.node.Tree.node_type
   in
-  let start_byte, end_byte, source_col =
+  let start_byte, end_byte =
     if is_bare_seq && match_result.correspondences <> [] then
       let source_children =
         Array.of_list (Tree.named_children match_result.node)
@@ -395,25 +395,12 @@ and compute_edits_strict ~pattern ~(match_result : match_result) ~source
         List.fold_left (fun a c -> max a c.source_index) min_int corrs
       in
       ( source_children.(min_si).Tree.start_byte,
-        source_children.(max_si).Tree.end_byte,
-        (Tree.start_point source_children.(min_si)).column )
+        source_children.(max_si).Tree.end_byte )
     else
       ( match_result.node.Tree.start_byte,
-        match_result.node.Tree.end_byte,
-        match_result.start_point.column )
+        match_result.node.Tree.end_byte )
   in
-  let tmpl_col = template_base_column template in
-  let replacement =
-    adjust_indentation ~source_column:source_col ~template_base_column:tmpl_col
-      instantiated
-  in
-  [
-    {
-      start_byte;
-      end_byte;
-      replacement;
-    };
-  ]
+  [ { start_byte; end_byte; replacement = instantiated } ]
 
 and compute_edits_partial ~pattern ~(match_result : match_result) ~source
     ~inner_patterns =
