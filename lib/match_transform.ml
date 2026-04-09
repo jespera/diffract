@@ -88,6 +88,21 @@ let instantiate_template ~substitutions ~text_bindings template =
     (fun instantiated (var_name, placeholder) ->
       match List.assoc_opt var_name text_bindings with
       | Some value ->
+          (* Avoid double semicolons: the ellipsis preprocessing appends ';' to
+             each placeholder so it parses as a valid statement, but the bound
+             sequence text already ends with ';' for statement-type nodes.
+             Replace 'placeholder;' → value first (consuming the template ';')
+             when the value ends with ';', then do a plain pass for any remaining
+             occurrences without a trailing ';'. *)
+          let instantiated =
+            if
+              String.length value > 0
+              && value.[String.length value - 1] = ';'
+            then
+              string_replace_all ~needle:(placeholder ^ ";")
+                ~replacement:value instantiated
+            else instantiated
+          in
           string_replace_all ~needle:placeholder ~replacement:value instantiated
       | None -> instantiated)
     template substitutions
@@ -354,7 +369,39 @@ and compute_edits_strict ~pattern ~(match_result : match_result) ~source
     instantiate_template ~substitutions:pattern.substitutions
       ~text_bindings:match_result.bindings template
   in
-  let source_col = match_result.start_point.column in
+  (* For bare-sequence matches the matched node is the container (e.g.
+     statement_block), but the edit must only cover the explicitly-matched
+     statements — items before the first anchor and after the last anchor were
+     matched implicitly and must be left unchanged.
+     Detect by checking whether the pattern root (after unwrapping) is a
+     program/module wrapper while the matched source node is something else. *)
+  let pattern_root = Match_engine.get_pattern_content pattern in
+  let is_bare_seq =
+    (match pattern_root.Tree.node_type with
+    | "program" | "module" | "source_file" | "compilation_unit" -> true
+    | _ -> false)
+    && pattern_root.Tree.node_type <> match_result.node.Tree.node_type
+  in
+  let start_byte, end_byte, source_col =
+    if is_bare_seq && match_result.correspondences <> [] then
+      let source_children =
+        Array.of_list (Tree.named_children match_result.node)
+      in
+      let corrs = match_result.correspondences in
+      let min_si =
+        List.fold_left (fun a c -> min a c.source_index) max_int corrs
+      in
+      let max_si =
+        List.fold_left (fun a c -> max a c.source_index) min_int corrs
+      in
+      ( source_children.(min_si).Tree.start_byte,
+        source_children.(max_si).Tree.end_byte,
+        (Tree.start_point source_children.(min_si)).column )
+    else
+      ( match_result.node.Tree.start_byte,
+        match_result.node.Tree.end_byte,
+        match_result.start_point.column )
+  in
   let tmpl_col = template_base_column template in
   let replacement =
     adjust_indentation ~source_column:source_col ~template_base_column:tmpl_col
@@ -362,8 +409,8 @@ and compute_edits_strict ~pattern ~(match_result : match_result) ~source
   in
   [
     {
-      start_byte = match_result.node.start_byte;
-      end_byte = match_result.node.end_byte;
+      start_byte;
+      end_byte;
       replacement;
     };
   ]

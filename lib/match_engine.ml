@@ -176,7 +176,27 @@ let rec match_node ~pattern ~pattern_source ~source ~substitutions
       (* Not a metavar - must match structurally *)
       let pattern_type = Tree.node_type pattern_node in
       let source_type = Tree.node_type source_node in
-      if pattern_type <> source_type then None
+      if pattern_type <> source_type then
+        (* Bare-sequence fallback: if the pattern root is a program/module/etc.
+           wrapper node with 2+ named children, skip the type check and match
+           the children sequence against the source node's children. This lets
+           bare multi-statement patterns (e.g. `const a; ...; const b;`) match
+           inside function bodies (statement_block) or other containers without
+           requiring the statements to be wrapped in a function in the pattern. *)
+        let is_root_wrapper =
+          match pattern_type with
+          | "program" | "module" | "source_file" | "compilation_unit" -> true
+          | _ -> false
+        in
+        if is_root_wrapper then
+          let pattern_children = Tree.named_children pattern_node in
+          match pattern_children with
+          | [] | [ _ ] -> None
+          | _ ->
+              let source_children = Tree.named_children source_node in
+              match_children ~pattern ~pattern_source ~source ~substitutions
+                pattern_node source_node pattern_children source_children bindings
+        else None
       else
         (* Check if this is a leaf node *)
         let pattern_children = Tree.named_children pattern_node in
@@ -233,11 +253,31 @@ and match_children_exact ~pattern ~pattern_source ~source ~substitutions
   (* Build type index once: node_type -> positions where that type appears *)
   let type_index = build_type_index source_arr 0 source_len in
 
+  let is_seq p =
+    is_sequence_placeholder ~pattern substitutions pattern_source p
+  in
+
+  (* Whether the pattern contains any sequence metavar *)
+  let has_seq_metavar = Array.exists is_seq pattern_arr in
+  (* Whether the first / last element is itself a sequence *)
+  let first_is_seq =
+    pattern_len > 0 && is_seq pattern_arr.(0)
+  in
+  let last_is_seq =
+    pattern_len > 0 && is_seq pattern_arr.(pattern_len - 1)
+  in
+
   (* Match starting from pattern index pi and source index si *)
   let rec match_from bindings pi si =
     if pi >= pattern_len then
-      (* No more pattern - succeed only if no source left *)
-      if si >= source_len then Some bindings else None
+      (* Succeed if source is exhausted, or if the pattern has sequences and
+         does not end with one: items after the last concrete element are
+         implicitly accepted (Coccinelle-style subsequence semantics). When the
+         pattern ends with an explicit sequence metavar, that sequence must
+         consume the remaining children so their text is captured correctly. *)
+      if si >= source_len || (has_seq_metavar && not last_is_seq) then
+        Some bindings
+      else None
     else
       let p = pattern_arr.(pi) in
       let is_seq =
@@ -322,12 +362,37 @@ and match_children_exact ~pattern ~pattern_source ~source ~substitutions
         | None -> None
         | Some merged ->
             let corr = { pattern_index = pi; source_index = si } in
+            (* Reset correspondences to outer-level only: inner recursive matching
+               (via match_node) propagates and accumulates correspondences from
+               sub-tree matches (e.g., the children of a lexical_declaration).
+               Those inner indices belong to a different index space and would
+               corrupt the span calculation in compute_edits_strict if kept.
+               We only need top-level correspondences at this container level. *)
             let merged =
-              { merged with correspondences = corr :: merged.correspondences }
+              { merged with correspondences = corr :: bindings.correspondences }
             in
             match_from merged (pi + 1) (si + 1)
   in
-  match_from bindings 0 0
+  (* If the pattern has sequences but doesn't start with one, try starting at
+     each position where the first element's node type appears. This gives
+     implicit-leading semantics: items before the first concrete element are
+     silently accepted without requiring a leading `...` in the pattern.
+     When the pattern starts with an explicit sequence it already handles the
+     prefix by consuming 0 or more items before the first concrete element. *)
+  if not has_seq_metavar || first_is_seq then match_from bindings 0 0
+  else
+    let anchor_type = pattern_arr.(0).Tree.node_type in
+    let start_positions =
+      try Hashtbl.find type_index anchor_type with Not_found -> []
+    in
+    let rec try_starts = function
+      | [] -> None
+      | si :: rest -> (
+          match match_from bindings 0 si with
+          | Some _ as r -> r
+          | None -> try_starts rest)
+    in
+    try_starts start_positions
 
 (** Partial (unordered subset) child matching. Each pattern child must find a
     matching source child (any position, consumed once matched). Extra source

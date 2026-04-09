@@ -3475,6 +3475,119 @@ metavar $X: single
       ignore
         (Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text))
 
+(* Test: bare-sequence pattern can remove a statement while keeping surrounding
+   context — both leading statements (before first anchor) and trailing
+   statements (after last anchor) must be preserved. *)
+let test_transform_bare_sequence_remove () =
+  let pattern_text =
+    {|@@
+match: strict
+@@
+  const a = 1;
+  ...
+- const b = 2;|}
+  in
+  let source_text =
+    {|function test() {
+  const a = 1;
+  const x = 0;
+  const b = 2;
+  const c = 3;
+}|}
+  in
+  let result =
+    Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text
+  in
+  Alcotest.(check bool)
+    "removes const b" false
+    (string_contains ~needle:"const b = 2" result.transformed_source);
+  Alcotest.(check bool)
+    "keeps const a" true
+    (string_contains ~needle:"const a = 1" result.transformed_source);
+  Alcotest.(check bool)
+    "keeps const x" true
+    (string_contains ~needle:"const x = 0" result.transformed_source);
+  Alcotest.(check bool)
+    "keeps const c" true
+    (string_contains ~needle:"const c = 3" result.transformed_source)
+
+(* Test: bare-sequence transform works when there are leading statements before
+   the first anchor and trailing statements after the last anchor. *)
+let test_transform_bare_sequence_leading_trailing () =
+  let pattern_text =
+    {|@@
+match: strict
+@@
+  const a = 1;
+  ...
+- const b = 2;|}
+  in
+  let source_text =
+    {|function test() {
+  const z = 0;
+  const a = 1;
+  const x = 0;
+  const b = 2;
+  const c = 3;
+}|}
+  in
+  let result =
+    Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text
+  in
+  Alcotest.(check bool)
+    "removes const b" false
+    (string_contains ~needle:"const b = 2" result.transformed_source);
+  Alcotest.(check bool)
+    "keeps const z" true
+    (string_contains ~needle:"const z = 0" result.transformed_source);
+  Alcotest.(check bool)
+    "keeps const a" true
+    (string_contains ~needle:"const a = 1" result.transformed_source);
+  Alcotest.(check bool)
+    "keeps const c" true
+    (string_contains ~needle:"const c = 3" result.transformed_source)
+
+(* Test: bare-sequence pattern with a '+' insertion line adds a statement while
+   preserving leading and trailing statements not covered by the pattern. Also
+   checks that the substituted sequence text does not produce double semicolons. *)
+let test_transform_bare_sequence_insert () =
+  let pattern_text =
+    {|@@
+match: strict
+@@
+  setup();
+  ...
++ log("done");
+  start();|}
+  in
+  let source_text =
+    {|function init() {
+  preamble();
+  setup();
+  configure();
+  start();
+  cleanup();
+}|}
+  in
+  let result =
+    Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text
+  in
+  Alcotest.(check bool)
+    "inserts log" true
+    (string_contains ~needle:{|log("done")|} result.transformed_source);
+  Alcotest.(check bool)
+    "keeps preamble" true
+    (string_contains ~needle:"preamble()" result.transformed_source);
+  Alcotest.(check bool)
+    "keeps configure" true
+    (string_contains ~needle:"configure()" result.transformed_source);
+  Alcotest.(check bool)
+    "keeps cleanup" true
+    (string_contains ~needle:"cleanup()" result.transformed_source);
+  Alcotest.(check bool)
+    "no double semicolon" false
+    (string_contains ~needle:";;" result.transformed_source)
+
 (* Test: ellipsis in context lines is handled in transforms *)
 let test_transform_ellipsis_context () =
   let pattern_text =
@@ -3506,7 +3619,8 @@ function test() {
     "no ellipsis left" false
     (string_contains ~needle:"..." result.transformed_source)
 
-(* Test: - ... removes the in-between block when anchored *)
+(* Test: '- ...' is rejected — ellipsis on a minus line would silently delete
+   unnamed statements, so it is not supported. *)
 let test_transform_ellipsis_remove_block () =
   let pattern_text =
     {|@@
@@ -3519,27 +3633,11 @@ function init() {
     start($X);
 }|}
   in
-  let source_text =
-    {|function init() {
-  setup();
-  log("starting");
-  warmup();
-  start(mode);
-}|}
-  in
-  let result =
-    Match.transform ~ctx ~language:"typescript" ~pattern_text ~source_text
-  in
-  Alcotest.(check bool)
-    "removes log" false
-    (string_contains ~needle:"log(\"starting\")" result.transformed_source);
-  Alcotest.(check bool)
-    "removes warmup" false
-    (string_contains ~needle:"warmup()" result.transformed_source);
-  Alcotest.(check bool)
-    "keeps anchors" true
-    (string_contains ~needle:"setup();" result.transformed_source
-    && string_contains ~needle:"start(mode);" result.transformed_source)
+  Alcotest.check_raises "ellipsis on minus line is rejected"
+    (Failure "Ellipsis (...) on a '-' line is not supported") (fun () ->
+      ignore
+        (Match.transform ~ctx ~language:"typescript" ~pattern_text
+           ~source_text:"function init() { setup(); start(x); }"))
 
 (* Test: partial mode transform - JSX attribute deep in list (regression for
    inner correspondences overwriting outer pattern→source index mapping) *)
@@ -3783,6 +3881,12 @@ let transform_tests =
     Alcotest.test_case "ellipsis context" `Quick test_transform_ellipsis_context;
     Alcotest.test_case "ellipsis remove block" `Quick
       test_transform_ellipsis_remove_block;
+    Alcotest.test_case "bare sequence remove statement" `Quick
+      test_transform_bare_sequence_remove;
+    Alcotest.test_case "bare sequence with leading and trailing" `Quick
+      test_transform_bare_sequence_leading_trailing;
+    Alcotest.test_case "bare sequence insert no double semi" `Quick
+      test_transform_bare_sequence_insert;
     Alcotest.test_case "partial deep attr" `Quick
       test_transform_partial_deep_attr;
     Alcotest.test_case "partial backtracking" `Quick
