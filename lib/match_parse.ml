@@ -342,6 +342,19 @@ let classify_and_preprocess_spatch ~sequence_metavars body =
     (fun line ->
       if String.length line >= 2 && line.[0] = '-' && line.[1] = ' ' then begin
         let content = String.sub line 2 (String.length line - 2) in
+        (* Disallow ellipsis on minus lines: '...' matches unknown content, so
+           removing it with '-' would silently delete statements the user never
+           explicitly named. Use a named sequence metavar if intentional removal
+           of a known span is needed. *)
+        let rec scan i =
+          if i + 2 >= String.length content then false
+          else if
+            content.[i] = '.' && content.[i + 1] = '.' && content.[i + 2] = '.'
+          then if is_spread_at content i then scan (i + 3) else true
+          else scan (i + 1)
+        in
+        if scan 0 then
+          failwith "Ellipsis (...) on a '-' line is not supported";
         let transformed = replace_ellipsis_in_line content in
         match_lines := transformed :: !match_lines
       end
