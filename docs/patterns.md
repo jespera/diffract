@@ -137,7 +137,9 @@ Notes:
 
 ## Nested Patterns with `on $VAR`
 
-Use multiple `@@` sections for nested/scoped matching. Each context pattern restricts where the next pattern can match:
+Use `on $VAR` in a section to match directly against a previously-bound node
+instead of traversing the whole source tree. This restricts where the later
+section can match:
 
 ```
 @@
@@ -149,14 +151,18 @@ class $class_name { $body }
 
 @@
 match: strict
+on $body
 metavar $msg: single
 @@
 console.log($msg)
 ```
 
-This finds `console.log` calls only inside class bodies, not at the top level.
+This finds `console.log` calls only inside class bodies, not at the top level:
+section 1 binds `$body` to the class body node; section 2 uses `on $body` to
+search within that node only.
 
-Use `on $VAR` to match directly against a previously-bound node instead of traversing its subtree:
+`on $VAR` also works when the bound variable is a **sequence** metavar. In that
+case the inner pattern is matched against each element of the sequence in turn.
 
 ```
 @@
@@ -195,11 +201,100 @@ line 12: Math.floor(x + 1)
 
 Metavariables are pre-processed before parsing, so they work across all supported languages regardless of whether `$name` is valid syntax in that language.
 
+## Conjunctive Sibling Sections
+
+When a multi-section pattern has **no** `on $VAR` directives, all sections are
+**conjunctive siblings**: each section searches the source file independently,
+and the rule fires only if every section finds at least one match. If any section
+finds nothing, no transforms are applied and the source is left unchanged.
+
+This is useful when two changes must always happen together — for example,
+renaming an import and updating all its call sites.
+
+### Example: rename import and call sites together
+
+```
+@@
+match: strict
+@@
+- import { useAppSelector } from "app/hooks";
++ import { useUser } from "app/UserContext";
+
+@@
+match: strict
+metavar $NAME: single
+metavar $PARAM: single
+@@
+- const $NAME = useAppSelector(($PARAM) => $PARAM.users.user);
++ const { user: $NAME } = useUser();
+```
+
+Both sections must match somewhere in the file. If the import is absent the
+call sites are left alone; if there are no matching call sites the import is
+left alone. When both are present, both transforms are applied in a single pass.
+
+### Guard sections
+
+A section with no `-`/`+` lines acts as a **guard**: it must match somewhere in
+the file but contributes no edits. Use this to make a transform conditional on
+the presence of some other code.
+
+```
+@@
+match: strict
+@@
+- foo()
++ bar()
+
+@@
+match: strict
+@@
+setupFoo()
+```
+
+`foo()` is only renamed if `setupFoo()` also appears somewhere in the file.
+
+### Independent metavar scope
+
+Each sibling section has its own independent metavar scope. The same name can
+be declared in multiple sections without conflict:
+
+```
+@@
+match: strict
+metavar $X: single
+@@
+- foo($X)
++ bar($X)
+
+@@
+match: strict
+metavar $X: single
+@@
+- baz($X)
++ qux($X)
+```
+
+The `$X` in section 1 and the `$X` in section 2 are entirely independent
+bindings.
+
+### Mutually exclusive modes
+
+Conjunctive sibling sections (no `on $VAR`) and outer+inner sections (with
+`on $VAR`) cannot be mixed in the same pattern. Attempting to do so raises an
+error at parse time.
+
+Use `Match.transform_nested` (rather than `Match.transform`) when the pattern
+contains two or more `@@` sections.
+
 ## Metavariable Scoping
 
-### Global scope across sections
+### Global scope across sections (outer+inner mode)
 
-Metavariables share a **global scope** across all sections of a multi-section pattern. A metavar declared in an outer section is automatically in scope for all inner sections — you do not need to (and must not) re-declare it:
+In outer+inner mode (patterns that use `on $VAR`), metavariables share a
+**global scope** across all sections. A metavar declared in the outer section
+is automatically in scope for all inner sections — you do not need to (and must
+not) re-declare it:
 
 ```
 @@
@@ -217,7 +312,7 @@ console.log($CLASS)
 
 Here the inner section uses `$CLASS` (declared in the outer section) directly in its pattern body without re-declaring it. This matches only `console.log` calls whose argument is the same identifier as the enclosing class name.
 
-### No shadowing
+### No shadowing (outer+inner mode)
 
 Declaring a metavar in an inner section that was already declared in an outer section is an error:
 
@@ -542,7 +637,8 @@ match(tag)
 ```
 
 Use `Match.transform_nested` (instead of `Match.transform`) when the pattern
-contains two or more `@@` sections used for expansion.
+contains two or more `@@` sections — whether for expansion or conjunctive
+sibling transforms.
 
 #### Constraints
 
@@ -642,6 +738,28 @@ metavar $VAL: single
 @@
 - $KEY: $VAL
 + .with("$KEY", $VAL)|} in
+let result = Diffract.Match.transform_nested
+  ~ctx
+  ~language:"typescript"
+  ~pattern_text:patch
+  ~source_text:code in
+print_string result.transformed_source
+
+(* Apply a conjunctive sibling patch — use transform_nested.
+   Both sections must match or neither transform is applied. *)
+let patch = {|@@
+match: strict
+@@
+- import { useAppSelector } from "app/hooks";
++ import { useUser } from "app/UserContext";
+
+@@
+match: strict
+metavar $NAME: single
+metavar $PARAM: single
+@@
+- const $NAME = useAppSelector(($PARAM) => $PARAM.users.user);
++ const { user: $NAME } = useUser();|} in
 let result = Diffract.Match.transform_nested
   ~ctx
   ~language:"typescript"

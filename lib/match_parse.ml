@@ -617,32 +617,70 @@ let split_pattern_sections text =
     let sections = find_sections [] [] 0 lines in
     if sections = [] then [ text ] else sections
 
-(** Parse a nested pattern from text with multiple \@@ sections *)
+(** Quick scan: does a section's preamble contain an 'on $...' directive? *)
+let section_has_on_var section_text =
+  let lines = String.split_on_char '\n' section_text in
+  let at_count = ref 0 in
+  let found = ref false in
+  (try
+     List.iter
+       (fun line ->
+         let trimmed = String.trim line in
+         if String.starts_with ~prefix:"@@" trimmed then begin
+           incr at_count;
+           if !at_count >= 2 then raise Exit
+         end else if
+           !at_count = 1 && String.starts_with ~prefix:"on " trimmed
+         then found := true)
+       lines
+   with Exit -> ());
+  !found
+
+(** Parse a nested pattern from text with multiple \@@ sections.
+
+    Two modes are supported and must not be mixed:
+
+    - {b Outer+inner mode}: one or more non-first sections carry [on $VAR],
+      targeting expansion slots of the first (outer) section. Metavars are
+      accumulated across sections.
+
+    - {b Conjunctive siblings mode}: no section carries [on $VAR]. Each section
+      is parsed with its own independent scope. At transform time all sections
+      must find at least one match for any edits to be applied (all-or-nothing). *)
 let parse_nested_pattern ~ctx ~language pattern_text =
   let sections = split_pattern_sections pattern_text in
-  let rec parse_all inherited_vars inherited_seqs = function
-    | [] -> []
-    | s :: rest ->
-        let p =
-          parse_pattern ~ctx ~language ~inherited_metavars:inherited_vars
-            ~inherited_sequences:inherited_seqs s
-        in
-        (* Pass all cumulative metavars to next sections. Note that p.metavars
-           already contains inherited_vars because we passed them in. *)
-        p :: parse_all p.metavars p.sequence_metavars rest
+  (* Check non-first sections for on $VAR to determine mode. *)
+  let non_first =
+    match sections with [] | [ _ ] -> [] | _ :: rest -> rest
   in
-  let patterns = parse_all [] [] sections in
-  (* Validate: a non-first section with transform lines but no 'on $VAR'
-     declaration has transforms that can never be applied. This is almost
-     certainly a mistake (forgotten 'on $VAR'). *)
-  List.iteri
-    (fun i p ->
-      if i > 0 && p.is_transform && p.on_var = None then
-        failwith
-          (Printf.sprintf
-             "Section %d has transform lines (- / +) but no 'on $VAR' \
-              declaration. Inner section transforms are only applied when \
-              targeting an expansion variable via 'on $VAR'."
-             (i + 1)))
-    patterns;
+  let some_inner = List.exists section_has_on_var non_first in
+  let some_not_inner =
+    List.exists (fun s -> not (section_has_on_var s)) non_first
+  in
+  if some_inner && some_not_inner then
+    failwith
+      "Cannot mix 'on $VAR' inner sections with conjunctive sibling sections \
+       in the same pattern. Use either all 'on $VAR' sections (outer+inner \
+       mode) or no 'on $VAR' sections (conjunctive mode).";
+  let patterns =
+    if some_inner then
+      (* Outer+inner mode: accumulate metavars across sections. *)
+      let rec parse_all inherited_vars inherited_seqs = function
+        | [] -> []
+        | s :: rest ->
+            let p =
+              parse_pattern ~ctx ~language ~inherited_metavars:inherited_vars
+                ~inherited_sequences:inherited_seqs s
+            in
+            p :: parse_all p.metavars p.sequence_metavars rest
+      in
+      parse_all [] [] sections
+    else
+      (* Conjunctive siblings mode: each section has its own independent scope. *)
+      List.map
+        (fun s ->
+          parse_pattern ~ctx ~language ~inherited_metavars:[]
+            ~inherited_sequences:[] s)
+        sections
+  in
   { patterns }

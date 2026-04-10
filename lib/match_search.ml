@@ -165,6 +165,18 @@ let rec find_nested_matches_impl ~source ~inherited_bindings
             ~root_node:ctx_match.node rest)
         ctx_matches
 
+(** Convert a match_result to a nested_match_result with no contexts *)
+let match_result_to_nested (m : match_result) : nested_match_result =
+  {
+    node = m.node;
+    bindings = m.bindings;
+    node_bindings = m.node_bindings;
+    sequence_node_bindings = m.sequence_node_bindings;
+    contexts = [];
+    start_point = m.start_point;
+    end_point = m.end_point;
+  }
+
 (** Internal: find nested matches and return with source tree for error checking
 *)
 let find_nested_matches_internal ~ctx ~language ~pattern_text ~source_text =
@@ -172,28 +184,36 @@ let find_nested_matches_internal ~ctx ~language ~pattern_text ~source_text =
   let source_tree = Tree.parse ~ctx ~language source_text in
   let source = source_tree.source in
   let source_root = source_tree.root in
+  let is_conjunctive =
+    not (List.exists (fun p -> p.Match_types.on_var <> None) nested.patterns)
+  in
   let matches =
-    if List.length nested.patterns = 1 then
-      (* Single pattern: use existing logic, convert to nested_match_result *)
-      let pattern = List.hd nested.patterns in
-      let matches =
-        find_matches_in_subtree ~pattern
-          ~inherited_bindings:Match_engine.empty_bindings ~source
-          ~root_node:source_root
-      in
-      List.map
-        (fun (m : match_result) ->
-          {
-            node = m.node;
-            bindings = m.bindings;
-            node_bindings = m.node_bindings;
-            sequence_node_bindings = m.sequence_node_bindings;
-            contexts = [];
-            start_point = m.start_point;
-            end_point = m.end_point;
-          })
-        matches
+    if is_conjunctive then
+      match nested.patterns with
+      | [] -> []
+      | [ pattern ] ->
+          (* Single pattern: straightforward traversal *)
+          List.map match_result_to_nested
+            (find_matches_in_subtree ~pattern
+               ~inherited_bindings:Match_engine.empty_bindings ~source
+               ~root_node:source_root)
+      | _ ->
+          (* Conjunctive: all sections must find at least one match *)
+          let section_matches =
+            List.map
+              (fun pattern ->
+                find_matches_in_subtree ~pattern
+                  ~inherited_bindings:Match_engine.empty_bindings ~source
+                  ~root_node:source_root)
+              nested.patterns
+          in
+          if List.exists (fun ms -> ms = []) section_matches then []
+          else
+            List.concat_map
+              (fun ms -> List.map match_result_to_nested ms)
+              section_matches
     else
+      (* Outer+inner mode: use nested scoping *)
       find_nested_matches_impl ~source
         ~inherited_bindings:Match_engine.empty_bindings ~accumulated_contexts:[]
         ~root_node:source_root nested.patterns

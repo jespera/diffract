@@ -1113,41 +1113,92 @@ let transform ~ctx ~language ~pattern_text ~source_text =
 
 let transform_nested ~ctx ~language ~pattern_text ~source_text =
   let nested = Match_parse.parse_nested_pattern ~ctx ~language pattern_text in
-  match nested.patterns with
-  | [] ->
-      {
-        edits = [];
-        original_source = source_text;
-        transformed_source = source_text;
-      }
-  | outer_pattern :: inner_patterns ->
-      if not outer_pattern.is_transform then
+  let patterns = nested.patterns in
+  (* Detect mode from parsed patterns. *)
+  let is_outer_inner = List.exists (fun p -> p.on_var <> None) patterns in
+  if is_outer_inner then
+    (* Outer+inner mode: existing behaviour. *)
+    match patterns with
+    | [] ->
         {
           edits = [];
           original_source = source_text;
           transformed_source = source_text;
         }
-      else
+    | outer_pattern :: inner_patterns ->
+        if not outer_pattern.is_transform then
+          {
+            edits = [];
+            original_source = source_text;
+            transformed_source = source_text;
+          }
+        else
+          let source_tree = Tree.parse ~ctx ~language source_text in
+          let source = source_tree.source in
+          let matches =
+            Match_search.find_matches_in_subtree ~pattern:outer_pattern
+              ~inherited_bindings:Match_engine.empty_bindings ~source
+              ~root_node:source_tree.root
+          in
+          let edits =
+            List.concat_map
+              (fun m ->
+                compute_edits ~pattern:outer_pattern ~match_result:m ~source
+                  ~inner_patterns)
+              matches
+          in
+          let transformed = apply_edits source_text edits in
+          {
+            edits;
+            original_source = source_text;
+            transformed_source = transformed;
+          }
+  else
+    (* Conjunctive siblings mode: all sections must find >=1 match. *)
+    match patterns with
+    | [] ->
+        {
+          edits = [];
+          original_source = source_text;
+          transformed_source = source_text;
+        }
+    | _ ->
         let source_tree = Tree.parse ~ctx ~language source_text in
         let source = source_tree.source in
-        let matches =
-          Match_search.find_matches_in_subtree ~pattern:outer_pattern
-            ~inherited_bindings:Match_engine.empty_bindings ~source
-            ~root_node:source_tree.root
+        let section_matches =
+          List.map
+            (fun pattern ->
+              Match_search.find_matches_in_subtree ~pattern
+                ~inherited_bindings:Match_engine.empty_bindings ~source
+                ~root_node:source_tree.root)
+            patterns
         in
-        let edits =
-          List.concat_map
-            (fun m ->
-              compute_edits ~pattern:outer_pattern ~match_result:m ~source
-                ~inner_patterns)
-            matches
-        in
-        let transformed = apply_edits source_text edits in
-        {
-          edits;
-          original_source = source_text;
-          transformed_source = transformed;
-        }
+        (* If any section finds no match, return source unchanged. *)
+        if List.exists (fun ms -> ms = []) section_matches then
+          {
+            edits = [];
+            original_source = source_text;
+            transformed_source = source_text;
+          }
+        else
+          let edits =
+            List.concat_map
+              (fun (pattern, matches) ->
+                if not pattern.is_transform then []
+                else
+                  List.concat_map
+                    (fun m ->
+                      compute_edits ~pattern ~match_result:m ~source
+                        ~inner_patterns:[])
+                    matches)
+              (List.combine patterns section_matches)
+          in
+          let transformed = apply_edits source_text edits in
+          {
+            edits;
+            original_source = source_text;
+            transformed_source = transformed;
+          }
 
 let transform_file ~ctx ~language ~pattern_text ~source_path =
   let source_text =
