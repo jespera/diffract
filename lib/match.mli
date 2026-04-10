@@ -101,31 +101,19 @@ val parse_pattern :
 val parse_nested_pattern :
   ctx:Context.t -> language:string -> string -> nested_pattern
 (** [parse_nested_pattern ~ctx ~language pattern_text] parses a pattern with
-    multiple \@@ sections for nested/scoped matching.
+    multiple \@@ sections. Two modes are supported:
 
-    Pattern format for nested matching:
-    {v
-    @@
-    match: strict
-    metavar $class_name: single
-    metavar $body: sequence
-    @@
-    class $class_name { $body }
+    {b Outer+inner mode} — one or more non-first sections carry [on $VAR].
+    Metavars accumulate across sections (declared in the outer section are in
+    scope for inner sections). Used for expansion transforms.
 
-    @@
-    match: strict
-    metavar $msg: single
-    @@
-    console.log($msg)
-    v}
+    {b Conjunctive siblings mode} — no section carries [on $VAR]. Each section
+    is parsed with its own independent metavar scope. At transform time all
+    sections must find at least one match; if any finds nothing, no edits are
+    applied. See [transform_nested] and [docs/patterns.md] for examples.
 
-    - Each section must declare its match mode and metavars in the preamble
-    - If multiple sections exist, each one restricts the search scope to within
-      the AST node matched by the previous section
-    - The last section is the target pattern (what we're searching for)
-    - All preceding sections are contexts (outer to inner)
-    - All metavars share the same binding scope across all sections
-    - Single section works exactly as [parse_pattern] (backward compatible) *)
+    Mixing [on $VAR] and non-[on $VAR] sections in the same pattern is an
+    error. Single-section patterns are always conjunctive (backward compatible). *)
 
 (** {1 Matching} *)
 
@@ -155,14 +143,17 @@ val find_nested_matches :
   source_text:string ->
   nested_match_result list
 (** [find_nested_matches ~ctx ~language ~pattern_text ~source_text] finds
-    matches using nested/scoped pattern matching.
+    matches using a pattern with one or more [@@] sections.
 
-    Auto-detects single vs. multi-section patterns:
+    Auto-detects mode from section headers:
     - Single section: behaves like [find_matches]
-    - Multiple sections: each context pattern restricts where the next pattern
-      can match (nested scoping)
+    - Multiple sections with [on $VAR]: outer+inner scoped matching — each
+      section searches within the node(s) bound by the previous section
+    - Multiple sections without [on $VAR]: conjunctive mode — every section
+      must find at least one match or the result is empty; matches from all
+      sections are returned as a flat list
 
-    Returns matches with context chain showing how each match was scoped. *)
+    Returns matches with context chain (populated in outer+inner mode). *)
 
 val search :
   ctx:Context.t ->
@@ -247,12 +238,22 @@ val transform_nested :
   source_text:string ->
   transform_result
 (** [transform_nested ~ctx ~language ~pattern_text ~source_text] applies a
-    multi-section semantic patch. The first section is the outer match/replace
-    pattern. For each expansion slot (separator-prefix line), if a subsequent
-    section declares [on $VAR] matching that slot's variable, its transform is
-    applied to each element; elements with no matching inner section are passed
-    through unchanged. Single-section patterns behave identically to
-    [transform]. *)
+    multi-section semantic patch. Behaviour depends on mode:
+
+    {b Outer+inner mode} (sections use [on $VAR]): the first section is the
+    outer match/replace pattern. For each expansion slot (separator-prefix
+    line), if a subsequent section declares [on $VAR] matching that slot's
+    variable, its transform is applied to each element; elements with no
+    matching inner section are passed through unchanged.
+
+    {b Conjunctive siblings mode} (no [on $VAR]): every section independently
+    searches the source. If all sections find at least one match, all their
+    transforms are applied in a single pass. If any section finds no match, the
+    source is returned unchanged. A section without [-]/[+] lines acts as a
+    guard — it must match but contributes no edits.
+
+    Single-section patterns behave identically to [transform]. See
+    [docs/patterns.md] for worked examples of both modes. *)
 
 val transform_file :
   ctx:Context.t ->

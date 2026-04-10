@@ -122,6 +122,15 @@ Matching modes (required - must specify one):
 - `match: partial` - Subset matching (ignores extra children, unordered). Use for object literals, JSX attributes.
 - `match: field` - Field-based matching (matches children by tree-sitter field name instead of position, ignores extra source fields not in pattern, preserves order within each field). Use for definitions with decorators/attributes.
 
+### Conjunctive sibling sections
+
+A pattern file with multiple `@@` sections and **no** `on $VAR` directives is a
+conjunctive rule: every section must find at least one match for any transforms
+to fire. If any section finds nothing, the source is returned unchanged. Each
+section has its own independent metavar scope. A section without `-`/`+` lines
+acts as a pure guard (must match but produces no edits). Use
+`Match.transform_nested` to apply conjunctive patterns.
+
 ### Expansion lines
 
 A replacement line may use a separator character as its prefix instead of `+`,

@@ -13,5 +13,6 @@ let () =
       ("Transform", Test_match.transform_tests);
       ("Expansion", Test_match.expansion_tests);
       ("Semantics", Test_match.semantics_tests);
+      ("Conjunctive", Test_match.conjunctive_tests);
       ("Tree diff", Test_tree_diff.tests);
     ]

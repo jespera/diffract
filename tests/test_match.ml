@@ -158,6 +158,7 @@ class $class_name { $body }
 
 @@
 match: strict
+on $body
 metavar $msg: single
 @@
 console.log($msg)|}
@@ -202,6 +203,7 @@ if ($outer_cond) { $outer_body }
 
 @@
 match: strict
+on $outer_body
 metavar $inner_cond: single
 metavar $inner_body: single
 @@
@@ -209,6 +211,7 @@ if ($inner_cond) { $inner_body }
 
 @@
 match: strict
+on $inner_body
 metavar $msg: single
 @@
 console.log($msg)|}
@@ -246,6 +249,7 @@ class $class_name { $body }
 
 @@
 match: strict
+on $body
 metavar $msg: single
 @@
 console.log($msg)|}
@@ -285,7 +289,7 @@ class $name { $body }
 
 @@
 match: strict
-metavar $name: single
+on $body
 @@
 console.log($name)|}
   in
@@ -330,6 +334,7 @@ class $class_name { $body }
 
 @@
 match: strict
+on $body
 metavar $x: single
 @@
 outsideCall($x)|}
@@ -365,6 +370,7 @@ class $class_name { $body }
 
 @@
 match: strict
+on $body
 metavar $msg: single
 @@
 console.log($msg)|}
@@ -472,6 +478,7 @@ class $class_name { $body }
 
 @@
 match: strict
+on $body
 metavar $msg: single
 @@
 console.log($msg)|}
@@ -1090,6 +1097,7 @@ class $CLASS { $BODY }
 
 @@
 match: strict
+on $BODY
 metavar $MSG: single
 @@
 println($MSG)|}
@@ -1520,6 +1528,7 @@ metavar $CATCH_BODY: sequence
 
 @@
 match: strict
+on $CATCH_BODY
 metavar $MSG: single
 @@
 <?php error_log($MSG);|}
@@ -1691,6 +1700,7 @@ metavar $BODY: sequence
 
 @@
 match: strict
+on $BODY
 metavar $MSG: single
 @@
 <?php error_log($MSG);|}
@@ -2838,6 +2848,7 @@ object $OBJ { $BODY }
 
 @@
 match: strict
+on $BODY
 metavar $MSG: single
 @@
 println($MSG)|}
@@ -4626,35 +4637,6 @@ false|}
   Alcotest.(check (option string)) "$A is true" (Some "true") (b_of "$A");
   Alcotest.(check (option string)) "$B is false" (Some "false") (b_of "$B")
 
-let test_semantics_inner_transform_needs_on_var () =
-  let pattern_text =
-    {|@@
-match: strict
-metavar $TAG: single
-metavar $CASES: sequence
-@@
-- matchIt($TAG, { $CASES });
-+ match($TAG)
-~   $CASES
-+   .exhaustive()
-
-@@
-match: field
-metavar $KEY: single
-metavar $VAL: single
-@@
-- $KEY: $VAL
-+ .with("$KEY", $VAL)|}
-  in
-  (* Inner section has transforms but no 'on $VAR' — should fail at parse time *)
-  Alcotest.check_raises "missing on $VAR raises"
-    (Failure
-       "Section 2 has transform lines (- / +) but no 'on $VAR' declaration. \
-        Inner section transforms are only applied when targeting an expansion \
-        variable via 'on $VAR'.") (fun () ->
-      ignore
-        (Match.parse_nested_pattern ~ctx ~language:"typescript" pattern_text))
-
 let semantics_tests =
   [
     Alcotest.test_case "no shadowing" `Quick test_semantics_no_shadowing;
@@ -4663,8 +4645,270 @@ let semantics_tests =
       test_semantics_unification_single;
     Alcotest.test_case "unification sequence" `Quick
       test_semantics_unification_sequence;
-    Alcotest.test_case "inner transform needs on $VAR" `Quick
-      test_semantics_inner_transform_needs_on_var;
     Alcotest.test_case "multiple on $VAR in search" `Quick
       test_semantics_multiple_on_var_search;
+  ]
+
+(* ===== Conjunctive sibling section tests ===== *)
+
+let test_conjunctive_both_match () =
+  let pattern_text =
+    {|@@
+match: strict
+@@
+- foo()
++ bar()
+
+@@
+match: strict
+@@
+- baz()
++ qux()|}
+  in
+  let source_text = "foo(); baz();" in
+  let result =
+    Match.transform_nested ~ctx ~language:"typescript" ~pattern_text
+      ~source_text
+  in
+  Alcotest.(check bool)
+    "foo() renamed" true
+    (string_contains ~needle:"bar()" result.transformed_source);
+  Alcotest.(check bool)
+    "baz() renamed" true
+    (string_contains ~needle:"qux()" result.transformed_source)
+
+let test_conjunctive_first_no_match () =
+  let pattern_text =
+    {|@@
+match: strict
+@@
+- missing()
++ replaced()
+
+@@
+match: strict
+@@
+- baz()
++ qux()|}
+  in
+  let source_text = "baz();" in
+  let result =
+    Match.transform_nested ~ctx ~language:"typescript" ~pattern_text
+      ~source_text
+  in
+  Alcotest.(check string) "source unchanged" source_text result.transformed_source
+
+let test_conjunctive_second_no_match () =
+  let pattern_text =
+    {|@@
+match: strict
+@@
+- foo()
++ bar()
+
+@@
+match: strict
+@@
+- missing()
++ replaced()|}
+  in
+  let source_text = "foo();" in
+  let result =
+    Match.transform_nested ~ctx ~language:"typescript" ~pattern_text
+      ~source_text
+  in
+  Alcotest.(check string) "source unchanged" source_text result.transformed_source
+
+let test_conjunctive_guard_prevents_transform () =
+  (* Guard section has no -/+ lines — must match or nothing fires *)
+  let pattern_text =
+    {|@@
+match: strict
+@@
+- foo()
++ bar()
+
+@@
+match: strict
+@@
+baz()|}
+  in
+  let source_text = "foo();" in
+  let result =
+    Match.transform_nested ~ctx ~language:"typescript" ~pattern_text
+      ~source_text
+  in
+  Alcotest.(check string) "source unchanged" source_text result.transformed_source
+
+let test_conjunctive_guard_allows_transform () =
+  let pattern_text =
+    {|@@
+match: strict
+@@
+- foo()
++ bar()
+
+@@
+match: strict
+@@
+baz()|}
+  in
+  let source_text = "foo(); baz();" in
+  let result =
+    Match.transform_nested ~ctx ~language:"typescript" ~pattern_text
+      ~source_text
+  in
+  Alcotest.(check bool)
+    "foo() renamed" true
+    (string_contains ~needle:"bar()" result.transformed_source);
+  Alcotest.(check bool)
+    "baz() preserved" true
+    (string_contains ~needle:"baz()" result.transformed_source)
+
+let test_conjunctive_independent_scope () =
+  (* Both sections declare $X — independent scope means no shadowing error *)
+  let pattern_text =
+    {|@@
+match: strict
+metavar $X: single
+@@
+- foo($X)
++ bar($X)
+
+@@
+match: strict
+metavar $X: single
+@@
+- baz($X)
++ qux($X)|}
+  in
+  let source_text = "foo(1); baz(2);" in
+  let result =
+    Match.transform_nested ~ctx ~language:"typescript" ~pattern_text
+      ~source_text
+  in
+  Alcotest.(check bool)
+    "foo(1) → bar(1)" true
+    (string_contains ~needle:"bar(1)" result.transformed_source);
+  Alcotest.(check bool)
+    "baz(2) → qux(2)" true
+    (string_contains ~needle:"qux(2)" result.transformed_source)
+
+let test_conjunctive_mixed_error () =
+  let pattern_text =
+    {|@@
+match: strict
+metavar $X: single
+metavar $S: sequence
+@@
+- wrap($X, [$S])
++ wrapped($X, [
+~   $S
++ ])
+
+@@
+match: strict
+@@
+- other()
++ replaced()
+
+@@
+match: strict
+on $S
+@@
+- item()
++ newItem()|}
+  in
+  Alcotest.check_raises "mixed sections rejected"
+    (Failure
+       "Cannot mix 'on $VAR' inner sections with conjunctive sibling sections \
+        in the same pattern. Use either all 'on $VAR' sections (outer+inner \
+        mode) or no 'on $VAR' sections (conjunctive mode).") (fun () ->
+      ignore
+        (Match.parse_nested_pattern ~ctx ~language:"typescript" pattern_text))
+
+let test_conjunctive_import_and_calls () =
+  (* Realistic use case: rename import and all call sites together *)
+  let pattern_text =
+    {|@@
+match: strict
+@@
+- import { useAppSelector } from "app/hooks";
++ import { useUser } from "app/UserContext";
+
+@@
+match: strict
+metavar $NAME: single
+metavar $PARAM: single
+@@
+- const $NAME = useAppSelector(($PARAM) => $PARAM.users.user);
++ const { user: $NAME } = useUser();|}
+  in
+  let source_text =
+    {|import { useAppSelector } from "app/hooks";
+const x = useAppSelector((s) => s.users.user);
+const y = useAppSelector((p) => p.users.user);|}
+  in
+  let result =
+    Match.transform_nested ~ctx ~language:"typescript" ~pattern_text
+      ~source_text
+  in
+  Alcotest.(check bool)
+    "import renamed" true
+    (string_contains ~needle:{|import { useUser } from "app/UserContext"|} result.transformed_source);
+  Alcotest.(check bool)
+    "first const transformed" true
+    (string_contains ~needle:"const { user: x } = useUser()" result.transformed_source);
+  Alcotest.(check bool)
+    "second const transformed" true
+    (string_contains ~needle:"const { user: y } = useUser()" result.transformed_source);
+  Alcotest.(check bool)
+    "useAppSelector absent" false
+    (string_contains ~needle:"useAppSelector" result.transformed_source)
+
+let test_conjunctive_import_absent () =
+  (* If the import is absent, call sites should NOT be transformed *)
+  let pattern_text =
+    {|@@
+match: strict
+@@
+- import { useAppSelector } from "app/hooks";
++ import { useUser } from "app/UserContext";
+
+@@
+match: strict
+metavar $NAME: single
+metavar $PARAM: single
+@@
+- const $NAME = useAppSelector(($PARAM) => $PARAM.users.user);
++ const { user: $NAME } = useUser();|}
+  in
+  let source_text =
+    "const x = useAppSelector((s) => s.users.user);"
+  in
+  let result =
+    Match.transform_nested ~ctx ~language:"typescript" ~pattern_text
+      ~source_text
+  in
+  Alcotest.(check string)
+    "source unchanged" source_text result.transformed_source
+
+let conjunctive_tests =
+  [
+    Alcotest.test_case "both sections match" `Quick test_conjunctive_both_match;
+    Alcotest.test_case "first section no match" `Quick
+      test_conjunctive_first_no_match;
+    Alcotest.test_case "second section no match" `Quick
+      test_conjunctive_second_no_match;
+    Alcotest.test_case "guard prevents transform" `Quick
+      test_conjunctive_guard_prevents_transform;
+    Alcotest.test_case "guard allows transform" `Quick
+      test_conjunctive_guard_allows_transform;
+    Alcotest.test_case "independent metavar scope" `Quick
+      test_conjunctive_independent_scope;
+    Alcotest.test_case "mixed mode error" `Quick test_conjunctive_mixed_error;
+    Alcotest.test_case "import and call sites" `Quick
+      test_conjunctive_import_and_calls;
+    Alcotest.test_case "import absent leaves calls unchanged" `Quick
+      test_conjunctive_import_absent;
   ]
