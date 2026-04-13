@@ -69,32 +69,33 @@ ocamlformat --check $(find lib -name '*.ml' -o -name '*.mli')
 ## Usage
 
 ```bash
-# Parse and print parsed tree
-diffract example.ts
-
-# Parse with explicit language
-diffract --language kotlin example.kt
+# Parse and print the syntax tree
+diffract parse example.ts
+diffract parse --language kotlin example.kt
 
 # Match a pattern against a single file
-diffract --match pattern.txt source.ts
+diffract match pattern.txt source.ts
 
 # Scan a directory for pattern matches
-diffract --match pattern.txt --include '*.ts' src/
+diffract match --include '*.ts' pattern.txt src/
 
 # Scan with custom directory exclusions
-diffract --match pattern.txt --include '*.ts' -e vendor -e dist src/
+diffract match --include '*.ts' -e vendor -e dist pattern.txt src/
 
 # Apply a semantic patch (preview diff)
-diffract --apply --match patch.txt source.ts
+diffract apply patch.txt source.ts
 
 # Apply a semantic patch in place
-diffract --apply --in-place --match patch.txt source.ts
+diffract apply --in-place patch.txt source.ts
 
 # Apply across a directory
-diffract --apply --match patch.txt --include '*.ts' src/
+diffract apply --include '*.ts' patch.txt src/
+
+# Show AST-level changes between two file versions
+diffract diff before.ts after.ts
 
 # List available languages
-diffract --list-languages
+diffract languages
 ```
 
 ### Transforms (Semantic Patches)
@@ -113,7 +114,7 @@ metavar $MSG: single
 ```
 
 ```bash
-$ diffract --apply --match patch.txt source.ts
+$ diffract apply patch.txt source.ts
 --- a/source.ts
 +++ b/source.ts
 @@ -1,3 +1,3 @@
