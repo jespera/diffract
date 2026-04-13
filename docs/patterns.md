@@ -395,13 +395,13 @@ This converts traditional function declarations into arrow functions.
 
 ```bash
 # Preview the diff (no file changes)
-diffract --apply --match patch.txt source.ts
+diffract apply patch.txt source.ts
 
 # Apply changes in place
-diffract --apply --in-place --match patch.txt source.ts
+diffract apply --in-place patch.txt source.ts
 
 # Apply across a directory
-diffract --apply --in-place --match patch.txt --include '*.ts' src/
+diffract apply --in-place --include '*.ts' patch.txt src/
 ```
 
 ### Strict-mode transforms
