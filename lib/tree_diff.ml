@@ -179,7 +179,15 @@ let align_children mapping ~before_source ~after_source
           && (not (is_matched_after mapping after_arr.(ai)))
           && before_arr.(bi).node_type = after_arr.(ai).node_type
         then begin
-          let sim = dice_similarity mapping before_arr.(bi) after_arr.(ai) in
+          let dice = dice_similarity mapping before_arr.(bi) after_arr.(ai) in
+          (* Fall back to hash equality when no descendants are pre-matched.
+             This handles nodes that are duplicated in the file (not unique in
+             the hash index) but are otherwise identical — they should match. *)
+          let sim =
+            if dice > 0.0 then dice
+            else if before_arr.(bi).hash = after_arr.(ai).hash then 1.0
+            else 0.0
+          in
           if sim > !best_sim then begin
             best_sim := sim;
             best_ai := ai
