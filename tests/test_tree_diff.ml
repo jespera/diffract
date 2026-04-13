@@ -180,6 +180,61 @@ let test_duplicate_subtrees () =
   in
   Alcotest.(check bool) "found 1→2 change" true found
 
+(* Test: Siblings duplicated across two functions — only the changed one is
+   Removed/Added.
+
+   When the same statements appear in multiple function bodies, none of them are
+   unique in the hash index, so Step 2 (unique-hash matching) leaves them all
+   unmatched.  Phase B's dice_similarity then returns 0.0 for every candidate
+   pair, and the same_type_count > 1 fallback refuses to pick one.  Without the
+   hash-equality fix, every sibling in the changed body would be emitted as
+   Removed+Added rather than just the one that actually differs. *)
+let test_duplicate_siblings_across_functions () =
+  let before =
+    parse
+      "function f() { const a = 1; const b = 2; }\n\
+       function g() { const a = 1; const b = 2; }"
+  in
+  let after =
+    parse
+      "function f() { const a = 1; const b = 99; }\n\
+       function g() { const a = 1; const b = 2; }"
+  in
+  let d = Tree_diff.diff ~before ~after in
+  (* Count every Removed/Added entry anywhere in the diff tree. *)
+  let rec count_ra = function
+    | Tree_diff.Unchanged | Tree_diff.Replaced -> (0, 0)
+    | Tree_diff.Modified { child_changes } ->
+        List.fold_left
+          (fun (r, a) cc ->
+            match cc with
+            | Tree_diff.Removed _ -> (r + 1, a)
+            | Tree_diff.Added _ -> (r, a + 1)
+            | Tree_diff.Changed { change; _ } ->
+                let r2, a2 = count_ra change in
+                (r + r2, a + a2)
+            | Tree_diff.Same _ -> (r, a))
+          (0, 0) child_changes
+  in
+  let removals, additions = count_ra d.root_change in
+  (* No Removed/Added entries: the fix causes const a = 1 to match its
+     counterpart first (via hash equality), which leaves const b as the sole
+     remaining candidate, so it becomes a Changed/Modified pair rather than a
+     spurious Removed+Added.  Without the fix, same_type_count = 2 for both
+     statements, so neither matches, and the result is (2, 2). *)
+  Alcotest.(check int) "no spurious removals" 0 removals;
+  Alcotest.(check int) "no spurious additions" 0 additions;
+  (* The actual modification (2 → 99) is still captured as a change pair. *)
+  let pairs = Tree_diff.change_pairs d in
+  let found =
+    List.exists
+      (fun (p : Tree_diff.change_pair) ->
+        Tree.text p.before_source p.before_node = "2"
+        && Tree.text p.after_source p.after_node = "99")
+      pairs
+  in
+  Alcotest.(check bool) "found 2→99 change pair" true found
+
 let tests =
   [
     Alcotest.test_case "identical trees" `Quick test_identical_trees;
@@ -193,4 +248,6 @@ let tests =
       test_change_pairs_extraction;
     Alcotest.test_case "nested change" `Quick test_nested_change;
     Alcotest.test_case "duplicate subtrees" `Quick test_duplicate_subtrees;
+    Alcotest.test_case "duplicate siblings across functions" `Quick
+      test_duplicate_siblings_across_functions;
   ]
