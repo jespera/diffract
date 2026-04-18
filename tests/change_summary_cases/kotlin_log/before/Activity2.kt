@@ -1,0 +1,3 @@
+fun onStart() {
+    legacyHandler("boot")
+}

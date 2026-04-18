@@ -1,0 +1,3 @@
+fun onResume() {
+    modernHandler(state)
+}

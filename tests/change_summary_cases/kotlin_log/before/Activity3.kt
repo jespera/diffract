@@ -1,0 +1,3 @@
+fun onResume() {
+    legacyHandler(state)
+}

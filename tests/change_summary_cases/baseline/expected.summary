@@ -1,0 +1,12 @@
+# rule R1  support=3  language=typescript
+@@
+match: strict
+metavar $X: single
+metavar $Y: single
+@@
+- foo ( $X , $Y )
++ bar ( $X )
+# sites R1
+file1.ts
+file2.ts
+file3.ts
