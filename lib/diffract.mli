@@ -13,6 +13,7 @@ module Tree_sitter_cursor = Tree_sitter_cursor
 module Tokenize = Tokenize
 module Matcher = Matcher
 module Text_diff = Text_diff
+module Change_summary = Change_summary
 
 (** {1 Parsing} *)
 
