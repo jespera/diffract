@@ -530,6 +530,51 @@ let run_diff before_path after_path language =
   | Sys_error msg -> `Error (false, Printf.sprintf "Error reading file: %s" msg)
   | Failure msg -> `Error (false, msg)
 
+(* ── summarize subcommand ──────────────────────────────────────────── *)
+
+let run_summarize before_dir after_dir language include_pattern
+    exclude_patterns =
+  let ctx = Diffract.Context.create () in
+  let exclude_dirs =
+    if exclude_patterns = [] then default_excludes else exclude_patterns
+  in
+  try
+    if not (Sys.is_directory before_dir) then
+      `Error (false, Printf.sprintf "%s is not a directory" before_dir)
+    else if not (Sys.is_directory after_dir) then
+      `Error (false, Printf.sprintf "%s is not a directory" after_dir)
+    else begin
+      let changeset =
+        Diffract.Change_summary.load_from_dirs ~before_dir ~after_dir
+          ~include_glob:include_pattern ~exclude_dirs
+          ~default_language:language ()
+      in
+      let summary = Diffract.Change_summary.summarize ~ctx changeset in
+      print_string (Diffract.Change_summary.format_summary summary);
+      `Ok ()
+    end
+  with
+  | Sys_error msg -> `Error (false, Printf.sprintf "Error reading file: %s" msg)
+  | Failure msg -> `Error (false, msg)
+
+let summarize_cmd =
+  let doc = "Cluster systematic edits across a changeset into spatch rules." in
+  let before_dir =
+    Arg.(
+      required & pos 0 (some string) None
+      & info [] ~docv:"BEFORE_DIR" ~doc:"Directory containing the before state.")
+  in
+  let after_dir =
+    Arg.(
+      required & pos 1 (some string) None
+      & info [] ~docv:"AFTER_DIR" ~doc:"Directory containing the after state.")
+  in
+  Cmd.v (Cmd.info "summarize" ~doc)
+    Term.(
+      ret
+        (const run_summarize $ before_dir $ after_dir $ language
+       $ include_pattern $ exclude_patterns))
+
 let diff_cmd =
   let doc = "Show AST-level changes between two versions of a file." in
   let before_file =
@@ -564,6 +609,9 @@ let cmd =
            and sigil-free metavars)." );
       `I ("$(b,apply)", "Apply a semantic patch to a file or directory.");
       `I ("$(b,diff)", "Show AST-level changes between two file versions.");
+      `I
+        ( "$(b,summarize)",
+          "Cluster systematic edits across a changeset into spatch rules." );
       `I ("$(b,languages)", "List available language grammars.");
       `S Manpage.s_examples;
       `Pre "  $(tname) parse example.ts";
@@ -575,6 +623,7 @@ let cmd =
     ]
   in
   let info = Cmd.info "diffract" ~version:"0.1.0" ~doc ~man in
-  Cmd.group info [ languages_cmd; parse_cmd; search_cmd; apply_cmd; diff_cmd ]
+  Cmd.group info
+    [ languages_cmd; parse_cmd; search_cmd; apply_cmd; diff_cmd; summarize_cmd ]
 
 let () = exit (Cmd.eval cmd)
