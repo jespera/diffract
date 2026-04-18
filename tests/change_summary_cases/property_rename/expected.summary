@@ -1,0 +1,10 @@
+# rule R1  support=3  language=typescript
+@@
+match: strict
+@@
+- apiUrl
++ baseUrl
+# sites R1
+a.ts
+b.ts
+c.ts

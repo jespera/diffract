@@ -1,0 +1,1 @@
+const url = settings.baseUrl;

@@ -1,0 +1,13 @@
+# rule R1  support=3  language=typescript
+@@
+match: strict
+metavar $H0: single
+metavar $H1: single
+metavar $H2: single
+@@
+- process ( $H0 , $H1 , " $H2 " )
++ process ( $H0 , $H1 )
+# sites R1
+a.ts
+b.ts
+c.ts
