@@ -12,6 +12,7 @@ module Tree_sitter_cursor = Tree_sitter_cursor
 module Tokenize = Tokenize
 module Matcher = Matcher
 module Text_diff = Text_diff
+module Change_summary = Change_summary
 
 (** Parse source code and return the tree representation *)
 let parse_tree ~ctx ~language source = Tree.parse ~ctx ~language source
