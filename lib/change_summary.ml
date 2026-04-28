@@ -444,12 +444,26 @@ let has_concrete_edit (ep : edit_pat) : bool =
   let a = List.sort compare (collect_leaf_values [] ep.after) in
   b <> a || not (same_shape_mod_holes ep.before ep.after)
 
+(** No replace-side hole appears that lacks a binding source on the
+    match side. A pattern with a [+]-side metavariable not present on
+    the [-] side is rejected by the spatch engine at apply time
+    ("Metavars in replacement not bound in match"), so emitting it
+    would produce an unapplicable rule. This usually means the
+    cluster's anti-unification dropped some context that carried the
+    binding source — fall back to the coherent dendrogram parent
+    instead. See design doc §4.3. *)
+let no_orphan_after_holes (ep : edit_pat) : bool =
+  let before_holes = collect_holes [] ep.before in
+  let after_holes = collect_holes [] ep.after in
+  List.for_all (fun h -> List.mem h before_holes) after_holes
+
 let cut_dendrogram ?(threshold = 0.35) min_size root =
   let is_coherent ep =
     let s = edit_size ep in
     has_concrete ep.before
     && has_concrete ep.after
     && has_concrete_edit ep
+    && no_orphan_after_holes ep
     && (s = 0
        || float_of_int (edit_holes ep) /. float_of_int s < threshold)
   in
