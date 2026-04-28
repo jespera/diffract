@@ -118,6 +118,42 @@ changeset
 Each stage is a pure function from the previous stage's output. This matters
 for testing: each stage can be exercised in isolation with fixed inputs.
 
+### 3.1 Multi-level change-pair extraction with site covering
+
+The change-pair extractor emits a change pair at **every** `Modified`
+ancestor along each change chain (plus the terminating `Replaced` leaf),
+not just one chosen by a grammar-shape heuristic. Clustering proceeds on
+this expanded candidate set; a greedy site-covering pass then picks which
+level of ancestor wins for each site. Key properties:
+
+- **Grammar-agnostic.** No depth constants, no per-language node-type
+  whitelists. The same emission rule handles TypeScript's
+  `call_expression → arguments` and Kotlin's longer
+  `call_expression → call_suffix → value_arguments → value_argument` chain
+  uniformly: every wrapper level is a candidate, and the covering pass
+  chooses by evidence (support, shape, concreteness) rather than by
+  hard-coded depth.
+- **Pre-filter by change density.** An ancestor is emitted only when the
+  fraction of its named children that are non-`Same` exceeds a small
+  threshold. This drops ancestors that are mostly unchanged (a whole
+  function body when only one statement changed) without a depth bound.
+- **Covering by byte-range overlap.** Clusters are ranked by support (desc),
+  then by asymmetric-shape-first (patterns with arg-count or structural
+  diffs between `-` and `+` carry strictly more information than same-shape
+  renames), then by concrete-node-count (asc — a small well-scoped leaf
+  rename beats its enclosing call level when both are symmetric), then by
+  hole fraction, then by pattern text. The winning cluster claims the byte
+  ranges of its sites; subsequent clusters whose instances overlap a claim
+  in the same file are dropped. Disjoint sites at the same call
+  (e.g. independent receiver and method renames) do not overlap and can
+  each win their own rule, preserving the two-leaf-rule output for cases
+  like [api_swap].
+- **Coherence gate.** A cluster survives only if its pattern contains at
+  least one concrete named leaf on each side and has at least one concrete
+  edit (either differing multisets of leaf values or differing structural
+  shape modulo holes). All-hole scaffolding like `$.$($)→$.$($)` is
+  rejected here before it can compete for coverage.
+
 ## 4. Key design decisions
 
 ### 4.1 Hierarchical clustering (Getafix)
@@ -553,32 +589,6 @@ These are known shortcomings of the current M1 implementation carried over
 from `examples/change_summary.ml`. They don't block the staged milestones
 but should be cleaned up — probably folded into M3 or a dedicated renderer/
 extractor pass — before any real-world snapshot tests go in (M5).
-
-- **Shallow structural lookahead (`has_deep_structural`).** The change-pair
-  extractor in `Change_summary.lookahead_pairs` drills up from a change
-  site only when the *immediate* parent's child_changes contain an
-  `Added`/`Removed` entry, or when a direct Changed child's Modified
-  change contains one. It checks exactly one level deep.
-
-  This works for grammars where call expressions sit directly over their
-  argument list (TypeScript: `call_expression` → `arguments`). It breaks
-  for grammars with extra wrapping. Kotlin is the canonical example:
-  `call_expression` → `call_suffix` → `value_arguments` → `value_argument`
-  puts the `Added`/`Removed` at grand-grandchild depth, so the lookahead
-  misses it, the extractor drills past the call expression, and the
-  change fragments into multiple leaf-level rules (identifier rename +
-  method rename + argument-list restructuring, each emitted as its own
-  separate cluster) instead of one call-expression-level rule.
-
-  Witness: compare the `kotlin_log` fixture (simple rename — works) to
-  running the summariser on a Kotlin input where `Log.d("tag", msg)`
-  becomes `logger.debug(msg)`. The TS `baseline` fixture covers the
-  working path on TypeScript.
-
-  Fix is likely to make the lookahead recursively scan for structural
-  changes below the call site, with a depth limit. Needs care not to
-  over-lift — drilling too high dilutes the pattern and produces generic
-  rules.
 
 - **Renderer whitespace and token splitting.** `render_pat_node` joins a
   node's children with single spaces. That produces `foo ( $H0 , $H1 )`

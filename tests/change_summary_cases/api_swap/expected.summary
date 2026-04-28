@@ -2,8 +2,8 @@
 @@
 match: strict
 @@
-- legacyStore
-+ store
+- fetch
++ get
 # sites R1
 admin.ts
 orders.ts
@@ -13,8 +13,8 @@ users.ts
 @@
 match: strict
 @@
-- fetch
-+ get
+- legacyStore
++ store
 # sites R2
 admin.ts
 orders.ts

@@ -2,8 +2,8 @@
 @@
 match: strict
 @@
-- const logger = require ( " ./logger " ) ;
-+ import { logger } from " ./logger " ;
+- const logger = require("./logger");
++ import { logger } from "./logger";
 # sites R1
 a.ts
 b.ts

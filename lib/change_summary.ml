@@ -35,9 +35,16 @@ type pat_node =
       node_type : string;
       is_named : bool;
       children : pat_child list;
+      template : template_part list;
+          (** Inter-child source text and child placeholders, used by the
+              renderer to reconstruct the node's surface syntax. Captures
+              source bytes (e.g. the quote delimiters of a string literal)
+              that the grammar consumes silently — i.e. that fall inside
+              the node's byte range but aren't exposed as child nodes. *)
     }
 
 and pat_child = { field_name : string option; child : pat_node }
+and template_part = Lit of string | Slot of int
 
 type edit_pat = { before : pat_node; after : pat_node }
 
@@ -47,6 +54,8 @@ type instance = {
   file : string;
   line : int;
   language : string;
+  site_start : int;
+  site_end : int;
 }
 
 type cluster = { pattern : edit_pat; instances : instance list }
@@ -70,9 +79,86 @@ let one_sided_candidate_instance (c : one_sided_candidate) : one_sided_instance 
 
 (* ── Conversion ──────────────────────────────────────────────────── *)
 
+(** Build the inter-child template for a tree-sitter node. Walks the
+    node's byte range from [start_byte] to [end_byte], emitting [Lit]
+    parts for source bytes outside any child and [Slot i] for the [i]-th
+    child's range. Captures source bytes that the grammar consumes
+    silently (e.g. string-literal quote delimiters in Kotlin/TS, or
+    leading/trailing whitespace inside a parenthesised list). *)
+let build_template ~source ~(node : Tree.src Tree.t) : template_part list =
+  let parts = ref [] in
+  let push p = parts := p :: !parts in
+  let cursor = ref node.start_byte in
+  let emit_lit_upto upto =
+    if upto > !cursor then
+      push (Lit (String.sub source !cursor (upto - !cursor)));
+    cursor := upto
+  in
+  List.iteri
+    (fun i (c : _ Tree.child) ->
+      emit_lit_upto c.node.start_byte;
+      push (Slot i);
+      cursor := c.node.end_byte)
+    node.children;
+  emit_lit_upto node.end_byte;
+  List.rev !parts
+
+let is_ws c = c = ' ' || c = '\t' || c = '\n' || c = '\r'
+
+(** True if any byte in the node's range that is not covered by a child
+    is non-whitespace. These are "silently-consumed delimiters" — bytes
+    the grammar embeds in the parent node's text but does not expose as
+    children (e.g. the surrounding quotes of a string literal in
+    Kotlin/TS, the slashes of a regex literal). Treat such nodes as
+    leaves during [of_src]: anti-unification then holes the whole node
+    when its content varies, rather than holing inside the delimiters
+    and rendering a placeholder embedded inside a string literal — which
+    the pattern parser would misread as the literal characters of the
+    delimited token rather than as a metavariable. *)
+let has_silent_concrete_delimiters ~source ~(node : Tree.src Tree.t) : bool =
+  let found = ref false in
+  let cursor = ref node.start_byte in
+  let scan_gap upto =
+    for i = !cursor to upto - 1 do
+      if not (is_ws source.[i]) then found := true
+    done;
+    cursor := upto
+  in
+  List.iter
+    (fun (c : _ Tree.child) ->
+      scan_gap c.node.start_byte;
+      cursor := c.node.end_byte)
+    node.children;
+  scan_gap node.end_byte;
+  !found
+
+(** Some grammars (TypeScript, JavaScript) expose string-literal quotes as
+    unnamed child nodes rather than consuming them silently. These nodes
+    have full byte-coverage by children (so [has_silent_concrete_delimiters]
+    misses them) but still wrap their content in tokens that would
+    sandwich any rendered hole into a string-literal token. Treat as a
+    leaf when an unnamed child has text equal to a string-quote character.
+    Limited to double-quote, single-quote, and backtick; the slash is
+    excluded because it is also the division operator and would
+    misclassify binary expressions. *)
+let has_quote_delim_children ~source ~(node : Tree.src Tree.t) : bool =
+  List.exists
+    (fun (c : _ Tree.child) ->
+      if c.node.is_named then false
+      else
+        match Tree.text source c.node with
+        | "\"" | "'" | "`" -> true
+        | _ -> false)
+    node.children
+
 let rec of_src source (n : Tree.src Tree.t) : pat_node =
   if n.children = [] && n.is_named then
     Leaf { node_type = n.node_type; value = Tree.text source n }
+  else if
+    n.is_named
+    && (has_silent_concrete_delimiters ~source ~node:n
+       || has_quote_delim_children ~source ~node:n)
+  then Leaf { node_type = n.node_type; value = Tree.text source n }
   else
     PNode
       {
@@ -83,6 +169,7 @@ let rec of_src source (n : Tree.src Tree.t) : pat_node =
             (fun (c : Tree.src Tree.child) ->
               { field_name = c.field_name; child = of_src source c.node })
             n.children;
+        template = build_template ~source ~node:n;
       }
 
 (* ── Rendering ───────────────────────────────────────────────────── *)
@@ -91,10 +178,15 @@ let rec render_pat_node = function
   | Hole h -> Printf.sprintf "$H%d" h
   | Leaf { value; _ } -> value
   | PNode { children = []; node_type; _ } -> node_type
-  | PNode { children; _ } ->
-      let parts = List.map (fun c -> render_pat_node c.child) children in
-      let parts = List.filter (fun s -> s <> "") parts in
-      String.concat " " parts
+  | PNode { children; template; _ } ->
+      let arr = Array.of_list children in
+      let buf = Buffer.create 32 in
+      List.iter
+        (function
+          | Lit s -> Buffer.add_string buf s
+          | Slot i -> Buffer.add_string buf (render_pat_node arr.(i).child))
+        template;
+      Buffer.contents buf
 
 let rec collect_holes acc = function
   | Hole h -> if List.mem h acc then acc else h :: acc
@@ -232,7 +324,7 @@ let shift_holes offset ep =
 (* ── Dendrogram ──────────────────────────────────────────────────── *)
 
 type dnode =
-  | DLeaf of instance * edit_pat
+  | DLeaf of instance list * edit_pat
   | DMerge of {
       pattern : edit_pat;
       instances : instance list;
@@ -241,7 +333,7 @@ type dnode =
     }
 
 let dnode_instances = function
-  | DLeaf (inst, _) -> [ inst ]
+  | DLeaf (insts, _) -> insts
   | DMerge m -> m.instances
 
 let dnode_pattern = function DLeaf (_, ep) -> ep | DMerge m -> m.pattern
@@ -252,10 +344,7 @@ let hole_frac ep =
 
 let build_dendrogram initial =
   let nodes =
-    ref
-      (List.map
-         (fun c -> DLeaf (List.hd c.instances, c.pattern))
-         initial)
+    ref (List.map (fun c -> DLeaf (c.instances, c.pattern)) initial)
   in
   while List.length !nodes > 1 do
     let arr = Array.of_list !nodes in
@@ -301,16 +390,66 @@ let build_dendrogram initial =
   done;
   List.hd !nodes
 
+(** A pattern is "concrete" iff it contains at least one named-terminal [Leaf].
+    An empty named [PNode] with only [Hole] children does NOT count: without a
+    concrete terminal somewhere, the pattern is pure structural scaffolding
+    (e.g. [$.$ ( $ ) ]) and describes nothing specific. *)
 let rec has_concrete = function
   | Hole _ -> false
   | Leaf _ -> true
-  | PNode { is_named = true; _ } -> true
   | PNode { children; _ } -> List.exists (fun c -> has_concrete c.child) children
+
+let rec collect_leaf_values acc = function
+  | Hole _ -> acc
+  | Leaf { value; _ } -> value :: acc
+  | PNode { children; _ } ->
+      List.fold_left (fun a c -> collect_leaf_values a c.child) acc children
+
+(** [same_shape_mod_holes p1 p2] holds iff [p1] and [p2] have identical
+    structural shape — same node types at every position and the same
+    number of children at every [PNode]. Leaf {e values} are not compared:
+    a pure rename [foo -> bar] is same-shape, but a call with different
+    argument counts ([foo(a, b)] vs [bar(a)]) is not.
+
+    Used to distinguish symmetric patterns (pure renames, one-for-one
+    substitutions) from asymmetric ones (structural reshapes like dropped
+    arguments). Asymmetric patterns carry structural-edit information that
+    leaf-level patterns alone can't express. *)
+let rec same_shape_mod_holes p1 p2 =
+  match (p1, p2) with
+  | Hole _, Hole _ -> true
+  | Leaf l1, Leaf l2 -> l1.node_type = l2.node_type
+  | PNode n1, PNode n2 ->
+      n1.node_type = n2.node_type
+      && n1.is_named = n2.is_named
+      && List.length n1.children = List.length n2.children
+      && List.for_all2
+           (fun c1 c2 -> same_shape_mod_holes c1.child c2.child)
+           n1.children n2.children
+  | _ -> false
+
+let is_symmetric (ep : edit_pat) : bool =
+  same_shape_mod_holes ep.before ep.after
+
+(** True if the edit pattern carries at least one concrete edit signal —
+    either (a) the multiset of named-leaf values differs between [-] and
+    [+] sides (a concrete rename), or (b) the shape differs modulo holes
+    (a structural edit such as a dropped argument). A pattern whose only
+    differences are in which hole-variable index appears where is
+    substance-free: it's a generic "something in this context changed"
+    matcher that fires at every Modified ancestor and drowns more
+    specific rules. Rejected at coherence time. *)
+let has_concrete_edit (ep : edit_pat) : bool =
+  let b = List.sort compare (collect_leaf_values [] ep.before) in
+  let a = List.sort compare (collect_leaf_values [] ep.after) in
+  b <> a || not (same_shape_mod_holes ep.before ep.after)
 
 let cut_dendrogram ?(threshold = 0.35) min_size root =
   let is_coherent ep =
     let s = edit_size ep in
     has_concrete ep.before
+    && has_concrete ep.after
+    && has_concrete_edit ep
     && (s = 0
        || float_of_int (edit_holes ep) /. float_of_int s < threshold)
   in
@@ -322,7 +461,9 @@ let cut_dendrogram ?(threshold = 0.35) min_size root =
     if n < min_size then singletons := insts @ !singletons
     else
       match node with
-      | DLeaf (inst, _) -> singletons := inst :: !singletons
+      | DLeaf (_, ep) when is_coherent ep ->
+          clusters := { pattern = ep; instances = insts } :: !clusters
+      | DLeaf _ -> singletons := insts @ !singletons
       | DMerge m ->
           if is_coherent m.pattern then
             clusters :=
@@ -334,6 +475,86 @@ let cut_dendrogram ?(threshold = 0.35) min_size root =
   in
   go root;
   (!clusters, !singletons)
+
+(* ── Site covering ──────────────────────────────────────────────── *)
+
+(** Count of non-[Hole] nodes in an edit pattern. Used as a tiebreak when
+    multiple clusters cover the same sites: prefer the pattern that carries
+    more concrete context. *)
+let rec concrete_count = function
+  | Hole _ -> 0
+  | Leaf _ -> 1
+  | PNode { children; _ } ->
+      1 + List.fold_left (fun a c -> a + concrete_count c.child) 0 children
+
+let edit_concrete_count ep = concrete_count ep.before + concrete_count ep.after
+
+(** Greedy site-covering pass. Rank clusters by support (desc), then
+    asymmetric-shape-first (a pattern whose [-] and [+] sides differ
+    structurally — e.g. dropped argument — beats a pure rename; this
+    carries strictly more information), then concrete node count (asc,
+    smaller is better), then hole fraction (asc), then pattern text (asc)
+    as a total order. Walk in that order; for each cluster, drop instances
+    whose byte range {e overlaps} a previously-claimed range within the
+    same file. Emit clusters whose surviving support is still at least
+    [min_support].
+
+    The asymmetric-first preference captures the intuition from the design
+    doc §4.1: a rule that describes a structural reshaping (arg drop,
+    import swap with different argument counts) is strictly more
+    informative than the same-shape rename it encloses, so it wins even
+    though it's larger. Among patterns with matching symmetry, smaller is
+    better — a leaf rename is preferred over its enclosing call-level
+    cluster when both have the same support and no structural difference
+    at the call level. This reflects the fact that the leaf pattern is
+    equally applicable but more reusable.
+
+    {e Overlap}, not containment. A higher-level ancestor's byte range
+    contains its descendant's range, not the other way around. If leaves
+    claim first, subsequent ancestor instances overlap the leaf claims
+    and get dropped. Conversely if the call-level rule wins first, it
+    claims a larger range that swallows any leaf instances. Two
+    disjoint-range leaves at the same call site (both the receiver and
+    method of a method call rename independently) do not overlap each
+    other, so both leaves survive — this preserves emitting two
+    independent rules for [api_swap]-style changes. *)
+let cover_sites ?(min_support = 2) (clusters : cluster list) : cluster list =
+  let rank (c : cluster) =
+    let support = List.length c.instances in
+    let sym = if is_symmetric c.pattern then 1 else 0 in
+    let concrete = edit_concrete_count c.pattern in
+    let hf = hole_frac c.pattern in
+    let ptext = render_pattern_body c.pattern in
+    (-support, sym, concrete, hf, ptext)
+  in
+  let sorted = List.sort (fun a b -> compare (rank a) (rank b)) clusters in
+  let claimed : (string, (int * int) list) Hashtbl.t = Hashtbl.create 16 in
+  let is_claimed file s e =
+    match Hashtbl.find_opt claimed file with
+    | None -> false
+    | Some ranges -> List.exists (fun (cs, ce) -> cs < e && s < ce) ranges
+  in
+  let claim file s e =
+    let cur = try Hashtbl.find claimed file with Not_found -> [] in
+    Hashtbl.replace claimed file ((s, e) :: cur)
+  in
+  let out = ref [] in
+  List.iter
+    (fun c ->
+      let surviving =
+        List.filter
+          (fun inst ->
+            not (is_claimed inst.file inst.site_start inst.site_end))
+          c.instances
+      in
+      if List.length surviving >= min_support then begin
+        List.iter
+          (fun inst -> claim inst.file inst.site_start inst.site_end)
+          surviving;
+        out := { c with instances = surviving } :: !out
+      end)
+    sorted;
+  List.rev !out
 
 (* ── One-sided dendrogram (M1.6a) ──────────────────────────────── *)
 
@@ -470,45 +691,96 @@ let cluster_one_sided (candidates : one_sided_candidate list) :
 
 (* ── Change-pair extraction ──────────────────────────────────────── *)
 
-let has_structural cc =
+(** Fraction of a node's direct children whose change is non-[Same].
+    Higher ratio means the change converges at this level; lower means
+    this node is mostly unchanged boilerplate around a deeper change. *)
+let change_ratio (child_changes : Tree_diff.child_change list) : float =
+  let total = List.length child_changes in
+  if total = 0 then 0.0
+  else
+    let changed =
+      List.fold_left
+        (fun n c ->
+          match c with
+          | Tree_diff.Same _ -> n
+          | Tree_diff.Changed _ | Tree_diff.Added _ | Tree_diff.Removed _ ->
+              n + 1)
+        0 child_changes
+    in
+    float_of_int changed /. float_of_int total
+
+let has_direct_structural (cc : Tree_diff.child_change list) =
   List.exists
     (function
-      | Tree_diff.Removed _ | Tree_diff.Added _ -> true | _ -> false)
+      | Tree_diff.Added _ | Tree_diff.Removed _ -> true | _ -> false)
     cc
 
-let has_deep_structural cc =
+let rec subtree_has_structural (cc : Tree_diff.child_change list) =
   List.exists
     (function
-      | Tree_diff.Changed { change = Modified { child_changes = cc2 }; _ } ->
-          has_structural cc2
+      | Tree_diff.Added _ | Tree_diff.Removed _ -> true
+      | Tree_diff.Changed { change = Modified { child_changes }; _ } ->
+          subtree_has_structural child_changes
       | _ -> false)
     cc
 
-let lookahead_pairs (d : Tree_diff.diff) =
+(** Emit change pairs at emission points selected by the structure of the
+    diff, not by depth:
+
+    - Every [Replaced] leaf — the natural unit for a pure rename.
+    - Every [Modified] ancestor that either (a) has an [Added]/[Removed]
+      child directly (the locus of a structural change), or (b) has
+      [Added]/[Removed] somewhere in its subtree {e and} enough of its
+      own direct children are non-[Same] to make it a plausible lift
+      target (ratio ≥ [emission_threshold]).
+
+    Case (b) lifts through arbitrarily long wrapper chains — grammar-
+    agnostic, no depth bound — because at each wrapper level both
+    conditions (structural descendant, ratio ≥ threshold) still hold.
+    The lift stops at the first ancestor where most children are [Same],
+    which is typically the enclosing function/block. The covering pass
+    then ranks the candidate levels and picks the tightest informative
+    one.
+
+    Cases without any [Added]/[Removed] anywhere emit {e only} at
+    [Replaced] leaves — no ancestor candidates, so no churn from
+    cluster-level decisions in what should already be leaf-level
+    renames. Byte-range deduplication prevents duplicate ancestor
+    emissions when multiple descendant chains meet at the same ancestor. *)
+let collect_change_pairs_multi ?(emission_threshold = 0.5)
+    (d : Tree_diff.diff) : Tree_diff.change_pair list =
   let out = ref [] in
-  let emit b a =
-    out :=
-      {
-        Tree_diff.before_node = b;
-        after_node = a;
-        before_source = d.before_source;
-        after_source = d.after_source;
-      }
-      :: !out
+  let emitted : (int * int, unit) Hashtbl.t = Hashtbl.create 16 in
+  let emit (b : Tree.src Tree.t) (a : Tree.src Tree.t) =
+    let key = (b.start_byte, b.end_byte) in
+    if not (Hashtbl.mem emitted key) then begin
+      Hashtbl.add emitted key ();
+      out :=
+        {
+          Tree_diff.before_node = b;
+          after_node = a;
+          before_source = d.before_source;
+          after_source = d.after_source;
+        }
+        :: !out
+    end
   in
   let rec collect ~b ~a = function
     | Tree_diff.Unchanged -> ()
     | Tree_diff.Replaced -> emit b a
     | Tree_diff.Modified { child_changes } ->
-        if has_structural child_changes || has_deep_structural child_changes
-        then emit b a
-        else
-          List.iter
-            (function
-              | Tree_diff.Changed { before; after; change } ->
-                  collect ~b:before ~a:after change
-              | _ -> ())
-            child_changes
+        let direct = has_direct_structural child_changes in
+        let subtree = direct || subtree_has_structural child_changes in
+        if direct
+           || (subtree
+              && change_ratio child_changes >= emission_threshold)
+        then emit b a;
+        List.iter
+          (function
+            | Tree_diff.Changed { before; after; change } ->
+                collect ~b:before ~a:after change
+            | _ -> ())
+          child_changes
   in
   (match d.root_change with
   | Tree_diff.Modified { child_changes } ->
@@ -571,6 +843,8 @@ let collect_initial_clusters ~ctx (cs : changeset) : cluster list =
                     file = path;
                     line = cp.before_node.start_point.row + 1;
                     language;
+                    site_start = cp.before_node.start_byte;
+                    site_end = cp.before_node.end_byte;
                   }
                 in
                 let ep =
@@ -581,7 +855,7 @@ let collect_initial_clusters ~ctx (cs : changeset) : cluster list =
                 in
                 initial :=
                   { pattern = ep; instances = [ inst ] } :: !initial)
-              (lookahead_pairs d)
+              (collect_change_pairs_multi d)
           with _ -> ())
       | Added _ | Deleted _ -> ())
     cs.files;
@@ -707,17 +981,75 @@ let pair_one_sided_clusters ?(threshold = 0.7)
     sorted;
   List.rev !pairs
 
+(** Pre-cluster singletons whose patterns are structurally equal into
+    multi-instance clusters. Clustering singletons at ~1000-site scale
+    runs O(N³) through the dendrogram; deduplicating identical patterns
+    up front cuts N dramatically — a refactor that renames one symbol at
+    200 sites collapses into a single cluster before the dendrogram is
+    even constructed. *)
+let pre_group_identical (clusters : cluster list) : cluster list =
+  let tbl : (edit_pat, instance list ref) Hashtbl.t = Hashtbl.create 32 in
+  List.iter
+    (fun c ->
+      match Hashtbl.find_opt tbl c.pattern with
+      | Some insts -> insts := c.instances @ !insts
+      | None -> Hashtbl.add tbl c.pattern (ref c.instances))
+    clusters;
+  Hashtbl.fold
+    (fun p insts acc -> { pattern = p; instances = !insts } :: acc)
+    tbl []
+
 let summarize ~ctx (cs : changeset) : summary =
-  let initial = collect_initial_clusters ~ctx cs in
+  let raw = collect_initial_clusters ~ctx cs in
+  let initial = pre_group_identical raw in
+  if Sys.getenv_opt "CS_TRACE" <> None then begin
+    Printf.eprintf "initial emissions: %d, clusters after pre-group: %d\n%!"
+      (List.length raw) (List.length initial);
+    let buckets = [| 0; 0; 0; 0; 0; 0; 0 |] in
+    let bucket_of n =
+      if n <= 5 then 0
+      else if n <= 10 then 1
+      else if n <= 20 then 2
+      else if n <= 40 then 3
+      else if n <= 80 then 4
+      else if n <= 160 then 5
+      else 6
+    in
+    List.iter (fun c ->
+      let s = edit_size c.pattern in
+      buckets.(bucket_of s) <- buckets.(bucket_of s) + 1)
+      initial;
+    Printf.eprintf
+      "size hist (edit_size before+after): <=5:%d <=10:%d <=20:%d <=40:%d <=80:%d <=160:%d >160:%d\n%!"
+      buckets.(0) buckets.(1) buckets.(2) buckets.(3) buckets.(4)
+      buckets.(5) buckets.(6)
+  end;
   let two_sided_clusters =
-    if List.length initial < 2 then []
-    else
+    match initial with
+    | [] -> []
+    | [ c ] ->
+        (* Single pre-grouped cluster — no dendrogram needed. Check
+           coherence and min_size directly. *)
+        if
+          List.length c.instances >= 2
+          && has_concrete c.pattern.before
+          && has_concrete c.pattern.after
+          && has_concrete_edit c.pattern
+          && hole_frac c.pattern < 0.35
+        then cover_sites [ c ]
+        else []
+    | _ ->
       let root = build_dendrogram initial in
+      if Sys.getenv_opt "CS_TRACE" <> None then
+        Printf.eprintf "dendrogram built\n%!";
       let clusters, _singletons = cut_dendrogram 2 root in
+      if Sys.getenv_opt "CS_TRACE" <> None then
+        Printf.eprintf "clusters: %d\n%!" (List.length clusters);
+      let covered = cover_sites clusters in
       List.sort
         (fun a b ->
           compare (List.length b.instances) (List.length a.instances))
-        clusters
+        covered
   in
   let candidates = collect_one_sided_candidates ~ctx cs in
   let os_clusters = cluster_one_sided candidates in

@@ -114,9 +114,82 @@ let canonicalize_section (s : section) : string =
   in
   Printf.sprintf "%s\n%s" s.header (String.concat "\n" lines)
 
+(** Renumber rule IDs so [R1] names the rule whose canonicalized body
+    sorts first lexicographically, [R2] the next, and so on. Without this
+    the comparison is fragile to ordering choices in the summariser: two
+    semantically equivalent outputs that swap [R1] and [R2] would fail.
+
+    Walks sections in two passes: the first pass scans [# rule Rk ...]
+    headers in body-sorted order and builds a renaming [old_id ->
+    new_id]. The second pass substitutes every occurrence of each old id
+    (in [rule Rk], [sites Rk], and [rule=Rk] attribution on residuals). *)
+let canonicalize_rule_ids (canon : string list) : string list =
+  let is_rule_section s =
+    String.length s >= 5 && String.sub s 0 5 = "rule "
+  in
+  let split_rule_section s =
+    match String.index_opt s '\n' with
+    | None -> None
+    | Some nl ->
+        let first_line = String.sub s 0 nl in
+        let body = String.sub s (nl + 1) (String.length s - nl - 1) in
+        (match String.split_on_char ' ' first_line with
+         | "rule" :: id :: _ -> Some (id, body)
+         | _ -> None)
+  in
+  let rule_sections_with_body_sort =
+    canon
+    |> List.filter is_rule_section
+    |> List.filter_map split_rule_section
+    |> List.sort (fun (_, b1) (_, b2) -> compare b1 b2)
+    |> List.map fst
+  in
+  (* Walk the string and rename [Rk] tokens (where k is an integer) to the
+     new id in one pass, avoiding aliasing when the mapping swaps ids. An
+     [R] followed by digits is only treated as a rule-id token if the
+     preceding character is not alphanumeric — this lets us match [rule
+     R1], [sites R1], [rule=R1], [R1,R2] without touching identifiers like
+     [Request]. *)
+  let mapping = Hashtbl.create 8 in
+  List.iteri
+    (fun i old_id ->
+      Hashtbl.replace mapping old_id (Printf.sprintf "R%d" (i + 1)))
+    rule_sections_with_body_sort;
+  let is_alnum c =
+    (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+    || (c >= '0' && c <= '9') || c = '_'
+  in
+  let rename s =
+    let buf = Buffer.create (String.length s) in
+    let n = String.length s in
+    let i = ref 0 in
+    while !i < n do
+      let c = s.[!i] in
+      if c = 'R' && !i + 1 < n
+         && s.[!i + 1] >= '0' && s.[!i + 1] <= '9'
+         && (!i = 0 || not (is_alnum s.[!i - 1]))
+      then begin
+        let j = ref (!i + 1) in
+        while !j < n && s.[!j] >= '0' && s.[!j] <= '9' do incr j done;
+        let token = String.sub s !i (!j - !i) in
+        (match Hashtbl.find_opt mapping token with
+         | Some new_id -> Buffer.add_string buf new_id
+         | None -> Buffer.add_string buf token);
+        i := !j
+      end
+      else begin
+        Buffer.add_char buf c;
+        incr i
+      end
+    done;
+    Buffer.contents buf
+  in
+  List.map rename canon
+
 let canonicalize_summary (text : string) : string =
   let sections = split_sections text in
   let canon = List.map canonicalize_section sections in
+  let canon = canonicalize_rule_ids canon in
   let sorted = List.sort compare canon in
   String.concat "\n---\n" sorted
 
