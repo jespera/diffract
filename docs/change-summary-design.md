@@ -158,12 +158,20 @@ level of ancestor wins for each site. Key properties:
   renames at byte-disjoint positions) do not overlap and can each win
   their own rule.
 - **Coherence gate.** A cluster survives only if its pattern contains
-  at least one concrete named leaf on each side and has at least one
-  concrete edit (either differing multisets of leaf values or
-  differing structural shape modulo holes). All-hole scaffolding like
-  `$.$($)→$.$($)` is rejected here before it can compete for
-  coverage. The gate also rejects clusters whose `+`-side has a
-  metavariable not present on the `-` side (M1.8a).
+  *at least one* concrete anchor on at least one side — a named leaf
+  or a keyword-shaped unnamed token (one whose text contains an
+  alphabetic character, e.g. `array`, `function`, `class`). Pure
+  punctuation (`,`, `(`, `;`) does not count. The either-side rule
+  accommodates asymmetric reshapes whose `+` side has no keyword:
+  PHP's `array($H0, $H1) → [$H0, $H1]` is informative because the
+  `array` keyword on the `-` side is the anchor, even though the `+`
+  side is just brackets and holes. The cluster must also have at
+  least one concrete edit (either differing multisets of leaf values
+  or differing structural shape modulo holes), which prevents
+  fully-holed patterns on both sides from sneaking through. All-hole
+  scaffolding like `$.$($)→$.$($)` is rejected here before it can
+  compete for coverage. The gate also rejects clusters whose `+`-side
+  has a metavariable not present on the `-` side (M1.8a).
 - **Behavioural applicability.** Render the cluster's match-side
   pattern as `.pat` text and run `Match.find_matches` against the
   instance's full pre-change source. A cluster whose rule matches
