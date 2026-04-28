@@ -307,7 +307,7 @@ CAMLprim value tsh_node_end_point(value v_node) {
 extern const TSLanguage *tree_sitter_typescript(void);
 extern const TSLanguage *tree_sitter_tsx(void);
 extern const TSLanguage *tree_sitter_kotlin(void);
-extern const TSLanguage *tree_sitter_php(void);
+extern const TSLanguage *tree_sitter_php_only(void);
 extern const TSLanguage *tree_sitter_scala(void);
 
 CAMLprim value tsh_typescript_language(value v_unit) {
@@ -327,7 +327,7 @@ CAMLprim value tsh_kotlin_language(value v_unit) {
 
 CAMLprim value tsh_php_language(value v_unit) {
     CAMLparam1(v_unit);
-    CAMLreturn(caml_copy_nativeint((intnat)tree_sitter_php()));
+    CAMLreturn(caml_copy_nativeint((intnat)tree_sitter_php_only()));
 }
 
 CAMLprim value tsh_scala_language(value v_unit) {
