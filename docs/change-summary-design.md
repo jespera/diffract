@@ -597,13 +597,23 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   `-`-only block has no structural anchor for the spatch engine to attach
   to. Test: §5.5.
 
-- **M1.6 — Cross-cluster file-overlap fusion.** After independent clustering,
-  compute Jaccard between every cluster's file set and fuse candidates per
-  §4.2 — covering all three cases: Removed+Added → single two-sided
-  section, one-sided+two-sided, and two-sided+two-sided → conjunctive
-  multi-section. One-sided candidates unmatched after fusion do *not*
-  become rules (they fall to residuals in M1.9). Test: §5.3; target
-  reproducing `useAppSelector.pat`.
+- **M1.6 — Cross-cluster file-overlap fusion (done).** After independent
+  clustering, two-sided clusters and one-sided swap pairs are unified into a
+  single fusion graph keyed on file sets; connected components above a
+  Jaccard threshold (default 0.7) emit as a single multi-section rule whose
+  sites are the intersection of the components' file sets. Case 1
+  (Removed+Added → single two-sided section) is the existing `fuse_swap`
+  path; cases 2 and 3 fall out for free from the unified graph because a
+  case-1 swap pair enters the graph as just another two-sided node. If a
+  fusion's all-way intersection has fewer than `min_support` sites, the
+  fusion is abandoned and members emit standalone. Tested by
+  `mixed_systematic` (case 3, two property renames) and
+  `co_occurring_renames` (case 3, two function renames) fixtures. The
+  §5.3 `useAppSelector.pat` reproduction is still aspirational —
+  reaching it depends on the GumTree mapping classifying the import
+  rewrite and the call-site rewrite into clean two-sided clusters with
+  aligned holes; a dedicated fixture for that case will land alongside
+  M1.8b.
 
 - **M1.7 — File-level operations.** Thread added/deleted files through the
   changeset type and into the summary. Test: §5.6.

@@ -5,19 +5,14 @@ metavar $H0: single
 @@
 - $H0.read
 + $H0.get
-# sites R1
-auth.ts
-rates.ts
-session.ts
 
-# rule R2  support=3  language=typescript
 @@
 match: strict
 metavar $H0: single
 @@
 - $H0.write
 + $H0.set
-# sites R2
+# sites R1
 auth.ts
 rates.ts
 session.ts
