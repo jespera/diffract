@@ -1,0 +1,2 @@
+<?php
+$roles = [$admin, $editor];
