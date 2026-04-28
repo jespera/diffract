@@ -44,11 +44,11 @@ ar rcs lib/libtree-sitter-kotlin.a "$TMPDIR_LOCAL/kotlin_parser.o" "$TMPDIR_LOCA
 # Build PHP grammar
 echo "Building PHP grammar..."
 cc -O2 -c -o "$TMPDIR_LOCAL/php_parser.o" \
-  -I node_modules/tree-sitter-php/php/src \
-  node_modules/tree-sitter-php/php/src/parser.c
+  -I node_modules/tree-sitter-php/php_only/src \
+  node_modules/tree-sitter-php/php_only/src/parser.c
 cc -O2 -c -o "$TMPDIR_LOCAL/php_scanner.o" \
-  -I node_modules/tree-sitter-php/php/src \
-  node_modules/tree-sitter-php/php/src/scanner.c
+  -I node_modules/tree-sitter-php/php_only/src \
+  node_modules/tree-sitter-php/php_only/src/scanner.c
 ar rcs lib/libtree-sitter-php.a "$TMPDIR_LOCAL/php_parser.o" "$TMPDIR_LOCAL/php_scanner.o"
 
 # Build Scala grammar
