@@ -133,28 +133,50 @@ level of ancestor wins for each site. Key properties:
   uniformly: every wrapper level is a candidate, and the covering pass
   chooses by evidence (support, shape, concreteness) rather than by
   hard-coded depth.
-- **Pre-filter by change density.** An ancestor is emitted only when the
-  fraction of its named children that are non-`Same` exceeds a small
-  threshold. This drops ancestors that are mostly unchanged (a whole
-  function body when only one statement changed) without a depth bound.
-- **Covering by byte-range overlap.** Clusters are ranked by support (desc),
-  then by asymmetric-shape-first (patterns with arg-count or structural
-  diffs between `-` and `+` carry strictly more information than same-shape
-  renames), then by concrete-node-count (asc — a small well-scoped leaf
-  rename beats its enclosing call level when both are symmetric), then by
-  hole fraction, then by pattern text. The winning cluster claims the byte
-  ranges of its sites; subsequent clusters whose instances overlap a claim
-  in the same file are dropped. Disjoint sites at the same call
-  (e.g. independent receiver and method renames) do not overlap and can
-  each win their own rule, preserving the two-leaf-rule output for cases
-  like [api_swap].
-- **Coherence gate.** A cluster survives only if its pattern contains at
-  least one concrete named leaf on each side and has at least one concrete
-  edit (either differing multisets of leaf values or differing structural
-  shape modulo holes). All-hole scaffolding like `$.$($)→$.$($)` is
-  rejected here before it can compete for coverage. The gate also
-  rejects clusters whose `+`-side has a metavariable not present on the
-  `-` side (M1.8a).
+- **No depth gating.** Every `Modified` ancestor on the change chain
+  is emitted unconditionally. Earlier iterations gated by
+  change-density (emit only ancestors whose named-children change
+  ratio exceeded a threshold), but with the applicability and
+  covering filters below, gating loses well-scoped lift candidates
+  whose density looks low (a single property rename inside a longer
+  member-access chain) for no real benefit — the unhelpful candidates
+  get filtered later anyway.
+- **Covering by byte-range overlap.** Clusters are ranked by support
+  (desc), then by asymmetric-shape-first (patterns with arg-count or
+  structural diffs between `-` and `+` carry strictly more
+  information than same-shape renames), then by concrete-edit-count
+  (desc — number of leaf-value renames captured; a member-expression
+  rule like `legacyStore.fetch → store.get` captures two renames and
+  beats the single-rename leaf `legacyStore → store` at the same
+  site, even though both are symmetric), then by concrete-node-count
+  (asc — among ties on edit count, smaller wins so a leaf rename
+  beats its enclosing scaffold when both capture the same renames),
+  then by hole fraction, then by pattern text. The winning cluster
+  claims the byte ranges of its sites; subsequent clusters whose
+  instances overlap a claim in the same file are dropped. Disjoint
+  sites at the same call (e.g. independent receiver and method
+  renames at byte-disjoint positions) do not overlap and can each win
+  their own rule.
+- **Coherence gate.** A cluster survives only if its pattern contains
+  at least one concrete named leaf on each side and has at least one
+  concrete edit (either differing multisets of leaf values or
+  differing structural shape modulo holes). All-hole scaffolding like
+  `$.$($)→$.$($)` is rejected here before it can compete for
+  coverage. The gate also rejects clusters whose `+`-side has a
+  metavariable not present on the `-` side (M1.8a).
+- **Behavioural applicability.** Render the cluster's match-side
+  pattern as `.pat` text and run `Match.find_matches` against the
+  instance's full pre-change source. A cluster whose rule matches
+  zero positions in the source it was extracted from cannot
+  meaningfully fire and is dropped. This catches the common case
+  where a renderer drops grammatical context — e.g. a
+  `property_identifier` (member access target, JSX attribute name)
+  rendered standalone re-parses as `identifier` at expression
+  position, and the matcher's type-strict unification refuses to
+  bind. The check is behavioural rather than a static heuristic so
+  no model of the matcher's typing rules is required: re-parsing the
+  rendered text and querying `Match.find_matches` directly is the
+  source of truth.
 - **Leaf-on-delimiter conversion.** During `of_src`, a named node is
   treated as a leaf (its full text kept verbatim, no recursion) when
   its byte range contains non-whitespace bytes that no child covers
@@ -176,6 +198,19 @@ change pair, greedily merge the pair of clusters whose anti-unification
 introduces the fewest new holes (measured as hole fraction relative to pattern
 size), and record the merge tree. The result is a dendrogram whose leaves are
 concrete edits and whose interior nodes are increasingly abstract patterns.
+
+**Merge score, not raw hole fraction.** Pure hole-fraction picks
+greedy merges that produce orphan after-holes — e.g. merging
+`tokenCache.read → tokenCache.get` with `tokenCache.write →
+tokenCache.set` (same receiver) holes the property on each side
+independently and gives a `+`-side hole with no `-`-side binding
+source. The coherence gate (§3.1) rejects such patterns, dropping the
+merge to singletons and losing the chance to express
+`$X.read → $X.get` as a generalised rule. Penalise these merges by a
+large constant in the score so the greedy step prefers a sibling
+pairing that keeps holes aligned (e.g. merging different receivers
+with the same property: `tokenCache.read + rateCache.read →
+$H0.read`).
 
 **Cut policy.** By default, emit the coarsest-still-coherent node from each
 subtree: the rule is still informative (hole fraction below threshold, has
