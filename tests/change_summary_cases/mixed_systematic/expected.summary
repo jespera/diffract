@@ -2,8 +2,8 @@
 @@
 match: strict
 @@
-- write
-+ set
+- read
++ get
 # sites R1
 auth.ts
 rates.ts
@@ -13,8 +13,8 @@ session.ts
 @@
 match: strict
 @@
-- read
-+ get
+- write
++ set
 # sites R2
 auth.ts
 rates.ts
