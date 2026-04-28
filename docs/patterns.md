@@ -477,7 +477,6 @@ specific fields that appear in `-`/`+` lines.
 @@
 match: field
 @@
-<?php
 - #[deprecated]
 + #[deprecated(note = "use new API")]
 function test() {
@@ -495,7 +494,6 @@ match: field
 metavar $NAME: single
 metavar $BODY: sequence
 @@
-<?php
 - function $NAME() { $BODY }
 + function $NAME(): void { $BODY }
 ```
