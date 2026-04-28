@@ -413,13 +413,31 @@ let build_dendrogram initial =
   done;
   List.hd !nodes
 
-(** A pattern is "concrete" iff it contains at least one named-terminal [Leaf].
-    An empty named [PNode] with only [Hole] children does NOT count: without a
-    concrete terminal somewhere, the pattern is pure structural scaffolding
-    (e.g. [$.$ ( $ ) ]) and describes nothing specific. *)
+(** A pattern is "concrete" iff it contains at least one named [Leaf]
+    or a keyword-shaped unnamed token (one whose text contains an
+    alphabetic character — [array], [function], [class] etc.). Empty
+    [PNode]s whose node_type is pure punctuation ([,], [(], [;])
+    don't count: the pattern is structural scaffolding without a
+    keyword anchor and matches arbitrary content of the right shape.
+    The keyword carve-out is what lets a PHP rule like [array($H0)
+    -> [$H0]] survive coherence: the [array] keyword is the
+    distinguishing concrete signal even though every named-leaf
+    descendant becomes a hole. *)
+let has_keyword_text s =
+  let n = String.length s in
+  let rec loop i =
+    if i >= n then false
+    else
+      let c = s.[i] in
+      if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') then true
+      else loop (i + 1)
+  in
+  loop 0
+
 let rec has_concrete = function
   | Hole _ -> false
   | Leaf _ -> true
+  | PNode { children = []; node_type; _ } -> has_keyword_text node_type
   | PNode { children; _ } -> List.exists (fun c -> has_concrete c.child) children
 
 let rec collect_leaf_values acc = function
@@ -514,8 +532,16 @@ let cluster_applies ~ctx (c : cluster) : bool =
 let cut_dendrogram ?(threshold = 0.35) min_size root =
   let is_coherent ep =
     let s = edit_size ep in
-    has_concrete ep.before
-    && has_concrete ep.after
+    (* At least one side must carry concrete content (a named leaf or
+       a keyword token). Both-sides was too strict for asymmetric
+       reshapes where one side has no keyword: e.g. PHP's [array($X,
+       $Y) -> [$X, $Y]] is informative because the [array] keyword
+       on the [-] side is the anchor, even though the [+] side is
+       just brackets and holes. [has_concrete_edit] already rejects
+       patterns whose two sides agree both in leaf values and in
+       shape, so a fully-holed [-] *and* fully-holed [+] cluster
+       can't slip through. *)
+    (has_concrete ep.before || has_concrete ep.after)
     && has_concrete_edit ep
     && no_orphan_after_holes ep
     && (s = 0
