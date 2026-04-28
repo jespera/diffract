@@ -2,8 +2,8 @@
 @@
 match: strict
 @@
-- ./old-logger
-+ ./new-logger
+- "./old-logger"
++ "./new-logger"
 # sites R1
 a.ts
 b.ts

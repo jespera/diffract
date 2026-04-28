@@ -1,0 +1,12 @@
+# rule R1  support=3  language=tsx
+@@
+match: strict
+metavar $H0: single
+metavar $H1: single
+@@
+- <Foo oldName={$H0} bar={$H1} />
++ <Foo newName={$H0} bar={$H1} />
+# sites R1
+Card.tsx
+Header.tsx
+Sidebar.tsx

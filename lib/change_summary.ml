@@ -51,6 +51,10 @@ type edit_pat = { before : pat_node; after : pat_node }
 type instance = {
   before_text : string;
   after_text : string;
+  before_full_source : string;
+      (** Full pre-change source of the file containing this site, used
+          by the applicability check to verify the rendered pattern
+          actually matches in real code. *)
   file : string;
   line : int;
   language : string;
@@ -342,6 +346,25 @@ let hole_frac ep =
   let s = edit_size ep in
   if s = 0 then 0.0 else float_of_int (edit_holes ep) /. float_of_int s
 
+(** Score a candidate merge for the dendrogram. Pure hole-fraction can
+    pick a merge whose anti-unification holes both sides at unrelated
+    positions — e.g. merging [tokenCache.read → tokenCache.get] with
+    [tokenCache.write → tokenCache.set] holes the property on each
+    side independently, producing a [+]-side hole with no [-]-side
+    binding source (orphan). Such patterns are rejected by the
+    coherence gate, dropping the merge to singletons. Penalise these
+    merges so the greedy step prefers a sibling pairing that keeps
+    holes aligned (e.g. merging different receivers with the same
+    property: [tokenCache.read] + [rateCache.read] → [$H0.read]). *)
+let merge_score ep =
+  let base = hole_frac ep in
+  let before_holes = collect_holes [] ep.before in
+  let after_holes = collect_holes [] ep.after in
+  let aligned =
+    List.for_all (fun h -> List.mem h before_holes) after_holes
+  in
+  if aligned then base else base +. 10.0
+
 let build_dendrogram initial =
   let nodes =
     ref (List.map (fun c -> DLeaf (c.instances, c.pattern)) initial)
@@ -357,14 +380,14 @@ let build_dendrogram initial =
     let bp =
       ref (merge_patterns (dnode_pattern arr.(0)) (dnode_pattern arr.(1)))
     in
-    let bfrac = ref (hole_frac !bp) in
+    let bfrac = ref (merge_score !bp) in
     for i = 0 to n - 2 do
       for j = i + 1 to n - 1 do
         if not (i = 0 && j = 1) then begin
           let p =
             merge_patterns (dnode_pattern arr.(i)) (dnode_pattern arr.(j))
           in
-          let frac = hole_frac p in
+          let frac = merge_score p in
           if frac < !bfrac then begin
             bi := i;
             bj := j;
@@ -457,6 +480,37 @@ let no_orphan_after_holes (ep : edit_pat) : bool =
   let after_holes = collect_holes [] ep.after in
   List.for_all (fun h -> List.mem h before_holes) after_holes
 
+(** Behavioural applicability check: the rule, when its match side is
+    parsed as a [.pat] pattern and applied to the source bytes the
+    cluster was extracted from, must find at least one match. The
+    renderer can drop syntactic context that the grammar uses to
+    decide a node's type — most commonly, a [property_identifier]
+    (the property name in a member access) renders as just its text
+    and re-parses as a bare [identifier] at expression position. Such
+    a pattern can never fire: the matcher only unifies nodes whose
+    types match. Verifying directly via [Match.find_matches] catches
+    these mismatches without having to model the matcher's
+    type-strict behaviour with a static heuristic.
+
+    Reject the cluster so the covering pass falls back to a
+    sibling-level cluster (typically the surrounding member or call
+    expression) that retains the disambiguating context. *)
+let cluster_applies ~ctx (c : cluster) : bool =
+  match c.instances with
+  | [] -> false
+  | inst :: _ ->
+      let lang = inst.language in
+      if lang = "" then true
+      else
+        let pattern_text = render_pattern_body c.pattern in
+        try
+          let matches =
+            Match.find_matches ~ctx ~language:lang ~pattern_text
+              ~source_text:inst.before_full_source
+          in
+          List.length matches > 0
+        with _ -> false
+
 let cut_dendrogram ?(threshold = 0.35) min_size root =
   let is_coherent ep =
     let s = edit_size ep in
@@ -503,6 +557,29 @@ let rec concrete_count = function
 
 let edit_concrete_count ep = concrete_count ep.before + concrete_count ep.after
 
+(** Count the multiset symmetric difference between the leaf values on
+    each side of the edit pattern. Each leaf-value rename contributes
+    2 (one removal, one addition); a structural-only edit (arg drop)
+    contributes 0 from this metric. Used to prefer clusters that
+    capture more concrete renames at a site — e.g. a member-expression
+    rule [legacyStore.fetch -> store.get] (count 4) is preferred over
+    a leaf rule [legacyStore -> store] (count 2) at the same site,
+    since the larger rule reproduces every concrete change there
+    while the leaf silently leaves the sibling [.fetch] rename
+    uncovered. *)
+let leaf_value_diff_count (ep : edit_pat) : int =
+  let b = List.sort compare (collect_leaf_values [] ep.before) in
+  let a = List.sort compare (collect_leaf_values [] ep.after) in
+  let rec diff l1 l2 acc =
+    match (l1, l2) with
+    | [], rest | rest, [] -> acc + List.length rest
+    | h1 :: t1, h2 :: t2 ->
+        if h1 = h2 then diff t1 t2 acc
+        else if h1 < h2 then diff t1 l2 (acc + 1)
+        else diff l1 t2 (acc + 1)
+  in
+  diff b a 0
+
 (** Greedy site-covering pass. Rank clusters by support (desc), then
     asymmetric-shape-first (a pattern whose [-] and [+] sides differ
     structurally — e.g. dropped argument — beats a pure rename; this
@@ -536,10 +613,12 @@ let cover_sites ?(min_support = 2) (clusters : cluster list) : cluster list =
   let rank (c : cluster) =
     let support = List.length c.instances in
     let sym = if is_symmetric c.pattern then 1 else 0 in
+    (* Negate so higher count wins when sorted ascending. *)
+    let edits = -(leaf_value_diff_count c.pattern) in
     let concrete = edit_concrete_count c.pattern in
     let hf = hole_frac c.pattern in
     let ptext = render_pattern_body c.pattern in
-    (-support, sym, concrete, hf, ptext)
+    (-support, sym, edits, concrete, hf, ptext)
   in
   let sorted = List.sort (fun a b -> compare (rank a) (rank b)) clusters in
   let claimed : (string, (int * int) list) Hashtbl.t = Hashtbl.create 16 in
@@ -783,12 +862,18 @@ let collect_change_pairs_multi ?(emission_threshold = 0.5)
     | Tree_diff.Unchanged -> ()
     | Tree_diff.Replaced -> emit b a
     | Tree_diff.Modified { child_changes } ->
-        let direct = has_direct_structural child_changes in
-        let subtree = direct || subtree_has_structural child_changes in
-        if direct
-           || (subtree
-              && change_ratio child_changes >= emission_threshold)
-        then emit b a;
+        (* Emit at every Modified ancestor along the change chain.
+           A given level may produce a pattern whose rendered text
+           cannot fire as a [.pat] rule (e.g. a [property_identifier]
+           in isolation re-parses as [identifier]; a [jsx_attribute]
+           in isolation re-parses as an [assignment_expression]).
+           Generating candidates at all levels lets the applicability
+           filter reject unworkable ones while a coherent ancestor
+           level (typically [member_expression] or
+           [jsx_self_closing_element]) survives. The covering pass
+           then picks the smallest among applicable candidates,
+           resolving overlap by byte range. *)
+        emit b a;
         List.iter
           (function
             | Tree_diff.Changed { before; after; change } ->
@@ -854,6 +939,7 @@ let collect_initial_clusters ~ctx (cs : changeset) : cluster list =
                   {
                     before_text = bt;
                     after_text = at;
+                    before_full_source = before_source;
                     file = path;
                     line = cp.before_node.start_point.row + 1;
                     language;
@@ -1050,6 +1136,7 @@ let summarize ~ctx (cs : changeset) : summary =
           && has_concrete c.pattern.after
           && has_concrete_edit c.pattern
           && hole_frac c.pattern < 0.35
+          && cluster_applies ~ctx c
         then cover_sites [ c ]
         else []
     | _ ->
@@ -1059,6 +1146,27 @@ let summarize ~ctx (cs : changeset) : summary =
       let clusters, _singletons = cut_dendrogram 2 root in
       if Sys.getenv_opt "CS_TRACE" <> None then
         Printf.eprintf "clusters: %d\n%!" (List.length clusters);
+      let clusters =
+        List.filter
+          (fun c ->
+            let ok = cluster_applies ~ctx c in
+            if Sys.getenv_opt "CS_TRACE" <> None then begin
+              let intended =
+                match c.pattern.before with
+                | Hole _ -> "<hole>"
+                | Leaf { node_type; _ } -> node_type
+                | PNode { node_type; _ } -> node_type
+              in
+              let text = render_pat_node c.pattern.before in
+              Printf.eprintf "  applicability: intended=%s text=%S -> %b\n%!"
+                intended text ok
+            end;
+            ok)
+          clusters
+      in
+      if Sys.getenv_opt "CS_TRACE" <> None then
+        Printf.eprintf "clusters after applicability: %d\n%!"
+          (List.length clusters);
       let covered = cover_sites clusters in
       List.sort
         (fun a b ->

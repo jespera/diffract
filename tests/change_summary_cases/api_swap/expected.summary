@@ -2,20 +2,9 @@
 @@
 match: strict
 @@
-- fetch
-+ get
+- legacyStore.fetch
++ store.get
 # sites R1
-admin.ts
-orders.ts
-users.ts
-
-# rule R2  support=5  language=typescript
-@@
-match: strict
-@@
-- legacyStore
-+ store
-# sites R2
 admin.ts
 orders.ts
 users.ts
