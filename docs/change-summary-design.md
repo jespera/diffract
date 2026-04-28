@@ -152,7 +152,20 @@ level of ancestor wins for each site. Key properties:
   least one concrete named leaf on each side and has at least one concrete
   edit (either differing multisets of leaf values or differing structural
   shape modulo holes). All-hole scaffolding like `$.$($)→$.$($)` is
-  rejected here before it can compete for coverage.
+  rejected here before it can compete for coverage. The gate also
+  rejects clusters whose `+`-side has a metavariable not present on the
+  `-` side (M1.8a).
+- **Leaf-on-delimiter conversion.** During `of_src`, a named node is
+  treated as a leaf (its full text kept verbatim, no recursion) when
+  its byte range contains non-whitespace bytes that no child covers
+  (silently-consumed delimiters such as Kotlin's `string_literal`
+  quotes) or when an unnamed child's text is a string-quote character
+  (TypeScript's `string` exposes `"` as unnamed children). Anti-
+  unification then holes the whole literal when its content varies,
+  rather than holing inside the delimiters and rendering an
+  unapplicable placeholder embedded in a string token. Slash is
+  excluded from the quote-char set so `binary_expression` with `/` is
+  not misclassified.
 
 ## 4. Key design decisions
 
@@ -552,10 +565,22 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
 - **M1.7 — File-level operations.** Thread added/deleted files through the
   changeset type and into the summary. Test: §5.6.
 
-- **M1.8 — Cross-side hole alignment.** Post-process anti-unified patterns
-  to rename `+`-side holes to their corresponding `-`-side holes using the
-  GumTree mapping. Reject or downgrade patterns with orphan holes. Test:
-  §5.2 (first part: cluster doesn't dissolve).
+- **M1.8a — Orphan-hole rejection (done).** Coherence gate rejects any
+  cluster whose `+`-side has a metavariable not present on the `-` side
+  (would render as `Metavars in replacement not bound in match` at apply
+  time). The cut falls back to the coherent dendrogram parent, which
+  typically captures the surrounding context that carries the binding
+  source. Tested by `ts_lodash_to_native` and `kotlin_assert_migration`
+  fixtures, where shared `hole_for` memoization across the before/after
+  anti-unifications aligns the holes when the same concrete subtree
+  appears on both sides. (Pending: M1.8b below.)
+
+- **M1.8b — GumTree-based hole renaming.** Post-process anti-unified
+  patterns to rename `+`-side holes to their corresponding `-`-side
+  holes via the GumTree mapping, for cases where memoization-by-pair
+  doesn't suffice — i.e. when the after's subtree is a *part of* or a
+  *reshaping of* the before's subtree (the §5.2 example). Test: §5.2
+  (first part: cluster doesn't dissolve).
 
 - **M1.9 — Residual extraction (single tier).** Apply each rule to each site
   via `Match.transform`, diff the result against the site's after-source,
@@ -582,26 +607,6 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
 - **M5 — Tuning and real-world soak.** `--min-support`, `--max-hole-fraction`,
   `--strategy`. Snapshot the summary of `changeset/` and `remove-redux.patch`
   as regression fixtures.
-
-## 6.1 Known prototype limitations
-
-These are known shortcomings of the current M1 implementation carried over
-from `examples/change_summary.ml`. They don't block the staged milestones
-but should be cleaned up — probably folded into M3 or a dedicated renderer/
-extractor pass — before any real-world snapshot tests go in (M5).
-
-- **Renderer whitespace and token splitting.** `render_pat_node` joins a
-  node's children with single spaces. That produces `foo ( $H0 , $H1 )`
-  where a reviewer would expect `foo($H0, $H1)`. String literals render
-  with their quote characters separated from content (`" $H "` instead of
-  `"$H"`) because tree-sitter represents `"` as unnamed leaf children
-  flanking the string body.
-
-  These are cosmetic — the emitted patterns are valid `.pat` syntax and
-  parse correctly — but noisy on review. A language-aware or
-  node-type-aware spacing pass would fix it. Currently swept under the
-  alpha-equivalence comparator in tests, but a real reviewer doesn't
-  have that luxury.
 
 ## 7. Non-goals
 
