@@ -1,0 +1,13 @@
+# rule R1  support=3  language=php
+@@
+match: strict
+metavar $H0: single
+metavar $H1: single
+metavar $H2: single
+@@
+- $$H0 = array($$H1, $$H2);
++ $$H0 = [$$H1, $$H2];
+# sites R1
+config.php
+roles.php
+users.php
