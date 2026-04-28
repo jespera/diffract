@@ -1,0 +1,12 @@
+# rule R1  support=3  language=typescript
+@@
+match: strict
+metavar $H0: single
+metavar $H1: single
+@@
+- _.map($H0, $H1)
++ $H0.map($H1)
+# sites R1
+items.ts
+orders.ts
+users.ts

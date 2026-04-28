@@ -1,0 +1,12 @@
+# rule R1  support=3  language=kotlin
+@@
+match: strict
+metavar $H0: single
+metavar $H1: single
+@@
+- assertEquals($H0, $H1)
++ assertThat($H1).isEqualTo($H0)
+# sites R1
+TestResult.kt
+TestStatus.kt
+TestUser.kt
