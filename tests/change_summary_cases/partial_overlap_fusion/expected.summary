@@ -1,0 +1,16 @@
+# rule R1  support=3  language=typescript
+@@
+match: strict
+@@
+- cache.read
++ cache.get
+
+@@
+match: strict
+@@
+- cache.write
++ cache.set
+# sites R1
+a.ts
+b.ts
+c.ts

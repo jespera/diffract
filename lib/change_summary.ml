@@ -1107,6 +1107,139 @@ let pair_one_sided_clusters ?(threshold = 0.7)
     sorted;
   List.rev !pairs
 
+(* ── M1.6 cases 2 & 3: conjunctive multi-section fusion ──────────── *)
+
+(** A node feeding the fusion graph: a two-sided edit pattern plus the
+    file set it fires in. Two-sided clusters and one-sided swap pairs
+    feed in identically — once a swap pair has been widened to two-sided
+    by [fuse_swap], the downstream fusion treats it the same as any
+    other two-sided cluster. Cases 2 (one-sided + two-sided) and 3
+    (two-sided + two-sided) of §4.2 differ only in input shape; the
+    output mechanics are uniform. *)
+type fusion_node = {
+  fn_pattern : edit_pat;
+  fn_files : string list;  (** sorted unique *)
+  fn_support : int;
+      (** support to report when this node is emitted standalone — total
+          fire count for two-sided clusters, distinct-file count for
+          swap pairs (matches the prior single-rule conventions). *)
+  fn_language : string;
+}
+
+let intersect_sorted (a : string list) (b : string list) : string list =
+  List.filter (fun x -> List.mem x b) a
+
+let intersect_all (lists : string list list) : string list =
+  match lists with
+  | [] -> []
+  | first :: rest -> List.fold_left intersect_sorted first rest
+
+let fusion_node_of_two_sided (c : cluster) : fusion_node =
+  let files =
+    c.instances
+    |> List.map (fun (i : instance) -> i.file)
+    |> List.sort_uniq String.compare
+  in
+  let language =
+    match c.instances with i :: _ -> i.language | [] -> ""
+  in
+  {
+    fn_pattern = c.pattern;
+    fn_files = files;
+    fn_support = List.length c.instances;
+    fn_language = language;
+  }
+
+let fusion_node_of_swap (ep : edit_pat) (insts : one_sided_instance list) :
+    fusion_node =
+  let files =
+    insts
+    |> List.map (fun (i : one_sided_instance) -> i.os_file)
+    |> List.sort_uniq String.compare
+  in
+  let language = match insts with i :: _ -> i.os_language | [] -> "" in
+  {
+    fn_pattern = ep;
+    fn_files = files;
+    fn_support = List.length files;
+    fn_language = language;
+  }
+
+(** Group fusion nodes into connected components by Jaccard ≥ threshold
+    over their file sets. Union-find: an edge [i—j] exists iff
+    [J(files_i, files_j) ≥ threshold]; components are reachable sets. *)
+let group_by_jaccard ?(threshold = 0.7) (nodes : fusion_node list) :
+    fusion_node list list =
+  let arr = Array.of_list nodes in
+  let n = Array.length arr in
+  let parent = Array.init n (fun i -> i) in
+  let rec find i =
+    if parent.(i) = i then i
+    else
+      let r = find parent.(i) in
+      parent.(i) <- r;
+      r
+  in
+  let union i j =
+    let ri = find i and rj = find j in
+    if ri <> rj then parent.(ri) <- rj
+  in
+  for i = 0 to n - 2 do
+    for j = i + 1 to n - 1 do
+      if jaccard arr.(i).fn_files arr.(j).fn_files >= threshold then
+        union i j
+    done
+  done;
+  let groups : (int, fusion_node list ref) Hashtbl.t = Hashtbl.create 8 in
+  for i = 0 to n - 1 do
+    let r = find i in
+    match Hashtbl.find_opt groups r with
+    | Some lst -> lst := arr.(i) :: !lst
+    | None -> Hashtbl.add groups r (ref [ arr.(i) ])
+  done;
+  Hashtbl.fold (fun _ lst acc -> List.rev !lst :: acc) groups []
+
+(** Materialise a fusion group into [(sections, sites, language, support)]
+    tuples ready for rule emission. Singleton groups produce one tuple
+    each. Multi-node groups fuse into one conjunctive rule whose sites
+    are the intersection of all members' file sets — but only if the
+    intersection has ≥ [min_support] members; otherwise the fusion is
+    abandoned and the members are emitted standalone (transitivity in
+    the union-find can chain pairs whose all-way intersection is empty;
+    standalone emission preserves coverage). Sections inside a fused
+    rule are ordered by their rendered body for deterministic output. *)
+let materialise_group ?(min_support = 2) (group : fusion_node list) :
+    (edit_pat list * string list * string * int) list =
+  match group with
+  | [] -> []
+  | [ n ] ->
+      [ ([ n.fn_pattern ], n.fn_files, n.fn_language, n.fn_support) ]
+  | _ ->
+      let inter = intersect_all (List.map (fun n -> n.fn_files) group) in
+      if List.length inter < min_support then
+        List.map
+          (fun n ->
+            ([ n.fn_pattern ], n.fn_files, n.fn_language, n.fn_support))
+          group
+      else
+        let language =
+          match group with n :: _ -> n.fn_language | [] -> ""
+        in
+        let sorted =
+          List.sort
+            (fun a b ->
+              compare
+                (render_pattern_body a.fn_pattern)
+                (render_pattern_body b.fn_pattern))
+            group
+        in
+        [
+          ( List.map (fun n -> n.fn_pattern) sorted,
+            inter,
+            language,
+            List.length inter );
+        ]
+
 (** Pre-cluster singletons whose patterns are structurally equal into
     multi-instance clusters. Clustering singletons at ~1000-site scale
     runs O(N³) through the dendrogram; deduplicating identical patterns
@@ -1202,52 +1335,31 @@ let summarize ~ctx (cs : changeset) : summary =
   let candidates = collect_one_sided_candidates ~ctx cs in
   let os_clusters = cluster_one_sided candidates in
   let pairs = pair_one_sided_clusters os_clusters in
-  let swap_rules =
-    List.filter_map (fun (r, a) -> fuse_swap r a) pairs
-    |> List.sort
-         (fun (_, i1) (_, i2) -> compare (List.length i2) (List.length i1))
+  let swap_pairs = List.filter_map (fun (r, a) -> fuse_swap r a) pairs in
+  let nodes =
+    List.map fusion_node_of_two_sided two_sided_clusters
+    @ List.map (fun (ep, insts) -> fusion_node_of_swap ep insts) swap_pairs
   in
-  let mk_ts_rule i (c : cluster) =
-    let sites =
-      c.instances
-      |> List.map (fun inst -> inst.file)
-      |> List.sort_uniq String.compare
-    in
-    let language =
-      match c.instances with
-      | inst :: _ -> inst.language
-      | [] -> "unknown"
+  let groups = group_by_jaccard nodes in
+  let group_outputs = List.concat_map materialise_group groups in
+  let sorted_outputs =
+    List.sort
+      (fun (_, _, _, s1) (_, _, _, s2) -> compare s2 s1)
+      group_outputs
+  in
+  let mk_rule i (sections, sites, language, support) =
+    let pattern_text =
+      String.concat "\n" (List.map render_pattern_body sections)
     in
     {
       id = Printf.sprintf "R%d" (i + 1);
-      pattern_text = render_pattern_body c.pattern;
-      support = List.length c.instances;
-      language;
+      pattern_text;
+      support;
+      language = (if language = "" then "unknown" else language);
       sites;
     }
   in
-  let ts_rules = List.mapi mk_ts_rule two_sided_clusters in
-  let mk_swap_rule i (ep, insts) =
-    let sites =
-      insts
-      |> List.map (fun (i : one_sided_instance) -> i.os_file)
-      |> List.sort_uniq String.compare
-    in
-    let language =
-      match insts with
-      | i :: _ -> i.os_language
-      | [] -> "unknown"
-    in
-    {
-      id = Printf.sprintf "R%d" (List.length ts_rules + i + 1);
-      pattern_text = render_pattern_body ep;
-      support = List.length sites;
-      language;
-      sites;
-    }
-  in
-  let swap_rules_emitted = List.mapi mk_swap_rule swap_rules in
-  { rules = ts_rules @ swap_rules_emitted }
+  { rules = List.mapi mk_rule sorted_outputs }
 
 let format_summary (s : summary) : string =
   let buf = Buffer.create 256 in
