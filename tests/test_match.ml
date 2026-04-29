@@ -4912,3 +4912,136 @@ let conjunctive_tests =
     Alcotest.test_case "import absent leaves calls unchanged" `Quick
       test_conjunctive_import_absent;
   ]
+
+(* === Comment-transparency tests ===
+   Verify that tree-sitter "extras" (comments) are filtered when the
+   pattern has none of its own, and that they are required when the
+   pattern explicitly contains one. One positive test per supported
+   language confirms the grammar exposes comments as extras; the
+   matching engine itself is language-agnostic so a single negative
+   test is enough to validate the opt-in semantics. *)
+
+let test_comment_transparent_typescript () =
+  let pattern_text =
+    {|@@
+match: strict
+metavar $A: single
+metavar $B: single
+metavar $C: single
+@@
+ { a: $A, b: $B, c: $C }|}
+  in
+  let source_text = {|const x = { a: 1, b: 2, /* note */ c: 3 };|} in
+  let results =
+    Match.find_matches ~ctx ~language:"typescript" ~pattern_text ~source_text
+  in
+  Alcotest.(check int) "match despite source comment" 1 (List.length results)
+
+let test_comment_transparent_tsx () =
+  let pattern_text =
+    {|@@
+match: strict
+metavar $A: single
+metavar $B: single
+@@
+foo($A, $B)|}
+  in
+  let source_text = {|const x = foo(1, /* note */ 2);|} in
+  let results =
+    Match.find_matches ~ctx ~language:"tsx" ~pattern_text ~source_text
+  in
+  Alcotest.(check int) "match despite source comment" 1 (List.length results)
+
+let test_comment_transparent_kotlin () =
+  let pattern_text =
+    {|@@
+match: strict
+metavar $A: single
+metavar $B: single
+@@
+printIt($A, $B)|}
+  in
+  let source_text =
+    {|
+fun main() {
+    printIt(1, /* note */ 2)
+}
+|}
+  in
+  let results =
+    Match.find_matches ~ctx ~language:"kotlin" ~pattern_text ~source_text
+  in
+  Alcotest.(check int) "match despite source comment" 1 (List.length results)
+
+let test_comment_transparent_php () =
+  let pattern_text =
+    {|@@
+match: strict
+metavar $A: single
+metavar $B: single
+@@
+foo($A, $B)|}
+  in
+  let source_text = {|<?php foo(1, /* note */ 2);|} in
+  let results =
+    Match.find_matches ~ctx ~language:"php" ~pattern_text ~source_text
+  in
+  Alcotest.(check int) "match despite source comment" 1 (List.length results)
+
+let test_comment_transparent_scala () =
+  let pattern_text =
+    {|@@
+match: strict
+metavar $A: single
+metavar $B: single
+@@
+printIt($A, $B)|}
+  in
+  let source_text =
+    {|
+object Main {
+  def main(args: Array[String]): Unit = {
+    printIt(1, /* note */ 2)
+  }
+}
+|}
+  in
+  let results =
+    Match.find_matches ~ctx ~language:"scala" ~pattern_text ~source_text
+  in
+  Alcotest.(check int) "match despite source comment" 1 (List.length results)
+
+(* Negative: pattern explicitly contains a comment, so source without
+   one must NOT match. *)
+let test_comment_pattern_requires_match () =
+  let pattern_text =
+    {|@@
+match: strict
+metavar $A: single
+metavar $B: single
+metavar $C: single
+@@
+ { a: $A, b: $B, /* note */ c: $C }|}
+  in
+  let source_text = {|const x = { a: 1, b: 2, c: 3 };|} in
+  let results =
+    Match.find_matches ~ctx ~language:"typescript" ~pattern_text ~source_text
+  in
+  Alcotest.(check int) "no match when source lacks the demanded comment"
+    0 (List.length results)
+
+let comment_tests =
+  [
+    Alcotest.test_case "typescript: comment transparent" `Quick
+      test_comment_transparent_typescript;
+    Alcotest.test_case "tsx: comment transparent" `Quick
+      test_comment_transparent_tsx;
+    Alcotest.test_case "kotlin: comment transparent" `Quick
+      test_comment_transparent_kotlin;
+    Alcotest.test_case "php: comment transparent" `Quick
+      test_comment_transparent_php;
+    Alcotest.test_case "scala: comment transparent" `Quick
+      test_comment_transparent_scala;
+    Alcotest.test_case "pattern with comment requires match" `Quick
+      test_comment_pattern_requires_match;
+  ]
