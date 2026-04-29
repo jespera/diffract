@@ -8,6 +8,23 @@ let empty_bindings =
     correspondences = [];
   }
 
+(** Filter source children to drop tree-sitter "extras" (typically
+    comments) when the pattern has none. The default semantics is
+    "comments are transparent": a pattern that doesn't mention a
+    comment matches source regardless of whether comments are present.
+    When the pattern itself contains a comment, all source extras are
+    kept and the existing positional/field/partial logic compares
+    them as ordinary children — so the pattern's comment must align
+    with a matching source comment. *)
+let filter_irrelevant_extras (type k) (pattern_children : Tree.pat Tree.t list)
+    (source_children : k Tree.t list) : k Tree.t list =
+  let pattern_has_extras =
+    List.exists (fun (n : Tree.pat Tree.t) -> n.is_extra) pattern_children
+  in
+  if pattern_has_extras then source_children
+  else
+    List.filter (fun (n : k Tree.t) -> not n.is_extra) source_children
+
 (** Check if two lists of source nodes are structurally identical *)
 let nodes_equal source (l1 : Tree.src Tree.t list) (l2 : Tree.src Tree.t list) =
   let rec check = function
@@ -244,6 +261,7 @@ and match_children ~pattern ~pattern_source ~source ~substitutions
 and match_children_exact ~pattern ~pattern_source ~source ~substitutions
     (pattern_children : Tree.pat Tree.t list)
     (source_children : Tree.src Tree.t list) bindings =
+  let source_children = filter_irrelevant_extras pattern_children source_children in
   (* Convert to arrays for efficient indexing *)
   let pattern_arr = Array.of_list pattern_children in
   let source_arr = Array.of_list source_children in
@@ -400,6 +418,7 @@ and match_children_exact ~pattern ~pattern_source ~source ~substitutions
 and match_children_partial ~pattern ~pattern_source ~source ~substitutions
     (pattern_children : Tree.pat Tree.t list)
     (source_children : Tree.src Tree.t list) bindings =
+  let source_children = filter_irrelevant_extras pattern_children source_children in
   let source_arr = Array.of_list source_children in
   let source_len = Array.length source_arr in
   (* Track which source children have been consumed *)
