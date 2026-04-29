@@ -365,13 +365,55 @@ let merge_score ep =
   in
   if aligned then base else base +. 10.0
 
+(** Cheap signature for a pattern's root pair, used to short-circuit
+    [build_dendrogram]'s inner loop. Anti-unifying two patterns whose
+    [before] (or [after]) roots differ in kind or node_type produces a
+    hole-rooted pattern that the downstream coherence filter
+    ([cluster_applies]) will reject. Comparing this signature is a
+    string equality vs. a full tree anti-unification. *)
+let root_sig (ep : edit_pat) =
+  let tag = function
+    | Hole _ -> ("H", "")
+    | Leaf { node_type; _ } -> ("L", node_type)
+    | PNode { node_type; _ } -> ("P", node_type)
+  in
+  (tag ep.before, tag ep.after)
+
 let build_dendrogram initial =
+  let trace = Sys.getenv_opt "CS_TRACE" <> None in
+  let initial_n = List.length initial in
   let nodes =
     ref (List.map (fun c -> DLeaf (c.instances, c.pattern)) initial)
   in
+  let t_start = Unix.gettimeofday () in
+  let last_tick = ref t_start in
+  let iter_no = ref 0 in
+  let cur_n = ref initial_n in
+  let cur_antiunifies = ref 0 in
+  let heartbeat_interval = 2.0 in
+  let heartbeat () =
+    if trace then begin
+      let now = Unix.gettimeofday () in
+      if now -. !last_tick >= heartbeat_interval then begin
+        Printf.eprintf
+          "  dendrogram: iter %d/%d, n=%d, %d anti-unifies in iter, elapsed %.1fs\n%!"
+          !iter_no (initial_n - 1) !cur_n !cur_antiunifies
+          (now -. t_start);
+        last_tick := now
+      end
+    end
+  in
+  if trace then
+    Printf.eprintf
+      "  dendrogram: starting hierarchical merge over %d clusters\n%!"
+      initial_n;
   while List.length !nodes > 1 do
     let arr = Array.of_list !nodes in
     let n = Array.length arr in
+    let sigs = Array.map (fun nd -> root_sig (dnode_pattern nd)) arr in
+    incr iter_no;
+    cur_n := n;
+    cur_antiunifies := 0;
     let merge_patterns pi pj =
       let offset = max_hole pi + 1 in
       anti_unify_edits pi (shift_holes offset pj)
@@ -383,7 +425,9 @@ let build_dendrogram initial =
     let bfrac = ref (merge_score !bp) in
     for i = 0 to n - 2 do
       for j = i + 1 to n - 1 do
-        if not (i = 0 && j = 1) then begin
+        if not (i = 0 && j = 1) && sigs.(i) = sigs.(j) then begin
+          incr cur_antiunifies;
+          if !cur_antiunifies mod 1000 = 0 then heartbeat ();
           let p =
             merge_patterns (dnode_pattern arr.(i)) (dnode_pattern arr.(j))
           in
@@ -397,6 +441,7 @@ let build_dendrogram initial =
         end
       done
     done;
+    heartbeat ();
     let i = !bi and j = !bj in
     let merged =
       DMerge
@@ -411,6 +456,9 @@ let build_dendrogram initial =
     Array.iteri (fun k nd -> if k <> i && k <> j then rest := nd :: !rest) arr;
     nodes := !rest
   done;
+  if trace then
+    Printf.eprintf "  dendrogram: done in %.2fs after %d iterations\n%!"
+      (Unix.gettimeofday () -. t_start) !iter_no;
   List.hd !nodes
 
 (** A pattern is "concrete" iff it contains at least one named [Leaf]
@@ -532,16 +580,15 @@ let cluster_applies ~ctx (c : cluster) : bool =
 let cut_dendrogram ?(threshold = 0.35) min_size root =
   let is_coherent ep =
     let s = edit_size ep in
-    (* At least one side must carry concrete content (a named leaf or
-       a keyword token). Both-sides was too strict for asymmetric
-       reshapes where one side has no keyword: e.g. PHP's [array($X,
-       $Y) -> [$X, $Y]] is informative because the [array] keyword
-       on the [-] side is the anchor, even though the [+] side is
-       just brackets and holes. [has_concrete_edit] already rejects
-       patterns whose two sides agree both in leaf values and in
-       shape, so a fully-holed [-] *and* fully-holed [+] cluster
-       can't slip through. *)
-    (has_concrete ep.before || has_concrete ep.after)
+    (* The match side must always carry concrete content (a named
+       leaf or a keyword token): a [-] side that is purely holes
+       matches every node in the source and produces a degenerate
+       "match anything, replace with this literal" rule. The [+]
+       side may be hole-only — that is the asymmetric-reshape case,
+       e.g. PHP's [array($X, $Y) -> [$X, $Y]] where the [array]
+       keyword on the [-] side anchors the rule even though the
+       [+] side is just brackets and holes. *)
+    has_concrete ep.before
     && has_concrete_edit ep
     && no_orphan_after_holes ep
     && (s = 0
@@ -947,12 +994,19 @@ let lookahead_one_sided (d : Tree_diff.diff) :
 
 (* ── Pipeline ────────────────────────────────────────────────────── *)
 
-let collect_initial_clusters ~ctx (cs : changeset) : cluster list =
+let collect_initial_clusters ?on_file ~ctx (cs : changeset) : cluster list =
+  let modified =
+    List.filter (function Modified _ -> true | _ -> false) cs.files
+  in
+  let total = List.length modified in
   let initial = ref [] in
-  List.iter
-    (fun fc ->
+  List.iteri
+    (fun i fc ->
       match fc with
       | Modified { path; language; before_source; after_source } -> (
+          (match on_file with
+          | Some f -> f ~idx:(i + 1) ~total ~path
+          | None -> ());
           try
             let bt = Tree.parse ~ctx ~language before_source in
             let at = Tree.parse ~ctx ~language after_source in
@@ -984,19 +1038,26 @@ let collect_initial_clusters ~ctx (cs : changeset) : cluster list =
               (collect_change_pairs_multi d)
           with _ -> ())
       | Added _ | Deleted _ -> ())
-    cs.files;
+    modified;
   !initial
 
 (** Collect one-sided candidates (M1.5) across a changeset's [Modified] files.
     Each candidate carries its pat_node shape and site metadata. Used
     internally by M1.6 fusion; not wired into M1 rule output. *)
-let collect_one_sided_candidates ~ctx (cs : changeset) :
+let collect_one_sided_candidates ?on_file ~ctx (cs : changeset) :
     one_sided_candidate list =
+  let modified =
+    List.filter (function Modified _ -> true | _ -> false) cs.files
+  in
+  let total = List.length modified in
   let out = ref [] in
-  List.iter
-    (fun fc ->
+  List.iteri
+    (fun i fc ->
       match fc with
       | Modified { path; language; before_source; after_source } -> (
+          (match on_file with
+          | Some f -> f ~idx:(i + 1) ~total ~path
+          | None -> ());
           try
             let bt = Tree.parse ~ctx ~language before_source in
             let at = Tree.parse ~ctx ~language after_source in
@@ -1023,7 +1084,7 @@ let collect_one_sided_candidates ~ctx (cs : changeset) :
               (lookahead_one_sided d)
           with _ -> ())
       | Added _ | Deleted _ -> ())
-    cs.files;
+    modified;
   List.rev !out
 
 (* ── M1.6b: Jaccard fusion of one-sided clusters ─────────────────── *)
@@ -1258,8 +1319,15 @@ let pre_group_identical (clusters : cluster list) : cluster list =
     (fun p insts acc -> { pattern = p; instances = !insts } :: acc)
     tbl []
 
-let summarize ~ctx (cs : changeset) : summary =
-  let raw = collect_initial_clusters ~ctx cs in
+let summarize ?progress ~ctx (cs : changeset) : summary =
+  let on_file_for stage =
+    match progress with
+    | None -> None
+    | Some p -> Some (fun ~idx ~total ~path -> p ~stage ~idx ~total ~path)
+  in
+  let raw =
+    collect_initial_clusters ?on_file:(on_file_for "two-sided") ~ctx cs
+  in
   let initial = pre_group_identical raw in
   if Sys.getenv_opt "CS_TRACE" <> None then begin
     Printf.eprintf "initial emissions: %d, clusters after pre-group: %d\n%!"
@@ -1332,7 +1400,9 @@ let summarize ~ctx (cs : changeset) : summary =
           compare (List.length b.instances) (List.length a.instances))
         covered
   in
-  let candidates = collect_one_sided_candidates ~ctx cs in
+  let candidates =
+    collect_one_sided_candidates ?on_file:(on_file_for "one-sided") ~ctx cs
+  in
   let os_clusters = cluster_one_sided candidates in
   let pairs = pair_one_sided_clusters os_clusters in
   let swap_pairs = List.filter_map (fun (r, a) -> fuse_swap r a) pairs in

@@ -46,6 +46,10 @@ let print_pattern_warnings ~pattern_text =
     (fun w -> Printf.eprintf "diffract: %s\n" w)
     (Diffract.Matcher.pattern_warnings pattern_text)
 
+let verbose_flag =
+  let doc = "Print phase progress and timing to stderr." in
+  Arg.(value & flag & info [ "v"; "verbose" ] ~doc)
+
 (* ── File utilities ─────────────────────────────────────────────────── *)
 
 let default_excludes =
@@ -533,10 +537,30 @@ let run_diff before_path after_path language =
 (* ── summarize subcommand ──────────────────────────────────────────── *)
 
 let run_summarize before_dir after_dir language include_pattern
-    exclude_patterns =
+    exclude_patterns verbose =
   let ctx = Diffract.Context.create () in
   let exclude_dirs =
     if exclude_patterns = [] then default_excludes else exclude_patterns
+  in
+  let phase name f =
+    if not verbose then f ()
+    else begin
+      Printf.eprintf "[%s] start\n%!" name;
+      let t0 = Unix.gettimeofday () in
+      let result = f () in
+      let dt = Unix.gettimeofday () -. t0 in
+      Printf.eprintf "[%s] done in %.2fs\n%!" name dt;
+      result
+    end
+  in
+  let count_files (cs : Diffract.Change_summary.changeset) =
+    List.fold_left
+      (fun (m, a, d) fc ->
+        match fc with
+        | Diffract.Change_summary.Modified _ -> (m + 1, a, d)
+        | Diffract.Change_summary.Added _ -> (m, a + 1, d)
+        | Diffract.Change_summary.Deleted _ -> (m, a, d + 1))
+      (0, 0, 0) cs.files
   in
   try
     if not (Sys.is_directory before_dir) then
@@ -545,12 +569,62 @@ let run_summarize before_dir after_dir language include_pattern
       `Error (false, Printf.sprintf "%s is not a directory" after_dir)
     else begin
       let changeset =
-        Diffract.Change_summary.load_from_dirs ~before_dir ~after_dir
-          ~include_glob:include_pattern ~exclude_dirs
-          ~default_language:language ()
+        phase "load" (fun () ->
+            Diffract.Change_summary.load_from_dirs ~before_dir ~after_dir
+              ~include_glob:include_pattern ~exclude_dirs
+              ~default_language:language ())
       in
-      let summary = Diffract.Change_summary.summarize ~ctx changeset in
-      print_string (Diffract.Change_summary.format_summary summary);
+      if verbose then begin
+        let m, a, d = count_files changeset in
+        Printf.eprintf "[load] %d modified, %d added, %d deleted\n%!" m a d;
+        Printf.eprintf "[summarize] parsing %d file pair(s)...\n%!" m
+      end;
+      let progress =
+        if verbose then
+          Some (fun ~stage ~idx ~total ~path ->
+              Printf.eprintf "[summarize] (%s %d/%d) %s\n%!"
+                stage idx total path)
+        else None
+      in
+      let summary =
+        phase "summarize" (fun () ->
+            Diffract.Change_summary.summarize ?progress ~ctx changeset)
+      in
+      if verbose then
+        Printf.eprintf "[summarize] %d rule(s)\n%!"
+          (List.length summary.rules);
+      if verbose then begin
+        let module SS = Set.Make (String) in
+        let modified_paths =
+          List.fold_left
+            (fun acc fc ->
+              match fc with
+              | Diffract.Change_summary.Modified { path; _ } -> SS.add path acc
+              | _ -> acc)
+            SS.empty changeset.files
+        in
+        let covered_paths =
+          List.fold_left
+            (fun acc (r : Diffract.Change_summary.rule) ->
+              List.fold_left (fun a p -> SS.add p a) acc r.sites)
+            SS.empty summary.rules
+        in
+        let uncovered = SS.diff modified_paths covered_paths in
+        let total = SS.cardinal modified_paths in
+        let cov = SS.cardinal (SS.inter modified_paths covered_paths) in
+        Printf.eprintf
+          "[summary] file coverage: %d/%d modified files have at least one rule firing\n%!"
+          cov total;
+        if not (SS.is_empty uncovered) then begin
+          Printf.eprintf "[summary] uncovered files (%d):\n%!"
+            (SS.cardinal uncovered);
+          SS.iter (fun p -> Printf.eprintf "  %s\n%!" p) uncovered
+        end
+      end;
+      let output =
+        phase "format" (fun () -> Diffract.Change_summary.format_summary summary)
+      in
+      print_string output;
       `Ok ()
     end
   with
@@ -573,7 +647,7 @@ let summarize_cmd =
     Term.(
       ret
         (const run_summarize $ before_dir $ after_dir $ language
-       $ include_pattern $ exclude_patterns))
+       $ include_pattern $ exclude_patterns $ verbose_flag))
 
 let diff_cmd =
   let doc = "Show AST-level changes between two versions of a file." in

@@ -47,14 +47,27 @@ type one_sided_candidate
 val one_sided_candidate_instance : one_sided_candidate -> one_sided_instance
 
 val collect_one_sided_candidates :
-  ctx:Context.t -> changeset -> one_sided_candidate list
+  ?on_file:(idx:int -> total:int -> path:string -> unit) ->
+  ctx:Context.t ->
+  changeset ->
+  one_sided_candidate list
 (** Extracts every [Added]/[Removed] subtree across [Modified] files in the
-    changeset. M1.5 plumbing; M1.6 will cluster and fuse these. *)
+    changeset. M1.5 plumbing; M1.6 will cluster and fuse these.
+    [on_file], if provided, is called once per [Modified] file just before
+    parsing it. *)
 
-val summarize : ctx:Context.t -> changeset -> summary
+val summarize :
+  ?progress:(stage:string -> idx:int -> total:int -> path:string -> unit) ->
+  ctx:Context.t ->
+  changeset ->
+  summary
 (** [summarize ~ctx cs] runs the clustering pipeline and returns the summary.
     In M1 scope: only Modified files contribute change pairs; Added/Deleted
-    files are carried in the changeset but not clustered yet. *)
+    files are carried in the changeset but not clustered yet.
+    [progress], if provided, is called once per [Modified] file just before
+    parsing. [stage] identifies which pass is running ([{"two-sided";
+    "one-sided"}]); [idx] is 1-based and [total] is the count of [Modified]
+    files. *)
 
 val format_summary : summary -> string
 (** [format_summary s] serialises [s] in the [.summary] format defined in
