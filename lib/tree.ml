@@ -16,6 +16,11 @@ type 'kind child = { field_name : string option; node : 'kind t }
 and 'kind t = {
   node_type : string;
   is_named : bool;
+  is_extra : bool;
+      (** True iff tree-sitter generated this node from one of the
+          grammar's [extras] rules — typically comments and (rarely)
+          whitespace tokens. Such nodes can appear anywhere between
+          tokens without being part of the syntactic structure. *)
   hash : int;
   start_byte : int;
   end_byte : int;
@@ -35,6 +40,7 @@ type 'kind tree = { root : 'kind t; source : string }
 
 let node_type t = t.node_type
 let is_named t = t.is_named
+let is_extra t = t.is_extra
 let start_byte t = t.start_byte
 let end_byte t = t.end_byte
 let start_point t = t.start_point
@@ -257,6 +263,7 @@ let hash_combine h1 h2 = (h1 * 65599) + h2
 let rec of_ts_node_internal source (ts_node : Node.t) =
   let node_type = Node.node_type ts_node in
   let is_named = Node.is_named ts_node in
+  let is_extra = Node.is_extra ts_node in
   let start_byte = Node.start_byte ts_node in
   let end_byte = Node.end_byte ts_node in
   let ts_start = Node.start_point ts_node in
@@ -302,6 +309,7 @@ let rec of_ts_node_internal source (ts_node : Node.t) =
   {
     node_type;
     is_named;
+    is_extra;
     hash;
     start_byte;
     end_byte;
