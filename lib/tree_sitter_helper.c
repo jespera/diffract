@@ -158,6 +158,15 @@ CAMLprim value tsh_node_is_named(value v_node) {
     CAMLreturn(Val_bool(ts_node_is_named(wrapper->node)));
 }
 
+/* Check if node was generated from an "extras" rule in the grammar
+   (comments, whitespace, anything that can appear between tokens
+   without being part of the syntactic structure). */
+CAMLprim value tsh_node_is_extra(value v_node) {
+    CAMLparam1(v_node);
+    TSNodeWrapper *wrapper = Node_wrapper_val(v_node);
+    CAMLreturn(Val_bool(ts_node_is_extra(wrapper->node)));
+}
+
 /* Check if node is null */
 CAMLprim value tsh_node_is_null(value v_node) {
     CAMLparam1(v_node);
