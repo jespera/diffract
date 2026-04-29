@@ -34,6 +34,11 @@ type 'kind child = { field_name : string option; node : 'kind t }
 and 'kind t = {
   node_type : string;
   is_named : bool;
+  is_extra : bool;
+      (** True iff tree-sitter generated this node from one of the
+          grammar's [extras] rules — typically comments and (rarely)
+          whitespace tokens. Such nodes can appear anywhere between
+          tokens without being part of the syntactic structure. *)
   hash : int;
   start_byte : int;
   end_byte : int;
@@ -54,6 +59,7 @@ type 'kind tree = { root : 'kind t; source : string }
 
 val node_type : _ t -> string
 val is_named : _ t -> bool
+val is_extra : _ t -> bool
 val start_byte : _ t -> int
 val end_byte : _ t -> int
 val start_point : _ t -> point
