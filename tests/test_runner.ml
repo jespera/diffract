@@ -14,5 +14,6 @@ let () =
       ("Expansion", Test_match.expansion_tests);
       ("Semantics", Test_match.semantics_tests);
       ("Conjunctive", Test_match.conjunctive_tests);
+      ("Match (Comments)", Test_match.comment_tests);
       ("Tree diff", Test_tree_diff.tests);
     ]
