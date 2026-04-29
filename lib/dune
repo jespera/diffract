@@ -127,7 +127,7 @@
  (name diffract)
  (public_name diffract)
  (modes native)
- (libraries yojson)
+ (libraries yojson unix)
  (foreign_stubs
   (language c)
   (names tree_sitter_helper)

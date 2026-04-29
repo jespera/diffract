@@ -2,4 +2,4 @@
  (name main)
  (public_name diffract)
  (package diffract)
- (libraries diffract cmdliner))
+ (libraries diffract cmdliner unix))
