@@ -197,9 +197,20 @@ let rec match_node ~pattern ~pattern_source ~source ~substitutions
         (* Bare-sequence fallback: if the pattern root is a program/module/etc.
            wrapper node with 2+ named children, skip the type check and match
            the children sequence against the source node's children. This lets
-           bare multi-statement patterns (e.g. `const a; ...; const b;`) match
-           inside function bodies (statement_block) or other containers without
-           requiring the statements to be wrapped in a function in the pattern. *)
+           bare multi-statement patterns (e.g. `bar(); foo();`) match inside
+           function bodies (statement_block) or other containers without
+           requiring the statements to be wrapped in a function in the pattern.
+
+           In strict mode without sequence metavars, the matched span need
+           not be the parent's full children list — the pattern matches any
+           consecutive run of N source children whose positional shape lines
+           up. This mirrors the natural reading of a multi-statement patch
+           ("find these statements as immediate successors anywhere") and
+           matches Coccinelle's semantics for sequenced statements. The
+           correspondences are adjusted by the chosen window offset so they
+           describe positions in the parent's full children list, which
+           [compute_edits_strict] uses to compute the matched byte range
+           for the diff. *)
         let is_root_wrapper =
           match pattern_type with
           | "program" | "module" | "source_file" | "compilation_unit" -> true
@@ -211,8 +222,49 @@ let rec match_node ~pattern ~pattern_source ~source ~substitutions
           | [] | [ _ ] -> None
           | _ ->
               let source_children = Tree.named_children source_node in
-              match_children ~pattern ~pattern_source ~source ~substitutions
-                pattern_node source_node pattern_children source_children bindings
+              let pat_len = List.length pattern_children in
+              let src_len = List.length source_children in
+              let has_seq =
+                List.exists
+                  (fun p ->
+                    is_sequence_placeholder ~pattern substitutions
+                      pattern_source p)
+                  pattern_children
+              in
+              if
+                (not has_seq)
+                && pattern.match_mode = Strict
+                && src_len > pat_len
+              then
+                let src_arr = Array.of_list source_children in
+                let result = ref None in
+                let i = ref 0 in
+                while !result = None && !i + pat_len <= src_len do
+                  let window =
+                    Array.to_list (Array.sub src_arr !i pat_len)
+                  in
+                  (match
+                     match_children_exact ~pattern ~pattern_source ~source
+                       ~substitutions pattern_children window bindings
+                   with
+                  | Some bs ->
+                      let offset = !i in
+                      let adjusted =
+                        List.map
+                          (fun (c : child_correspondence) ->
+                            { c with source_index = c.source_index + offset })
+                          bs.correspondences
+                      in
+                      result :=
+                        Some { bs with correspondences = adjusted }
+                  | None -> ());
+                  incr i
+                done;
+                !result
+              else
+                match_children ~pattern ~pattern_source ~source
+                  ~substitutions pattern_node source_node pattern_children
+                  source_children bindings
         else None
       else
         (* Check if this is a leaf node *)
