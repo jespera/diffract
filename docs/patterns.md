@@ -105,6 +105,36 @@ Notes:
 - Ellipsis is not replaced when it looks like a spread operator (e.g., `...$x` or `...args`).
 - Sequence metavars (including `...`) are not supported with `match: partial`.
 
+## Multi-statement Patterns
+
+A pattern body that contains multiple top-level statements (with no enclosing function/class wrapper in the pattern) matches **any consecutive run of source children of the same shape**, regardless of what surrounds them. The pattern fires anywhere a container's child sequence has the named statements as immediate successors:
+
+```
+@@
+match: strict
+metavar $X: single
+@@
+bar();
+foo($X);
+```
+
+This matches `bar(); foo(x);` inside any function body, `if`/`else` branch, loop body, lambda body, or other statement-bearing block — at arbitrary nesting depth. The matched region is just those two statements (not the entire enclosing block), so a deletion like:
+
+```
+@@
+match: strict
+@@
+  bar();
+- foo(x);
+```
+
+removes only the `foo(x);` line at every site where it immediately follows `bar();`, leaving surrounding statements untouched.
+
+Notes:
+- "Immediate succession" means no statements between the named ones in source. To allow intervening statements, write an explicit `...` between them.
+- The semantic is positional: order matters and the statements must be adjacent. To match an unordered set (e.g. members of an object body), use `match: partial`.
+- Single-statement patterns are unaffected; they match any AST node of the matching shape, as before.
+
 ## Comments
 
 Tree-sitter "extras" — comments, and in some grammars whitespace tokens — are filtered automatically when the pattern doesn't mention them. A pattern matches regardless of where comments appear in the source:
