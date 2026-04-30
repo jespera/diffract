@@ -105,6 +105,41 @@ Notes:
 - Ellipsis is not replaced when it looks like a spread operator (e.g., `...$x` or `...args`).
 - Sequence metavars (including `...`) are not supported with `match: partial`.
 
+## Comments
+
+Tree-sitter "extras" — comments, and in some grammars whitespace tokens — are filtered automatically when the pattern doesn't mention them. A pattern matches regardless of where comments appear in the source:
+
+```
+@@
+match: strict
+metavar $A: single
+metavar $B: single
+metavar $C: single
+@@
+ { a: $A, b: $B, c: $C }
+```
+
+This matches `{ a: 1, b: 2, /* note */ c: 3 }` and `{ a: 1, b: 2, c: 3 }` — comments are transparent.
+
+To require a comment, include one in the pattern body. Source comments at the corresponding position must then match the pattern's comment text exactly:
+
+```
+@@
+match: strict
+metavar $A: single
+metavar $B: single
+metavar $C: single
+@@
+ { a: $A, b: $B, /* note */ c: $C }
+```
+
+This matches `{ a: 1, b: 2, /* note */ c: 3 }` but not `{ a: 1, b: 2, c: 3 }` — the pattern explicitly demands the comment.
+
+Notes:
+- Comments are matched by exact text; metavariables inside comment bodies are not interpolated.
+- The behavior applies uniformly to `match: strict`, `match: partial`, and `match: field`.
+- Whether `//` and `/* */` are interchangeable depends on the grammar — some expose them as the same node type, others as distinct types. A pattern using one form may not match source using the other in grammars that distinguish them.
+
 ## Partial Matching
 
 Use `match: partial` to enable subset matching for children. Each pattern child finds any matching source child (unordered), and extra source children are ignored:
