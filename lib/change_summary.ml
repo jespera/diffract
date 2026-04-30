@@ -85,11 +85,15 @@ let one_sided_candidate_instance (c : one_sided_candidate) : one_sided_instance 
 
 (** Build the inter-child template for a tree-sitter node. Walks the
     node's byte range from [start_byte] to [end_byte], emitting [Lit]
-    parts for source bytes outside any child and [Slot i] for the [i]-th
-    child's range. Captures source bytes that the grammar consumes
-    silently (e.g. string-literal quote delimiters in Kotlin/TS, or
-    leading/trailing whitespace inside a parenthesised list). *)
-let build_template ~source ~(node : Tree.src Tree.t) : template_part list =
+    parts for source bytes outside any kept child and [Slot j] for the
+    [j]-th kept child (0-based among kept children). Children for which
+    [keep c = false] have their byte range absorbed into the surrounding
+    [Lit] so the rendered output preserves the original surface text.
+    Captures source bytes that the grammar consumes silently (e.g.
+    string-literal quote delimiters in Kotlin/TS, or leading/trailing
+    whitespace inside a parenthesised list). *)
+let build_template ~source ~(node : Tree.src Tree.t)
+    ?(keep = fun (_ : Tree.src Tree.t) -> true) () : template_part list =
   let parts = ref [] in
   let push p = parts := p :: !parts in
   let cursor = ref node.start_byte in
@@ -98,11 +102,17 @@ let build_template ~source ~(node : Tree.src Tree.t) : template_part list =
       push (Lit (String.sub source !cursor (upto - !cursor)));
     cursor := upto
   in
-  List.iteri
-    (fun i (c : _ Tree.child) ->
-      emit_lit_upto c.node.start_byte;
-      push (Slot i);
-      cursor := c.node.end_byte)
+  let kept_idx = ref 0 in
+  List.iter
+    (fun (c : _ Tree.child) ->
+      if keep c.node then begin
+        emit_lit_upto c.node.start_byte;
+        push (Slot !kept_idx);
+        incr kept_idx;
+        cursor := c.node.end_byte
+      end
+      (* else: dropped child — leave cursor alone so its bytes are
+         absorbed into the next Lit emit. *))
     node.children;
   emit_lit_upto node.end_byte;
   List.rev !parts
@@ -164,16 +174,24 @@ let rec of_src source (n : Tree.src Tree.t) : pat_node =
        || has_quote_delim_children ~source ~node:n)
   then Leaf { node_type = n.node_type; value = Tree.text source n }
   else
+    (* Drop tree-sitter "extras" (typically comments) from the AST so
+       presence/absence of comments doesn't fragment clusters. The
+       filtered child's source bytes are still preserved in the
+       template's [Lit] segments, so rendering reproduces the original
+       surface text. *)
+    let keep (c : Tree.src Tree.t) = not c.is_extra in
     PNode
       {
         node_type = n.node_type;
         is_named = n.is_named;
         children =
-          List.map
+          List.filter_map
             (fun (c : Tree.src Tree.child) ->
-              { field_name = c.field_name; child = of_src source c.node })
+              if keep c.node then
+                Some { field_name = c.field_name; child = of_src source c.node }
+              else None)
             n.children;
-        template = build_template ~source ~node:n;
+        template = build_template ~source ~node:n ~keep ();
       }
 
 (* ── Rendering ───────────────────────────────────────────────────── *)
