@@ -5202,6 +5202,35 @@ foo($X);|}
   Alcotest.(check string) "line: $X bound to x" "x"
     (List.assoc "$X" (List.hd line_results).bindings)
 
+let test_bare_sequence_kotlin () =
+  (* Cross-language coverage: Kotlin's wrapper is [source_file] rather
+     than [program]. Confirms the wrapper-detection list fires for a
+     non-TypeScript grammar and that the matcher correctly skips a
+     line comment between the two pattern statements. *)
+  let pattern_text =
+    {|@@
+match: strict
+metavar $X: single
+@@
+bar()
+foo($X)|}
+  in
+  let source_text =
+    {|fun main() {
+    bar()
+    // a stray note
+    foo(arg)
+    other()
+}|}
+  in
+  let results =
+    Match.find_matches ~ctx ~language:"kotlin" ~pattern_text ~source_text
+  in
+  Alcotest.(check int) "kotlin: bare-sequence subsequence match" 1
+    (List.length results);
+  Alcotest.(check string) "kotlin: $X bound to arg" "arg"
+    (List.assoc "$X" (List.hd results).bindings)
+
 let bare_sequence_tests =
   [
     Alcotest.test_case "matches consecutive subsequence" `Quick
@@ -5214,4 +5243,6 @@ let bare_sequence_tests =
       test_bare_sequence_matches_at_nesting_depth;
     Alcotest.test_case "transparent to inline comment between statements" `Quick
       test_bare_sequence_transparent_to_inline_comment;
+    Alcotest.test_case "kotlin source_file wrapper + comment" `Quick
+      test_bare_sequence_kotlin;
   ]
