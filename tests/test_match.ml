@@ -5045,3 +5045,127 @@ let comment_tests =
     Alcotest.test_case "pattern with comment requires match" `Quick
       test_comment_pattern_requires_match;
   ]
+
+(* === Bare-sequence subsequence matching ===
+   A multi-statement pattern body (no leading/trailing wrapper) should
+   match any consecutive run of source children of the same length and
+   shape, regardless of what surrounds it. Mirrors Coccinelle's
+   semantic that two adjacent statements in a rule body match
+   immediate CFG-successors anywhere in a function. *)
+
+let test_bare_sequence_matches_subsequence () =
+  let pattern_text =
+    {|@@
+match: strict
+metavar $X: single
+@@
+bar();
+foo($X);|}
+  in
+  let source_text =
+    {|function main() {
+    bar();
+    foo(arg);
+    other();
+}|}
+  in
+  let results =
+    Match.find_matches ~ctx ~language:"typescript" ~pattern_text ~source_text
+  in
+  Alcotest.(check int) "found one consecutive match" 1 (List.length results);
+  let r = List.hd results in
+  Alcotest.(check string) "$X bound to arg" "arg"
+    (List.assoc "$X" r.bindings)
+
+let test_bare_sequence_requires_immediate_succession () =
+  let pattern_text =
+    {|@@
+match: strict
+metavar $X: single
+@@
+bar();
+foo($X);|}
+  in
+  (* `other()` between bar() and foo() — pattern must NOT match. *)
+  let source_text =
+    {|function main() {
+    bar();
+    other();
+    foo(arg);
+}|}
+  in
+  let results =
+    Match.find_matches ~ctx ~language:"typescript" ~pattern_text ~source_text
+  in
+  Alcotest.(check int) "no match when not consecutive" 0 (List.length results)
+
+let test_bare_sequence_delete_with_context () =
+  (* The motivating use case: " bar();" (context) + "- foo(x);" (delete)
+     deletes only foo(x) while leaving the surrounding source intact. *)
+  let pattern_text =
+    {|@@
+match: strict
+@@
+  bar();
+- foo(x);|}
+  in
+  let source_text =
+    {|function main() {
+    bar();
+    foo(x);
+    other();
+    foo(x);
+}|}
+  in
+  let result =
+    Match.transform_nested ~ctx ~language:"typescript" ~pattern_text
+      ~source_text
+  in
+  let expected =
+    {|function main() {
+    bar();
+    other();
+    foo(x);
+}|}
+  in
+  Alcotest.(check string) "deletion preserves surrounding context" expected
+    (String.trim result.transformed_source)
+
+let test_bare_sequence_matches_at_nesting_depth () =
+  (* The pattern should fire inside a nested if-branch, not just at the
+     function's top level. *)
+  let pattern_text =
+    {|@@
+match: strict
+metavar $X: single
+@@
+bar();
+foo($X);|}
+  in
+  let source_text =
+    {|function main() {
+    if (cond) {
+        bar();
+        foo(nested);
+    }
+}|}
+  in
+  let results =
+    Match.find_matches ~ctx ~language:"typescript" ~pattern_text ~source_text
+  in
+  Alcotest.(check int) "found match inside if-branch" 1 (List.length results);
+  let r = List.hd results in
+  Alcotest.(check string) "$X bound to nested" "nested"
+    (List.assoc "$X" r.bindings)
+
+let bare_sequence_tests =
+  [
+    Alcotest.test_case "matches consecutive subsequence" `Quick
+      test_bare_sequence_matches_subsequence;
+    Alcotest.test_case "requires immediate succession" `Quick
+      test_bare_sequence_requires_immediate_succession;
+    Alcotest.test_case "deletion preserves surrounding context" `Quick
+      test_bare_sequence_delete_with_context;
+    Alcotest.test_case "matches at nested depth" `Quick
+      test_bare_sequence_matches_at_nesting_depth;
+  ]
