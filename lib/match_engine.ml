@@ -223,7 +223,6 @@ let rec match_node ~pattern ~pattern_source ~source ~substitutions
           | _ ->
               let source_children = Tree.named_children source_node in
               let pat_len = List.length pattern_children in
-              let src_len = List.length source_children in
               let has_seq =
                 List.exists
                   (fun p ->
@@ -231,36 +230,56 @@ let rec match_node ~pattern ~pattern_source ~source ~substitutions
                       pattern_source p)
                   pattern_children
               in
-              if
-                (not has_seq)
-                && pattern.match_mode = Strict
-                && src_len > pat_len
-              then
-                let src_arr = Array.of_list source_children in
-                let result = ref None in
-                let i = ref 0 in
-                while !result = None && !i + pat_len <= src_len do
-                  let window =
-                    Array.to_list (Array.sub src_arr !i pat_len)
-                  in
-                  (match
-                     match_children_exact ~pattern ~pattern_source ~source
-                       ~substitutions pattern_children window bindings
-                   with
-                  | Some bs ->
-                      let offset = !i in
-                      let adjusted =
-                        List.map
-                          (fun (c : child_correspondence) ->
-                            { c with source_index = c.source_index + offset })
-                          bs.correspondences
-                      in
-                      result :=
-                        Some { bs with correspondences = adjusted }
-                  | None -> ());
-                  incr i
-                done;
-                !result
+              if (not has_seq) && pattern.match_mode = Strict then
+                (* Build windows over non-extra source children so that a
+                   pattern like `bar(); foo();` still matches when an
+                   inline comment separates the two statements in source.
+                   The comment is a tree-sitter "extra" and is filtered
+                   out for the windowing/matching, but the
+                   correspondences are mapped back to the original
+                   children-list indices so [compute_edits_strict]'s
+                   bare-seq byte-range computation (which indexes the
+                   unfiltered children of the parent) lines up. *)
+                let indexed_non_extras =
+                  List.mapi (fun idx c -> (idx, c)) source_children
+                  |> List.filter
+                       (fun (_, (c : Tree.src Tree.t)) -> not c.is_extra)
+                in
+                let non_extras_arr = Array.of_list indexed_non_extras in
+                let filt_len = Array.length non_extras_arr in
+                if filt_len < pat_len then None
+                else begin
+                  let result = ref None in
+                  let i = ref 0 in
+                  while !result = None && !i + pat_len <= filt_len do
+                    let window =
+                      Array.sub non_extras_arr !i pat_len
+                      |> Array.to_list
+                      |> List.map snd
+                    in
+                    (match
+                       match_children_exact ~pattern ~pattern_source ~source
+                         ~substitutions pattern_children window bindings
+                     with
+                    | Some bs ->
+                        let start_i = !i in
+                        let adjusted =
+                          List.map
+                            (fun (c : child_correspondence) ->
+                              let filtered_idx = start_i + c.source_index in
+                              let original_idx =
+                                fst non_extras_arr.(filtered_idx)
+                              in
+                              { c with source_index = original_idx })
+                            bs.correspondences
+                        in
+                        result :=
+                          Some { bs with correspondences = adjusted }
+                    | None -> ());
+                    incr i
+                  done;
+                  !result
+                end
               else
                 match_children ~pattern ~pattern_source ~source
                   ~substitutions pattern_node source_node pattern_children

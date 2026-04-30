@@ -5158,6 +5158,50 @@ foo($X);|}
   Alcotest.(check string) "$X bound to nested" "nested"
     (List.assoc "$X" r.bindings)
 
+let test_bare_sequence_transparent_to_inline_comment () =
+  (* Source has a comment between the two statements. Comments are
+     tree-sitter extras and transparent to a pattern that doesn't
+     mention them, so the match must still fire and the metavar must
+     bind correctly. Tests both block and line comment forms. *)
+  let pattern_text =
+    {|@@
+match: strict
+metavar $X: single
+@@
+bar();
+foo($X);|}
+  in
+  let block_comment_src =
+    {|function main() {
+    bar();
+    /* note */
+    foo(x);
+}|}
+  in
+  let line_comment_src =
+    {|function main() {
+    bar();
+    // note
+    foo(x);
+}|}
+  in
+  let block_results =
+    Match.find_matches ~ctx ~language:"typescript" ~pattern_text
+      ~source_text:block_comment_src
+  in
+  Alcotest.(check int) "block comment transparent to bare-seq match" 1
+    (List.length block_results);
+  Alcotest.(check string) "block: $X bound to x" "x"
+    (List.assoc "$X" (List.hd block_results).bindings);
+  let line_results =
+    Match.find_matches ~ctx ~language:"typescript" ~pattern_text
+      ~source_text:line_comment_src
+  in
+  Alcotest.(check int) "line comment transparent to bare-seq match" 1
+    (List.length line_results);
+  Alcotest.(check string) "line: $X bound to x" "x"
+    (List.assoc "$X" (List.hd line_results).bindings)
+
 let bare_sequence_tests =
   [
     Alcotest.test_case "matches consecutive subsequence" `Quick
@@ -5168,4 +5212,6 @@ let bare_sequence_tests =
       test_bare_sequence_delete_with_context;
     Alcotest.test_case "matches at nested depth" `Quick
       test_bare_sequence_matches_at_nesting_depth;
+    Alcotest.test_case "transparent to inline comment between statements" `Quick
+      test_bare_sequence_transparent_to_inline_comment;
   ]
