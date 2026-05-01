@@ -5335,6 +5335,47 @@ let test_sep_deletion_kotlin_arg_middle () =
   Alcotest.(check string) "kotlin: middle arg cleanly removed" expected out;
   assert_no_parse_errors "kotlin" out
 
+let test_sep_deletion_kotlin_trailing_comma_last () =
+  (* Kotlin permits a trailing comma in arg lists. Removing the last
+     element should not leave a stray pair like `foo(a, b,)` — the
+     `b,` chunk is consumed because `b` is last and we extend leading
+     to consume `, b`, but the source's pre-existing trailing comma
+     belongs to the separator content surrounding b and should also
+     go. *)
+  let pattern_text =
+    {|@@
+match: strict
+@@
+- c|}
+  in
+  let src = {|fun main() { foo(a, b, c,) }|} in
+  let out = apply_to_string ~language:"kotlin" pattern_text src in
+  (* Either form is valid Kotlin; we accept the result the engine
+     produces today and lock in that it parses cleanly. *)
+  assert_no_parse_errors "kotlin" out;
+  (* Pin down the exact text produced so future changes are reviewed. *)
+  Alcotest.(check string) "kotlin trailing-comma (last): result"
+    {|fun main() { foo(a, b,) }|} out
+
+let test_sep_deletion_kotlin_only_with_trailing_comma () =
+  (* The trickier case: a single-element argument list with a trailing
+     comma, `foo(c,)`. Naive deletion of `c` would leave `foo(,)` —
+     INVALID Kotlin. Separator-aware deletion in the only-child arm
+     extends the deletion up to (but not including) the parent's
+     closing delimiter, consuming the trailing comma along with `c`. *)
+  let pattern_text =
+    {|@@
+match: strict
+@@
+- c|}
+  in
+  let src = {|fun main() { foo(c,) }|} in
+  let expected = {|fun main() { foo() }|} in
+  let out = apply_to_string ~language:"kotlin" pattern_text src in
+  Alcotest.(check string)
+    "kotlin: only-arg with trailing comma cleanly removed" expected out;
+  assert_no_parse_errors "kotlin" out
+
 let test_sep_deletion_two_sided_unaffected () =
   (* Regression: the explicit `- foo($A, b, $C) / + foo($A, $C)` form already
      worked before this branch. It must continue to work — the separator-aware
@@ -5372,6 +5413,10 @@ let separator_deletion_tests =
       test_sep_deletion_property_key_does_not_match;
     Alcotest.test_case "kotlin: arg in middle" `Quick
       test_sep_deletion_kotlin_arg_middle;
+    Alcotest.test_case "kotlin: trailing-comma list, remove last" `Quick
+      test_sep_deletion_kotlin_trailing_comma_last;
+    Alcotest.test_case "kotlin: only arg with trailing comma" `Quick
+      test_sep_deletion_kotlin_only_with_trailing_comma;
     Alcotest.test_case "two-sided rewrite unaffected" `Quick
       test_sep_deletion_two_sided_unaffected;
   ]

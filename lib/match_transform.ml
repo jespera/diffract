@@ -468,9 +468,20 @@ and compute_edits_strict ~pattern ~(match_result : match_result) ~source
               (* First sibling: extend trailing instead. *)
               (target.Tree.start_byte, sib_arr.(i + 1).Tree.start_byte)
           | Some _ ->
-              (* Only child of the list-bearing parent: replace just the
-                 escalated target's bytes. *)
-              (target.Tree.start_byte, target.Tree.end_byte)
+              (* Only child of the list-bearing parent. If the parent
+                 has bytes after the target — typically a closing
+                 delimiter like `)`/`]`/`}` and possibly a pre-existing
+                 trailing separator (e.g. Kotlin's optional trailing
+                 comma `foo(c,)`) — extend the deletion up to but not
+                 including the parent's last byte. The last byte is
+                 assumed to be a closing delimiter we want to keep;
+                 everything between the target and that delimiter
+                 (commas, whitespace) is "trailing separator" content
+                 that should disappear with the only element. *)
+              if parent.Tree.end_byte > target.Tree.end_byte then
+                (target.Tree.start_byte, parent.Tree.end_byte - 1)
+              else
+                (target.Tree.start_byte, target.Tree.end_byte)
           | None ->
               (* Defensive: target not found in parent (shouldn't happen
                  unless the AST shape changed mid-flight). Leave the
