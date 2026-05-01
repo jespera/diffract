@@ -16,5 +16,7 @@ let () =
       ("Conjunctive", Test_match.conjunctive_tests);
       ("Match (Comments)", Test_match.comment_tests);
       ("Match (Bare-sequence)", Test_match.bare_sequence_tests);
+      ("Match (Separator-aware deletion)",
+       Test_match.separator_deletion_tests);
       ("Tree diff", Test_tree_diff.tests);
     ]
