@@ -6,27 +6,29 @@ let find_matches_in_subtree ~pattern ~inherited_bindings ~source
     ~(root_node : Tree.src Tree.t) =
   let pattern_node = Match_engine.get_pattern_content pattern in
   let results = ref [] in
-  Tree.traverse
-    (fun node ->
-      match
-        Match_engine.match_node ~pattern ~pattern_source:pattern.source ~source
-          ~substitutions:pattern.substitutions ~bindings:inherited_bindings
-          pattern_node node
-      with
-      | Some mb ->
-          results :=
-            {
-              node;
-              bindings = mb.text_bindings;
-              node_bindings = mb.node_bindings;
-              sequence_node_bindings = mb.sequence_node_bindings;
-              correspondences = mb.correspondences;
-              start_point = Tree.start_point node;
-              end_point = Tree.end_point node;
-            }
-            :: !results
-      | None -> ())
-    root_node;
+  let rec walk ancestors (node : Tree.src Tree.t) =
+    (match
+       Match_engine.match_node ~pattern ~pattern_source:pattern.source
+         ~source ~substitutions:pattern.substitutions
+         ~bindings:inherited_bindings pattern_node node
+     with
+    | Some mb ->
+        results :=
+          {
+            node;
+            ancestors;
+            bindings = mb.text_bindings;
+            node_bindings = mb.node_bindings;
+            sequence_node_bindings = mb.sequence_node_bindings;
+            correspondences = mb.correspondences;
+            start_point = Tree.start_point node;
+            end_point = Tree.end_point node;
+          }
+          :: !results
+    | None -> ());
+    List.iter (fun c -> walk (node :: ancestors) c) (Tree.named_children node)
+  in
+  walk [] root_node;
   List.rev !results
 
 (** Find matches for a pattern, respecting the 'on $VAR' directive. If pattern
@@ -280,6 +282,12 @@ let find_matches_with_index ~index ~pattern ~source
               Some
                 {
                   node = source_node;
+                  (* Index-based lookup doesn't track ancestors. Matches
+                     found this way won't benefit from separator-aware
+                     deletion; the path is currently only used by
+                     find_matches_multi for batch matching, not the
+                     single-pattern apply path. *)
+                  ancestors = [];
                   bindings = mb.text_bindings;
                   node_bindings = mb.node_bindings;
                   sequence_node_bindings = mb.sequence_node_bindings;

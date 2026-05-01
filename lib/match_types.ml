@@ -63,6 +63,13 @@ type pattern = {
 
 type match_result = {
   node : Tree.src Tree.t;  (** The matched source node *)
+  ancestors : Tree.src Tree.t list;
+      (** Ancestor chain from innermost (immediate parent) to outermost
+          (root). Used by the transform path to walk up through
+          single-child wrapper nodes (e.g. Kotlin's [value_argument]
+          wrapping a [simple_identifier]) when deleting, so the deletion
+          range corresponds to the right level for separator-aware byte
+          consumption. *)
   bindings : (string * string) list;  (** Metavar name -> matched text *)
   node_bindings : (string * Tree.src Tree.t) list;
       (** Metavar name -> matched node (for 'on $VAR') *)
