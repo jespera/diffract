@@ -400,6 +400,85 @@ and compute_edits_strict ~pattern ~(match_result : match_result) ~source
       ( match_result.node.Tree.start_byte,
         match_result.node.Tree.end_byte )
   in
+  (* Separator-aware deletion: when the replacement is empty (the user
+     wrote a `-`-only rule, or a rule whose `+` lines collapse to nothing),
+     and the matched node is a child of a separator-bearing parent,
+     extend the deletion range to consume one of the surrounding
+     inter-sibling byte spans (the "separator" — could be a comma plus
+     whitespace, a semicolon, or just whitespace+newline depending on
+     the grammar). Without this, deleting `b` from `foo(a, b, c)` would
+     leave `foo(a, , c)` — a stray comma.
+
+     Walks up the ancestor chain through "wrapper" nodes whose only
+     non-extra named child is the (current) target — this handles
+     grammars like Kotlin where an argument is wrapped in
+     [value_argument] around a [simple_identifier]. The escalation
+     stops as soon as the parent has more than one named child (i.e. a
+     true list-bearing parent).
+
+     Convention: consume the leading separator unless this is the first
+     sibling, in which case consume the trailing one. Single-child
+     parents (only one named sibling) leave the range untouched, so e.g.
+     [foo(b)] becomes [foo()] cleanly without trying to consume
+     non-existent siblings. *)
+  let start_byte, end_byte =
+    if instantiated = "" && match_result.ancestors <> [] then begin
+      (* Walk up while the parent's sole non-extra named child is our
+         current escalation target. *)
+      (* Escalate past parents that are tight wrappers — i.e. whose own
+         byte range equals their sole named child's range, meaning the
+         parent contributes no surrounding bytes (no parens, brackets,
+         or other delimiters). Kotlin's [value_argument] around a
+         [simple_identifier] is the canonical case. TypeScript's
+         [arguments] around `b` is NOT a tight wrapper because the
+         parens make [arguments]'s range strictly larger than [b]'s. *)
+      let rec escalate (current : Tree.src Tree.t) ancestors =
+        match ancestors with
+        | [] -> (current, [])
+        | parent :: rest ->
+            let parent_named = Tree.named_children parent in
+            (match parent_named with
+            | [ _ ]
+              when parent.Tree.start_byte = current.Tree.start_byte
+                   && parent.Tree.end_byte = current.Tree.end_byte ->
+                escalate parent rest
+            | _ -> (current, parent :: rest))
+      in
+      let target, ancestors_above =
+        escalate match_result.node match_result.ancestors
+      in
+      match ancestors_above with
+      | [] -> (start_byte, end_byte)
+      | parent :: _ ->
+          let sib_arr = Array.of_list (Tree.named_children parent) in
+          let n = Array.length sib_arr in
+          let idx = ref None in
+          for i = 0 to n - 1 do
+            if
+              !idx = None
+              && sib_arr.(i).Tree.start_byte = target.Tree.start_byte
+              && sib_arr.(i).Tree.end_byte = target.Tree.end_byte
+            then idx := Some i
+          done;
+          (match !idx with
+          | Some i when i > 0 ->
+              (* Has previous sibling: extend leading. *)
+              (sib_arr.(i - 1).Tree.end_byte, target.Tree.end_byte)
+          | Some i when i < n - 1 ->
+              (* First sibling: extend trailing instead. *)
+              (target.Tree.start_byte, sib_arr.(i + 1).Tree.start_byte)
+          | Some _ ->
+              (* Only child of the list-bearing parent: replace just the
+                 escalated target's bytes. *)
+              (target.Tree.start_byte, target.Tree.end_byte)
+          | None ->
+              (* Defensive: target not found in parent (shouldn't happen
+                 unless the AST shape changed mid-flight). Leave the
+                 original match's range untouched. *)
+              (start_byte, end_byte))
+    end
+    else (start_byte, end_byte)
+  in
   [ { start_byte; end_byte; replacement = instantiated } ]
 
 and compute_edits_partial ~pattern ~(match_result : match_result) ~source
@@ -537,6 +616,7 @@ and try_match_and_transform ~inner_pattern ~source ~inherited_bindings node =
               let mr =
                 {
                   node;
+                  ancestors = [];
                   bindings = merged.text_bindings;
                   node_bindings = merged.node_bindings;
                   sequence_node_bindings = merged.sequence_node_bindings;
