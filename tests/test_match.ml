@@ -5246,3 +5246,132 @@ let bare_sequence_tests =
     Alcotest.test_case "kotlin source_file wrapper + comment" `Quick
       test_bare_sequence_kotlin;
   ]
+
+(* === Separator-aware deletion ===
+   When a `-`-only rule's matched node is a child of a separator-bearing
+   parent, the deletion must consume the appropriate adjacent inter-sibling
+   bytes (commas + whitespace, semicolons, newlines) so the result remains
+   syntactically valid. Tests check every position (first / middle / last /
+   only) plus cross-grammar coverage. Output validity is asserted by
+   parsing the transformed source and checking no parse errors. *)
+
+let assert_no_parse_errors language source =
+  let ctx = Context.create () in
+  let tree = Tree.parse ~ctx ~language source in
+  let errs = Tree.error_count tree in
+  Alcotest.(check int)
+    (Printf.sprintf "transformed source parses cleanly (%s)" language)
+    0 errs
+
+let apply_to_string ~language pattern_text source_text =
+  let result =
+    Match.transform_nested ~ctx ~language ~pattern_text ~source_text
+  in
+  result.transformed_source
+
+let del_b_pattern =
+  {|@@
+match: strict
+@@
+- b|}
+
+let test_sep_deletion_arg_middle () =
+  let src = {|function main() { foo(a, b, c); }|} in
+  let expected = {|function main() { foo(a, c); }|} in
+  let out = apply_to_string ~language:"typescript" del_b_pattern src in
+  Alcotest.(check string) "middle arg cleanly removed" expected out;
+  assert_no_parse_errors "typescript" out
+
+let test_sep_deletion_arg_first () =
+  let src = {|function main() { foo(b, c); }|} in
+  let expected = {|function main() { foo(c); }|} in
+  let out = apply_to_string ~language:"typescript" del_b_pattern src in
+  Alcotest.(check string) "first arg cleanly removed (consumes trailing , )"
+    expected out;
+  assert_no_parse_errors "typescript" out
+
+let test_sep_deletion_arg_last () =
+  let src = {|function main() { foo(a, b); }|} in
+  let expected = {|function main() { foo(a); }|} in
+  let out = apply_to_string ~language:"typescript" del_b_pattern src in
+  Alcotest.(check string) "last arg cleanly removed (consumes leading , )"
+    expected out;
+  assert_no_parse_errors "typescript" out
+
+let test_sep_deletion_arg_only () =
+  let src = {|function main() { foo(b); }|} in
+  let expected = {|function main() { foo(); }|} in
+  let out = apply_to_string ~language:"typescript" del_b_pattern src in
+  Alcotest.(check string) "only arg cleanly removed (no separator to consume)"
+    expected out;
+  assert_no_parse_errors "typescript" out
+
+let test_sep_deletion_array_middle () =
+  let src = {|const xs = [a, b, c];|} in
+  let expected = {|const xs = [a, c];|} in
+  let out = apply_to_string ~language:"typescript" del_b_pattern src in
+  Alcotest.(check string) "middle array element cleanly removed" expected out;
+  assert_no_parse_errors "typescript" out
+
+let test_sep_deletion_array_first () =
+  let src = {|const xs = [b, c];|} in
+  let expected = {|const xs = [c];|} in
+  let out = apply_to_string ~language:"typescript" del_b_pattern src in
+  Alcotest.(check string) "first array element cleanly removed" expected out;
+  assert_no_parse_errors "typescript" out
+
+let test_sep_deletion_property_key_does_not_match () =
+  (* `b` as identifier should NOT match `b:` as property_identifier in an
+     object literal. This is matcher behaviour, but a regression here would
+     produce broken object literals — worth pinning down. *)
+  let src = {|const o = { a: 1, b: 2, c: 3 };|} in
+  let out = apply_to_string ~language:"typescript" del_b_pattern src in
+  Alcotest.(check string) "property key not affected" src out
+
+let test_sep_deletion_kotlin_arg_middle () =
+  let src = {|fun main() { foo(a, b, c) }|} in
+  let expected = {|fun main() { foo(a, c) }|} in
+  let out = apply_to_string ~language:"kotlin" del_b_pattern src in
+  Alcotest.(check string) "kotlin: middle arg cleanly removed" expected out;
+  assert_no_parse_errors "kotlin" out
+
+let test_sep_deletion_two_sided_unaffected () =
+  (* Regression: the explicit `- foo($A, b, $C) / + foo($A, $C)` form already
+     worked before this branch. It must continue to work — the separator-aware
+     path must not fire when the replacement is non-empty. *)
+  let pattern_text =
+    {|@@
+match: strict
+metavar $A: single
+metavar $C: single
+@@
+- foo($A, b, $C)
++ foo($A, $C)|}
+  in
+  let src = {|function main() { foo(a, b, c); foo(x, b, y); }|} in
+  let expected = {|function main() { foo(a, c); foo(x, y); }|} in
+  let out = apply_to_string ~language:"typescript" pattern_text src in
+  Alcotest.(check string) "two-sided rewrite still works" expected out;
+  assert_no_parse_errors "typescript" out
+
+let separator_deletion_tests =
+  [
+    Alcotest.test_case "ts: arg in middle" `Quick
+      test_sep_deletion_arg_middle;
+    Alcotest.test_case "ts: arg first (extends trailing)" `Quick
+      test_sep_deletion_arg_first;
+    Alcotest.test_case "ts: arg last (extends leading)" `Quick
+      test_sep_deletion_arg_last;
+    Alcotest.test_case "ts: arg only (no extension)" `Quick
+      test_sep_deletion_arg_only;
+    Alcotest.test_case "ts: array element middle" `Quick
+      test_sep_deletion_array_middle;
+    Alcotest.test_case "ts: array element first" `Quick
+      test_sep_deletion_array_first;
+    Alcotest.test_case "ts: property key not matched" `Quick
+      test_sep_deletion_property_key_does_not_match;
+    Alcotest.test_case "kotlin: arg in middle" `Quick
+      test_sep_deletion_kotlin_arg_middle;
+    Alcotest.test_case "two-sided rewrite unaffected" `Quick
+      test_sep_deletion_two_sided_unaffected;
+  ]
