@@ -36,9 +36,13 @@ type one_sided_instance = {
   os_language : string;
   os_text : string;
   os_side : side;
+  os_start_byte : int;
+  os_end_byte : int;
 }
 (** A single Added or Removed subtree at a site. Scaffolding for M1.6
-    fusion; not emitted as rules in M1. *)
+    fusion; not emitted as rules in M1. The byte range is used to
+    suppress removal-only rule emission for subtrees already covered
+    by a two-sided rule's site. *)
 
 type one_sided_candidate
 (** Opaque — pairs a [one_sided_instance] with its structural shape for

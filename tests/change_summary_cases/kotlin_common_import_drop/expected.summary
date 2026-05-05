@@ -1,0 +1,9 @@
+# rule R1  support=3  language=kotlin
+@@
+match: strict
+@@
+- import com.example.Removed
+# sites R1
+Thing1.kt
+Thing2.kt
+Thing3.kt
