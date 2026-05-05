@@ -19,7 +19,7 @@
   (cmdliner (>= 1.2))
   ctypes
   ctypes-foreign
+  yojson
   (alcotest :with-test)
   (bechamel :with-test)
-  (yojson :with-test)
   ocamlformat))

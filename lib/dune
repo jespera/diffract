@@ -42,10 +42,49 @@
  (action
   (copy %{deps} %{target})))
 
+; Embed each grammar's node-types.json as a string constant in
+; embedded_metadata.ml. Generated at build time so the JSON files
+; remain the single source of truth in grammars/metadata/.
+(rule
+ (target embedded_metadata.ml)
+ (deps
+  (:ts ../grammars/metadata/typescript.node-types.json)
+  (:tsx ../grammars/metadata/tsx.node-types.json)
+  (:kt ../grammars/metadata/kotlin.node-types.json)
+  (:php ../grammars/metadata/php.node-types.json)
+  (:scala ../grammars/metadata/scala.node-types.json))
+ (action
+  (with-stdout-to %{target}
+   (progn
+    (echo "(* Auto-generated. Do not edit. See grammars/metadata/. *)\n")
+    (echo "let typescript = {grammar_metadata|")
+    (cat %{ts})
+    (echo "|grammar_metadata}\n")
+    (echo "let tsx = {grammar_metadata|")
+    (cat %{tsx})
+    (echo "|grammar_metadata}\n")
+    (echo "let kotlin = {grammar_metadata|")
+    (cat %{kt})
+    (echo "|grammar_metadata}\n")
+    (echo "let php = {grammar_metadata|")
+    (cat %{php})
+    (echo "|grammar_metadata}\n")
+    (echo "let scala = {grammar_metadata|")
+    (cat %{scala})
+    (echo "|grammar_metadata}\n")
+    (echo "let by_language = function\n")
+    (echo "  | \"typescript\" -> Some typescript\n")
+    (echo "  | \"tsx\" -> Some tsx\n")
+    (echo "  | \"kotlin\" -> Some kotlin\n")
+    (echo "  | \"php\" -> Some php\n")
+    (echo "  | \"scala\" -> Some scala\n")
+    (echo "  | _ -> None\n")))))
+
 (library
  (name diffract)
  (public_name diffract)
  (modes native)
+ (libraries yojson)
  (foreign_stubs
   (language c)
   (names tree_sitter_helper)
