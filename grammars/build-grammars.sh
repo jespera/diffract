@@ -7,9 +7,21 @@ cd "$(dirname "$0")"
 # Ensure npm packages are installed
 npm install
 
-mkdir -p lib
+mkdir -p lib metadata
 TMPDIR_LOCAL=$(mktemp -d)
 trap "rm -rf $TMPDIR_LOCAL" EXIT
+
+# Copy per-grammar node-types.json into metadata/ so the OCaml side can
+# embed and consume it. Each file describes its language's node types,
+# fields, supertype/subtype relations, and child constraints, and is
+# the authoritative source for grammar-derived metadata (list-shape
+# wrapper detection, role-aware metavar naming, etc.).
+echo "Copying node-types.json metadata..."
+cp node_modules/tree-sitter-typescript/typescript/src/node-types.json metadata/typescript.node-types.json
+cp node_modules/tree-sitter-typescript/tsx/src/node-types.json        metadata/tsx.node-types.json
+cp node_modules/tree-sitter-kotlin/src/node-types.json                metadata/kotlin.node-types.json
+cp node_modules/tree-sitter-php/php_only/src/node-types.json          metadata/php.node-types.json
+cp node_modules/tree-sitter-scala/src/node-types.json                 metadata/scala.node-types.json
 
 # Build TypeScript grammar
 echo "Building TypeScript grammar..."
