@@ -72,6 +72,8 @@ type one_sided_instance = {
   os_language : string;
   os_text : string;
   os_side : side;
+  os_start_byte : int;
+  os_end_byte : int;
 }
 
 (** Internal candidate for M1.6 fusion: carries the structural shape alongside
@@ -239,6 +241,24 @@ let render_pattern_body (ep : edit_pat) : string =
   List.iter
     (fun line -> Buffer.add_string buf (Printf.sprintf "+ %s\n" line))
     (String.split_on_char '\n' after_text);
+  Buffer.contents buf
+
+(** Render a removal-only pattern as a .pat-style block body containing
+    only [-] lines. Used for unpaired Before_side one-sided clusters that
+    survive M1.6 fusion as bare removals. *)
+let render_removal_only_body (p : pat_node) : string =
+  let holes = collect_holes [] p |> List.sort compare in
+  let buf = Buffer.create 128 in
+  Buffer.add_string buf "@@\n";
+  Buffer.add_string buf "match: strict\n";
+  List.iter
+    (fun h -> Buffer.add_string buf (Printf.sprintf "metavar $H%d: single\n" h))
+    holes;
+  Buffer.add_string buf "@@\n";
+  let text = render_pat_node p in
+  List.iter
+    (fun line -> Buffer.add_string buf (Printf.sprintf "- %s\n" line))
+    (String.split_on_char '\n' text);
   Buffer.contents buf
 
 (* ── Metrics ─────────────────────────────────────────────────────── *)
@@ -873,6 +893,36 @@ let cluster_one_sided (candidates : one_sided_candidate list) :
   cluster_side Before_side (by_side Before_side)
   @ cluster_side After_side (by_side After_side)
 
+(** Behavioural applicability check for a removal-only pattern. Renders
+    the cluster's pat_node as a [-]-only spatch body and verifies it
+    matches at least once in the first instance's pre-change source.
+    [src_lookup] resolves a site's file path back to its source. *)
+let removal_only_applies ~ctx ~src_lookup (c : one_sided_cluster) : bool =
+  match c.os_cluster_instances with
+  | [] -> false
+  | inst :: _ ->
+      let lang = inst.os_language in
+      if lang = "" then true
+      else
+        match src_lookup inst.os_file with
+        | None -> false
+        | Some src -> (
+            let pattern_text = render_removal_only_body c.os_cluster_pattern in
+            try
+              let matches =
+                Match.find_matches ~ctx ~language:lang ~pattern_text
+                  ~source_text:src
+              in
+              if Sys.getenv_opt "CS_TRACE" <> None then
+                Printf.eprintf "    find_matches: %d match(es)\n%!"
+                  (List.length matches);
+              List.length matches > 0
+            with e ->
+              if Sys.getenv_opt "CS_TRACE" <> None then
+                Printf.eprintf "    find_matches: exception: %s\n%!"
+                  (Printexc.to_string e);
+              false)
+
 (* ── Change-pair extraction ──────────────────────────────────────── *)
 
 (** Fraction of a node's direct children whose change is non-[Same].
@@ -1095,6 +1145,8 @@ let collect_one_sided_candidates ?on_file ~ctx (cs : changeset) :
                     os_language = language;
                     os_text = text;
                     os_side = side;
+                    os_start_byte = node.start_byte;
+                    os_end_byte = node.end_byte;
                   }
                 in
                 out :=
@@ -1430,24 +1482,117 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
   in
   let groups = group_by_jaccard nodes in
   let group_outputs = List.concat_map materialise_group groups in
-  let sorted_outputs =
-    List.sort
-      (fun (_, _, _, s1) (_, _, _, s2) -> compare s2 s1)
+  let two_sided_records =
+    List.map
+      (fun (sections, sites, language, support) ->
+        let pattern_text =
+          String.concat "\n" (List.map render_pattern_body sections)
+        in
+        {
+          id = "";
+          pattern_text;
+          support;
+          language = (if language = "" then "unknown" else language);
+          sites;
+        })
       group_outputs
   in
-  let mk_rule i (sections, sites, language, support) =
-    let pattern_text =
-      String.concat "\n" (List.map render_pattern_body sections)
-    in
-    {
-      id = Printf.sprintf "R%d" (i + 1);
-      pattern_text;
-      support;
-      language = (if language = "" then "unknown" else language);
-      sites;
-    }
+  (* Removal-only emission: Before_side os_clusters that did not pair
+     with any After_side cluster in M1.6 are surfaced as standalone
+     [-]-only rules. Addition-only clusters are *not* emitted as
+     standalone rules — a [+]-only block has no anchor for the spatch
+     engine and is left to fall through into M1.9 residuals. *)
+  let two_sided_coverage : (string, (int * int) list) Hashtbl.t =
+    let tbl = Hashtbl.create 16 in
+    List.iter
+      (fun c ->
+        List.iter
+          (fun (i : instance) ->
+            let prev =
+              try Hashtbl.find tbl i.file with Not_found -> []
+            in
+            Hashtbl.replace tbl i.file
+              ((i.site_start, i.site_end) :: prev))
+          c.instances)
+      two_sided_clusters;
+    tbl
   in
-  { rules = List.mapi mk_rule sorted_outputs }
+  let covered_by_two_sided (i : one_sided_instance) =
+    match Hashtbl.find_opt two_sided_coverage i.os_file with
+    | None -> false
+    | Some ranges ->
+        List.exists
+          (fun (s, e) -> s <= i.os_start_byte && i.os_end_byte <= e)
+          ranges
+  in
+  let used_removeds = List.map fst pairs in
+  let src_lookup =
+    let tbl : (string, string) Hashtbl.t = Hashtbl.create 16 in
+    List.iter
+      (function
+        | Modified { path; before_source; _ } ->
+            Hashtbl.replace tbl path before_source
+        | Added _ | Deleted _ -> ())
+      cs.files;
+    fun path -> Hashtbl.find_opt tbl path
+  in
+  let trace = Sys.getenv_opt "CS_TRACE" <> None in
+  let removal_only_records =
+    List.filter_map
+      (fun c ->
+        if c.os_cluster_side <> Before_side then None
+        else if List.memq c used_removeds then None
+        else
+          (* Drop clusters whose every instance's byte range is contained
+             in some two-sided rule's site range — those removals are
+             already explained by the larger rewrite (e.g. [- "tag"]
+             inside [- Log.d("tag", $H0) + logger.debug($H0)]). *)
+          let all_covered =
+            List.for_all covered_by_two_sided c.os_cluster_instances
+          in
+          if all_covered then begin
+            if trace then
+              Printf.eprintf
+                "  removal-only candidate: %d insts, dropped (covered by two-sided)\n%!"
+                (List.length c.os_cluster_instances);
+            None
+          end
+          else
+          let applies = removal_only_applies ~ctx ~src_lookup c in
+          if trace then
+            Printf.eprintf
+              "  removal-only candidate: %d insts, applies=%b, body=%S\n%!"
+              (List.length c.os_cluster_instances) applies
+              (render_removal_only_body c.os_cluster_pattern);
+          if not applies then None
+          else
+          let sites =
+            c.os_cluster_instances
+            |> List.map (fun (i : one_sided_instance) -> i.os_file)
+            |> List.sort_uniq String.compare
+          in
+          let language =
+            match c.os_cluster_instances with
+            | i :: _ -> i.os_language
+            | [] -> "unknown"
+          in
+          let support = List.length c.os_cluster_instances in
+          Some
+            {
+              id = "";
+              pattern_text = render_removal_only_body c.os_cluster_pattern;
+              support;
+              language = (if language = "" then "unknown" else language);
+              sites;
+            })
+      os_clusters
+  in
+  let combined =
+    two_sided_records @ removal_only_records
+    |> List.sort (fun a b -> compare b.support a.support)
+    |> List.mapi (fun i r -> { r with id = Printf.sprintf "R%d" (i + 1) })
+  in
+  { rules = combined }
 
 let format_summary (s : summary) : string =
   let buf = Buffer.create 256 in

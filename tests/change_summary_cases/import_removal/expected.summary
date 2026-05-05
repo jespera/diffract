@@ -8,3 +8,13 @@ match: strict
 a.ts
 b.ts
 c.ts
+
+# rule R2  support=3  language=typescript
+@@
+match: strict
+@@
+- import { legacyHandler } from "./legacy";
+# sites R2
+a.ts
+b.ts
+c.ts
