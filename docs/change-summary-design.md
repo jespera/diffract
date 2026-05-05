@@ -197,6 +197,54 @@ level of ancestor wins for each site. Key properties:
   excluded from the quote-char set so `binary_expression` with `/` is
   not misclassified.
 
+### 3.2 Contextual emission with ellipses (future direction)
+
+The §3.1 emission is bimodal: a `Modified` ancestor emits with its
+non-changed siblings rendered as `$Hk` placeholders, and a `Replaced`
+leaf emits in isolation. This produces two failure modes when the change
+is a single localized edit embedded in a larger scope:
+
+- **Leaf too narrow.** A bare `Removed` child (e.g. one dropped import
+  line in a 35-import block) currently emits no standalone change pair
+  at all — only its parent does. Even when leaves do emit, the rendered
+  text often re-parses at a different grammatical position and is
+  rejected by the applicability gate.
+- **Parent too wide.** The parent's other siblings appear as
+  `$H0..$Hn` placeholders. Across files those siblings differ, so
+  anti-unification keeps them parameterized rather than collapsing the
+  change. The actual delta is buried in scaffolding. The
+  `kotlin_common_import_drop` fixture is a minimal instance: three
+  files each drop the same single import line out of a longer block,
+  where the *useful* rule is the one-line removal alone, but the
+  current emission produces no rule (or, on larger real-world inputs,
+  multiple block-level rules differing only in their surrounding
+  imports).
+
+The generalization is to treat a change pair as **scope + ellipses +
+delta** rather than scope + holes + delta. The parent is kept as the
+matching context, but its non-changed children are rendered as `...`
+(anonymous sequence matching) rather than `$Hk` placeholders. Three
+cases collapse into one emission unit:
+
+- `foo() { ... - p ... }` — removal inside a scope
+- `foo() { ... - p; + p' ... }` — replacement inside a scope
+- `... - import com.example.LegacyHelper ...` — degenerate
+  flat-sequence case (empty scope, just an anchored removal in a
+  sequence)
+
+The pattern language already supports `...` with auto-context detection
+(see CLAUDE.md "Ellipsis"); the change lives on the emission side. The
+cluster engine then anti-unifies on the delta itself, with scope
+contents ellipsed out, so two files whose change occurs inside
+structurally different scopes can still cluster on the delta.
+
+This subsumes the "anchored removal" case (where the surrounding
+context is the immediate adjacent siblings, kept literal rather than
+ellipsed) and the "removal-only standalone rule" case (empty context).
+It gives a uniform mechanism for emitting change pairs at the right
+granularity without per-grammar tuning of which ancestor levels to
+prefer.
+
 ## 4. Key design decisions
 
 ### 4.1 Hierarchical clustering (Getafix)
@@ -707,9 +755,8 @@ reconstructs the site's after-source byte-for-byte. This is the safety
 invariant from §4.4 expressed as a test. Lands with M2.5.
 
 **Tier 3 — real-changeset tests.** Run the full pipeline against
-`changeset/` (the hedeby frontend sample) and a curated slice of the
-remove-redux patch, placed under `tests/change_summary_cases/` like any
-other Tier 1 case. These are judged by the same hand-written-expectation
+`changeset/` and a curated slice of the remove-redux patch, placed
+under `tests/change_summary_cases/` like any other Tier 1 case. These are judged by the same hand-written-expectation
 rule — large, but still reviewed. Use to steer defaults in M5.
 
 ## 9. Output format and test harness
