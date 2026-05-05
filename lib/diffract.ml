@@ -5,6 +5,7 @@ module Context = Context
 module Tree = Tree
 module Match = Match
 module Tree_diff = Tree_diff
+module Grammar_metadata = Grammar_metadata
 
 (** Parse source code and return the tree representation *)
 let parse_tree ~ctx ~language source = Tree.parse ~ctx ~language source
