@@ -19,4 +19,5 @@ let () =
       ("Match (Separator-aware deletion)",
        Test_match.separator_deletion_tests);
       ("Tree diff", Test_tree_diff.tests);
+      ("Grammar metadata", Test_grammar_metadata.tests);
     ]
