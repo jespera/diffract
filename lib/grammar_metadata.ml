@@ -374,19 +374,36 @@ let extensions_for_language = function
   | "kotlin" ->
       {
         extra_strings =
+          (* Tree-sitter-kotlin's string_literal goes through the
+             external scanner. We declare the boundary pairs the
+             DEL lexer needs to recognise.
+
+             Kotlin 2.0+ supports multi-dollar string templates:
+             [$"..."], [$$"..."], [$$$"..."], etc. The dollar prefix
+             only affects interpolation behaviour inside the string;
+             the outer boundary is still [$N"] / ["] (or [$N"""] /
+             ["""] for triple-quoted). Since we treat string interiors
+             as opaque, each variant is just a fresh opener/closer
+             pair.
+
+             Variants are listed longest-prefix-first so a
+             longest-match lexer correctly recognises [$$"text"] as a
+             two-dollar string rather than [$] followed by [$"text"].
+             Capped at 4 dollars; trivial to extend if real Kotlin
+             code uses more. *)
           [
-            (* Tree-sitter-kotlin's string_literal goes through the
-               external scanner. We declare the boundary pairs the
-               DEL lexer needs to recognise: basic double-quoted
-               strings (with backslash escapes) and triple-quoted
-               raw strings (no escapes). The multi-dollar variants
-               ($"...", $$"...", etc.) need count-aware boundary
-               recognition that doesn't fit the simple opener/closer
-               shape; covered by future specialised lexer code if
-               and when patterns need to bind metavars at those
-               boundaries. *)
-            { opener = "\""; closer = "\""; escape = Some '\\' };
+            (* Triple-quoted variants, longest first. *)
+            { opener = "$$$$\"\"\""; closer = "\"\"\""; escape = None };
+            { opener = "$$$\"\"\""; closer = "\"\"\""; escape = None };
+            { opener = "$$\"\"\""; closer = "\"\"\""; escape = None };
+            { opener = "$\"\"\""; closer = "\"\"\""; escape = None };
             { opener = "\"\"\""; closer = "\"\"\""; escape = None };
+            (* Single-quote variants, longest first. *)
+            { opener = "$$$$\""; closer = "\""; escape = Some '\\' };
+            { opener = "$$$\""; closer = "\""; escape = Some '\\' };
+            { opener = "$$\""; closer = "\""; escape = Some '\\' };
+            { opener = "$\""; closer = "\""; escape = Some '\\' };
+            { opener = "\""; closer = "\""; escape = Some '\\' };
           ];
         extra_line_comments = [];
         extra_block_comments = [ ("/*", "*/") ];

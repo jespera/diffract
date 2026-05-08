@@ -154,6 +154,24 @@ let test_known_strings_present () =
     "kotlin: has \"\"\" (via extension)" true
     (has_string ~language:"kotlin" ~opener:"\"\"\"");
   Alcotest.(check bool)
+    "kotlin: has $\" multi-dollar variant" true
+    (has_string ~language:"kotlin" ~opener:"$\"");
+  Alcotest.(check bool)
+    "kotlin: has $$\" multi-dollar variant" true
+    (has_string ~language:"kotlin" ~opener:"$$\"");
+  Alcotest.(check bool)
+    "kotlin: has $$$\" multi-dollar variant" true
+    (has_string ~language:"kotlin" ~opener:"$$$\"");
+  Alcotest.(check bool)
+    "kotlin: has $$$$\" multi-dollar variant" true
+    (has_string ~language:"kotlin" ~opener:"$$$$\"");
+  Alcotest.(check bool)
+    "kotlin: has $\"\"\" multi-dollar triple-quoted" true
+    (has_string ~language:"kotlin" ~opener:"$\"\"\"");
+  Alcotest.(check bool)
+    "kotlin: has $$\"\"\" multi-dollar triple-quoted" true
+    (has_string ~language:"kotlin" ~opener:"$$\"\"\"");
+  Alcotest.(check bool)
     "php: has \" (via extension)" true
     (has_string ~language:"php" ~opener:"\"");
   Alcotest.(check bool)
@@ -189,6 +207,38 @@ let test_block_comments () =
   Alcotest.(check bool) "php: /* */" true (has "php" ("/*", "*/"));
   Alcotest.(check bool) "scala: /* */" true (has "scala" ("/*", "*/"))
 
+(* Longer string-opener variants come before shorter ones in the
+   string_defs list, so a longest-match lexer tries them in list
+   order without sorting. For Kotlin: a two-dollar string opener
+   must come before the one-dollar opener, which must come before
+   the bare double-quote opener, so the lexer recognises a
+   two-dollar string as that rather than as a single dollar
+   followed by a one-dollar string. *)
+let test_kotlin_string_ordering_longest_first () =
+  let strs =
+    (Grammar_metadata.del_definition ~language:"kotlin").string_defs
+  in
+  let openers =
+    List.map (fun (s : Grammar_metadata.string_def) -> s.opener) strs
+  in
+  let position opener =
+    let rec find i = function
+      | [] -> -1
+      | x :: _ when x = opener -> i
+      | _ :: rest -> find (i + 1) rest
+    in
+    find 0 openers
+  in
+  let p_basic = position "\"" in
+  let p_dollar = position "$\"" in
+  let p_dolldoll = position "$$\"" in
+  Alcotest.(check bool)
+    "$\" before \" (longer prefix earlier)" true
+    (p_dollar >= 0 && p_basic >= 0 && p_dollar < p_basic);
+  Alcotest.(check bool)
+    "$$\" before $\"" true
+    (p_dolldoll >= 0 && p_dollar >= 0 && p_dolldoll < p_dollar)
+
 (** Unknown languages return an empty DEL definition. *)
 let test_unknown_language_empty_del () =
   let def = Grammar_metadata.del_definition ~language:"esperanto" in
@@ -221,6 +271,8 @@ let tests =
       test_known_strings_present;
     Alcotest.test_case "line comments" `Quick test_line_comments;
     Alcotest.test_case "block comments" `Quick test_block_comments;
+    Alcotest.test_case "kotlin string ordering longest-first" `Quick
+      test_kotlin_string_ordering_longest_first;
     Alcotest.test_case "unknown language empty del" `Quick
       test_unknown_language_empty_del;
   ]
