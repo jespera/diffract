@@ -23,6 +23,18 @@ cp node_modules/tree-sitter-kotlin/src/node-types.json                metadata/k
 cp node_modules/tree-sitter-php/php_only/src/node-types.json          metadata/php.node-types.json
 cp node_modules/tree-sitter-scala/src/node-types.json                 metadata/scala.node-types.json
 
+# Copy per-grammar grammar.json into metadata/ as well. This is the
+# generated representation of the grammar's rules (extras, externals,
+# string and comment definitions), used to auto-derive the DEL
+# definition for each language (bracket pairs, string boundaries,
+# comment markers).
+echo "Copying grammar.json metadata..."
+cp node_modules/tree-sitter-typescript/typescript/src/grammar.json metadata/typescript.grammar.json
+cp node_modules/tree-sitter-typescript/tsx/src/grammar.json        metadata/tsx.grammar.json
+cp node_modules/tree-sitter-kotlin/src/grammar.json                metadata/kotlin.grammar.json
+cp node_modules/tree-sitter-php/php_only/src/grammar.json          metadata/php.grammar.json
+cp node_modules/tree-sitter-scala/src/grammar.json                 metadata/scala.grammar.json
+
 # Build TypeScript grammar
 echo "Building TypeScript grammar..."
 cc -O2 -c -o "$TMPDIR_LOCAL/ts_parser.o" \
