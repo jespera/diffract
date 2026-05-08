@@ -345,6 +345,91 @@ let extract_string_defs (grammar : Yojson.Safe.t)
   walk_json visit grammar;
   List.rev !result
 
+(* ----- Per-language extensions ----- *)
+
+(** Per-language additions to the auto-derived DEL definition.
+
+    Languages whose string handling is in tree-sitter's external
+    scanner (Kotlin's multi-dollar strings, PHP's heredocs, Scala's
+    interpolated strings) leave the [string_defs] field empty when
+    auto-derived. Per-language extension declarations fill the gap
+    with the simple boundary pairs we care about for the DEL lexer.
+
+    Limited scope: we declare the basic "open delimiter, scan to
+    close delimiter, with optional escape" cases. More complex
+    constructs (heredoc tag matching, prefix-based string
+    interpolation, count-aware multi-dollar strings) are deliberately
+    left out at this layer; they'd need specialised lexer code
+    rather than declarative data. *)
+type extensions = {
+  extra_strings : string_def list;
+  extra_line_comments : string list;
+  extra_block_comments : (string * string) list;
+}
+
+let no_extensions =
+  { extra_strings = []; extra_line_comments = []; extra_block_comments = [] }
+
+let extensions_for_language = function
+  | "kotlin" ->
+      {
+        extra_strings =
+          [
+            (* Tree-sitter-kotlin's string_literal goes through the
+               external scanner. We declare the boundary pairs the
+               DEL lexer needs to recognise: basic double-quoted
+               strings (with backslash escapes) and triple-quoted
+               raw strings (no escapes). The multi-dollar variants
+               ($"...", $$"...", etc.) need count-aware boundary
+               recognition that doesn't fit the simple opener/closer
+               shape; covered by future specialised lexer code if
+               and when patterns need to bind metavars at those
+               boundaries. *)
+            { opener = "\""; closer = "\""; escape = Some '\\' };
+            { opener = "\"\"\""; closer = "\"\"\""; escape = None };
+          ];
+        extra_line_comments = [];
+        extra_block_comments = [ ("/*", "*/") ];
+        (* Kotlin's multiline_comment is also external. *)
+      }
+  | "php" ->
+      {
+        extra_strings =
+          [
+            (* PHP's encapsed_string_chars (with $-interpolation) is
+               external; we declare basic single- and double-quoted
+               boundaries. Heredocs and nowdocs (<<<TAG ... TAG)
+               need tag-tracking; covered by future specialised
+               lexer code if needed. *)
+            { opener = "\""; closer = "\""; escape = Some '\\' };
+            { opener = "'"; closer = "'"; escape = Some '\\' };
+          ];
+        extra_line_comments =
+          [
+            "#";
+            (* PHP also accepts # for line comments. The grammar
+               expresses this as a regex pattern (#[^?...]) rather
+               than a STRING, so it doesn't survive auto-derivation;
+               declare explicitly. *)
+          ];
+        extra_block_comments = [];
+      }
+  | "scala" ->
+      {
+        extra_strings =
+          [
+            (* Scala's _simple_string and interpolated string variants
+               are external. We declare basic and multiline string
+               boundaries; prefix-based interpolated strings (s"...",
+               f"...", raw"...") are out of scope at this layer. *)
+            { opener = "\""; closer = "\""; escape = Some '\\' };
+            { opener = "\"\"\""; closer = "\"\"\""; escape = None };
+          ];
+        extra_line_comments = [];
+        extra_block_comments = [];
+      }
+  | _ -> no_extensions
+
 (* ----- Public API: del_definition ----- *)
 
 let del_cache : (string, del_definition) Hashtbl.t = Hashtbl.create 8
@@ -360,15 +445,31 @@ let derive_del_definition (json_str : string) : del_definition =
       in
       { bracket_pairs; string_defs; line_comments; block_comments }
 
+let apply_extensions (def : del_definition) (ext : extensions) :
+    del_definition =
+  let merge_unique acc xs =
+    List.fold_left
+      (fun acc x -> if List.mem x acc then acc else acc @ [ x ])
+      acc xs
+  in
+  {
+    bracket_pairs = def.bracket_pairs;
+    string_defs = def.string_defs @ ext.extra_strings;
+    line_comments = merge_unique def.line_comments ext.extra_line_comments;
+    block_comments =
+      merge_unique def.block_comments ext.extra_block_comments;
+  }
+
 let del_definition ~language =
   match Hashtbl.find_opt del_cache language with
   | Some def -> def
   | None ->
-      let def =
+      let auto =
         match Embedded_grammar_json.by_language language with
         | None -> empty_del_definition
         | Some json -> derive_del_definition json
       in
+      let def = apply_extensions auto (extensions_for_language language) in
       Hashtbl.replace del_cache language def;
       def
 
