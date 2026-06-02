@@ -104,6 +104,9 @@ Notes:
 - Each `...` matches zero or more nodes.
 - Ellipsis is not replaced when it looks like a spread operator (e.g., `...$x` or `...args`).
 - Sequence metavars (including `...`) are not supported with `match: partial`.
+- On transform (strict mode), the source `...` captures are **preserved**: a
+  `-` line inside an `...`-bracketed pattern removes only the marked part and
+  keeps the surrounding siblings (`...` is never emitted literally).
 
 ## Multi-statement Patterns
 
@@ -560,15 +563,23 @@ field-replace the whole thing; match/guard it and edit elements in a
 
 ### How match modes affect transforms
 
-| Mode | What a whole-span `-`/`+` replaces |
-|------|------------------------------------|
-| `strict` | the entire matched node (matched exactly — nothing tolerated) |
-| `partial` | the entire matched container — **tolerated extra elements are dropped** |
-| `field` | the entire matched declaration — **ignored optional fields are dropped** |
+**Strict mode is surgical**: the edit is localized to the `-`/`+` lines, and
+context (including the source captured by `...`) is preserved byte-for-byte. A
+pattern whose `-`/`+` cover the *whole* match replaces the whole match (the
+degenerate single-region case); a pattern that marks only a sub-part edits only
+that part.
 
-The footgun is partial/field: they exist to *tolerate/ignore* content during
-matching, and a whole-span replace then *deletes* it. For surgical edits, use
-`foreach`/`on`.
+| Mode | What a `-`/`+` edit does |
+|------|--------------------------|
+| `strict` | edits only the marked `-`/`+` lines; context and `...`-captured siblings preserved |
+| `partial` | replaces the **entire** matched container — **tolerated extra elements are dropped** |
+| `field` | replaces the **entire** matched declaration — **ignored optional fields are dropped** |
+
+Partial and field are still whole-span (see `docs/surgical-transforms.md §8`).
+That is the footgun: they exist to *tolerate/ignore* content during matching,
+and a whole-span replace then *deletes* it — so the matcher warns
+(`pattern_warnings`). For a surgical partial/field edit, mark only the sub-part
+in a strict section bracketed with `...`, or use `foreach`/`on`.
 
 ### Sequence rendering: `join` and `foreach`
 

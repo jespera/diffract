@@ -251,6 +251,13 @@ module Make (C : Cursor.S) : sig
     start_byte : int;
     end_byte : int;
     bindings : binding list;
+    spans : (int * int) array;
+        (** Per pattern-token source byte range (parallel to the pattern token
+            list), as in {!match_at_spans}. Populated only on the strict
+            non-overlapping (transform) path of {!find_matches}; [[||]] for
+            search ([overlapping]) and for partial/field matches. Surgical
+            transforms read it to locate `-`-marked regions; an empty array
+            means "fall back to whole-span replacement". *)
   }
   (** A successful match found by the outer-loop search functions. *)
 

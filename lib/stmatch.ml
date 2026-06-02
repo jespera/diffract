@@ -676,6 +676,12 @@ module Make (C : Cursor.S) = struct
     start_byte : int;
     end_byte : int;
     bindings : binding list;
+    spans : (int * int) array;
+        (** Per pattern-token source byte range, parallel to the pattern token
+            list, as produced by {!match_at_spans}. Populated for the strict
+            non-overlapping (transform) path; [[||]] otherwise (search, partial,
+            field — surgical editing falls back to whole-span there). Used to
+            locate `-`-marked regions within the match. *)
   }
 
   (* Advance [cursor] to the next position in pre-order. Returns true if
@@ -740,21 +746,35 @@ module Make (C : Cursor.S) = struct
                 if not (advance_one !cursor) then exhausted := true;
                 next ()
             | _ ->
-                let to_yield =
-                  if overlapping then configurations
-                  else [ List.hd configurations ]
-                in
-                pending :=
-                  List.map
-                    (fun (end_cursor, bindings) ->
-                      let _, end_byte = C.byte_range end_cursor in
-                      { start_byte; end_byte; bindings })
-                    to_yield;
-                if overlapping then
-                  begin if not (advance_one !cursor) then exhausted := true
-                  end
+                if overlapping then begin
+                  pending :=
+                    List.map
+                      (fun (end_cursor, bindings) ->
+                        let _, end_byte = C.byte_range end_cursor in
+                        { start_byte; end_byte; bindings; spans = [||] })
+                      configurations;
+                  if not (advance_one !cursor) then exhausted := true
+                end
                 else begin
-                  let end_cursor_first, _ = List.hd configurations in
+                  (* Non-overlapping (transform) path: commit the first
+                     configuration and recover its per-token spans by re-driving
+                     the same leftmost match with span recording — the spans
+                     surgical editing needs to locate `-` regions. *)
+                  let end_cursor_first, bindings_first =
+                    List.hd configurations
+                  in
+                  let _, end_byte = C.byte_range end_cursor_first in
+                  let n = List.length pattern in
+                  let spans = Array.make (max 1 n) (-1, -1) in
+                  (match
+                     drive ~mode:Drive_match_at ~initial_bindings
+                       ~spans:(Some spans) pattern (C.clone !cursor)
+                   with
+                  | _ -> ());
+                  pending :=
+                    [
+                      { start_byte; end_byte; bindings = bindings_first; spans };
+                    ];
                   let next_cursor = C.clone end_cursor_first in
                   if C.move_next_subtree next_cursor then cursor := next_cursor
                   else exhausted := true
@@ -794,7 +814,7 @@ module Make (C : Cursor.S) = struct
             if is_dup then next ()
             else begin
               seen := (start_byte, end_byte) :: !seen;
-              Seq.Cons ({ start_byte; end_byte; bindings }, next)
+              Seq.Cons ({ start_byte; end_byte; bindings; spans = [||] }, next)
             end
         | None ->
             if not (advance_one !cursor) then begin
@@ -832,7 +852,7 @@ module Make (C : Cursor.S) = struct
             if is_dup then next ()
             else begin
               seen := (start_byte, end_byte) :: !seen;
-              Seq.Cons ({ start_byte; end_byte; bindings }, next)
+              Seq.Cons ({ start_byte; end_byte; bindings; spans = [||] }, next)
             end
         | None ->
             if not (advance_one !cursor) then begin
@@ -875,7 +895,7 @@ module Make (C : Cursor.S) = struct
             if is_dup then next ()
             else begin
               seen := (start_byte, end_byte) :: !seen;
-              Seq.Cons ({ start_byte; end_byte; bindings }, next)
+              Seq.Cons ({ start_byte; end_byte; bindings; spans = [||] }, next)
             end
         | None ->
             if not (advance_one !cursor) then begin

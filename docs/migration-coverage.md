@@ -17,40 +17,40 @@ replacement, stricter operators, `join`/`foreach` replacing the `~`/`,`
 expansion lines) are recorded in §5–§6 below. The old matcher and its tests,
 examples, and benchmarks are now gone.
 
-## 1. The transform model: whole-span replacement
+## 1. The transform model: surgical (strict) / whole-span (partial, field)
 
-The most important thing to understand, because it reframes what looks
-like the biggest gap: **the new matcher replaces exactly the span its
-pattern matched.** A pattern's `-`/`+`/context lines decide what text
-forms the match side vs the replace side; they do **not** localize the
-edit to the marked lines the way Coccinelle/spatch do. The whole matched
-span is replaced by the whole instantiated replace side.
+**Strict mode is surgical** (Coccinelle-style): an edit is localized to the
+`-`/`+` *lines*, and context — including the source captured by `...` — is
+preserved byte-for-byte. **Partial and field modes are still whole-span**: the
+entire matched span is replaced by the whole instantiated replace side (see
+`docs/surgical-transforms.md §8` for why the split, and the follow-up to close
+it).
 
-The usage rule that follows: **match exactly what you want to change, not
-the surrounding container.**
+What this means in practice:
 
-- To rename a call: match the call. `- foo($x) / + bar($x)`.
-- To edit a property *in place* preserving its siblings: match the bare
-  property, not the object. `- $K: $V / + $K: wrap($V)` against
-  `{ color: "red", size: 10 }` yields `{ color: wrap("red"), size:
-  wrap(10) }` — each property edited in place, the object and separators
-  untouched.
-- To replace a whole object: match the whole object. `- { color: $V } /
-  + { colour: $V }` replaces the entire object (dropping any unmentioned
-  properties) — because you marked the whole object.
+- Rename a call: `- foo($x) / + bar($x)`. The whole match is marked, so it is
+  replaced whole — the surgical and whole-span results coincide.
+- Remove or edit a *sub-part* while keeping its siblings, in strict mode, by
+  bracketing the rest with `...`:
+  ```
+   <Foo
+     ...
+  -   bar={$x}
+     ...
+   />
+  ```
+  removes only `bar={$x}`; the other attributes (captured by `...`) stay. The
+  `...` is matched-and-not-edited, never emitted literally.
+- A `-`/context line whose **whole construct** is marked still replaces the
+  whole construct — that is the degenerate single-hunk case, and it is the
+  honest reading of marking the whole thing.
 
-This last case is where the old matcher differed: in `match: partial` it
-*preserved* unmentioned properties even though the whole object was on the
-`-`/`+` lines — a surgical edit silently inferred from an object-level
-pattern. That convenience was also a surprise (the markers said "replace
-the object," the behaviour was "edit one property"). The new model is
-honest: marking the object replaces the object; to be surgical, match the
-property. So this is **not a capability gap** — it is a different, more
-predictable model with a usage rule.
-
-For surgical edits that also need a guard ("only in objects shaped like
-X"), multi-section covers it: one section matches/guards the container,
-a `foreach`/`on`-scoped section edits the elements in place.
+In **partial/field** modes a whole-span `-`/`+` still drops the tolerated
+extras / ignored fields those modes don't mention. The matcher emits a static
+warning (`pattern_warnings`) for that footgun. To edit a sub-part with a guard
+("only in objects shaped like X"), use multi-section: one section
+matches/guards the container, a `foreach`/`on`-scoped section edits the
+elements in place.
 
 ## 2. Concrete keys out of context — resolved
 

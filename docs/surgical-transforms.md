@@ -1,8 +1,10 @@
-# Surgical transforms: design note (proposal)
+# Surgical transforms: design note
 
-Status: **proposed, not yet built.** This note argues for changing the
-transform model from *whole-span replacement* to *surgical* (Coccinelle-style)
-edits, and sketches how. Nothing here is implemented yet.
+Status: **implemented for strict mode; partial/field still whole-span.** This
+note argues for changing the transform model from *whole-span replacement* to
+*surgical* (Coccinelle-style) edits, sketches how, and (§8) records what was
+built. The §1–§7 discussion is the original design argument; read §8 for the
+as-built behaviour.
 
 ## 1. The problem
 
@@ -206,3 +208,71 @@ and splicing reuse what exists. Build behind the existing test suite, adding
 cases for: partial sub-element removal preserving siblings, strict `...`
 preservation, field sub-edit preserving ignored fields, and confirmation that
 whole-construct rewrites are unchanged.
+
+## 8. As built
+
+**Strict mode is surgical; partial and field modes still use whole-span
+replacement** (and still emit the `pattern_warnings` footgun warning). The
+split falls out of where per-token source spans are available.
+
+The pieces, bottom-up:
+
+- **Per-token spans** (`Stmatch`). The strict driver (`drive`) records, per
+  pattern-token index, the source byte range that token consumed
+  (`match_at_spans`). `find_matches` populates a new `match_result.spans` array
+  on the non-overlapping (transform) path by re-driving the committed leftmost
+  match with span recording. Search (`overlapping`) and the partial/field find
+  loops leave `spans = [||]`.
+
+- **Hunks** (`Matcher`). A transform body compiles to a list of `hunk`s
+  (`compile_hunks`): a maximal run of `-`/`+` lines between context lines. Each
+  hunk records the token indices of its `-` lines (`del_idxs`, parallel to
+  `spans`), the instantiated `+` text (`add`), and the bracketing context
+  tokens (`prev_tok`/`next_tok`) for anchoring a `+`-only insertion. The leaf
+  carries `hunks` instead of a per-token role list — the role structure lives
+  in the hunk boundaries.
+
+- **Surgical edits** (`surgical_edits`). When a match has `spans`, each hunk
+  becomes one localized edit: delete/replace `[min start, max end)` over its
+  `-` tokens' spans, insert a `+`-only hunk at the preceding context token's
+  end. Everything else — context, partial/field's tolerated extras, the source
+  captured by `...` — is covered by no edit and survives byte-for-byte.
+
+- **Whole-span fallback.** When a match has no `spans` (partial/field), or as
+  the natural degenerate case of a whole-construct strict rewrite (one hunk,
+  every token `-`, so the edit spans the whole match), behaviour equals the
+  former whole-span model. The existing transform suite is the
+  behaviour-preservation check; only one case changed (`removal within context`
+  now keeps the surrounding function instead of rebuilding it from the
+  pattern).
+
+**Whitespace at edit boundaries.** A pure deletion that removes a whole line
+(only indentation before the span, a newline after) absorbs that indentation
+and the trailing newline, so the line vanishes cleanly
+(`line_delete_cleanup`). A *replacement* is in-place: the `-` span is the bare
+token run (no indentation), so the `+` content should likewise omit structural
+indentation — the source's existing indentation stays put and prefixes the new
+text. Mid-line deletions keep the tight span.
+
+**What this fixes.** Surprise §1.2 (strict `...` emitting literal `...` and
+dropping captured siblings) is gone — `...` is matched-and-not-edited, and only
+the `-` line is touched. The headline JSX-attribute and statement-removal cases
+work via the strict `...` idiom:
+
+```
+ <Foo
+   ...
+-   bar={$x}
+   ...
+ />
+```
+
+removes only `bar={$x}`, preserving the other attributes.
+
+**Remaining (follow-up).** Partial (§1.1) and field (§1.3) still rebuild the
+whole matched span and so still drop tolerated extras / ignored fields — hence
+the surviving warning. Making them surgical needs per-token (or per-element)
+span recording threaded through `match_partial_at` / `match_field_at`, which
+their set/subsequence drivers don't yet surface. Once they do, `surgical_edits`
+applies unchanged and the `pattern_warnings` footgun can be re-scoped to the
+genuinely-destructive whole-container case (per §4).
