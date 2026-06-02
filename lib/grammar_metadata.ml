@@ -1,18 +1,18 @@
-(** Per-language grammar metadata derived from each tree-sitter
-    grammar's [node-types.json] and [grammar.json]. *)
+(** Per-language grammar metadata derived from each tree-sitter grammar's
+    [node-types.json] and [grammar.json]. *)
 
 (* ===================================================================== *)
 (* List-shape wrappers — from node-types.json                            *)
 (* ===================================================================== *)
 
-(** [parse_wrapper_set json_str] parses a [node-types.json] document
-    and returns a hashtable whose keys are the node-type names of
-    list-shape wrappers in that grammar.
+(** [parse_wrapper_set json_str] parses a [node-types.json] document and returns
+    a hashtable whose keys are the node-type names of list-shape wrappers in
+    that grammar.
 
-    Criterion: [named: true] and [fields] is missing or empty. The
-    runtime peel logic in [Tree.unwrap_root] adds the necessary
-    structural guards (single-named-child, byte-range equality), so a
-    slightly loose superset is fine here. *)
+    Criterion: [named: true] and [fields] is missing or empty. The runtime peel
+    logic in [Tree.unwrap_root] adds the necessary structural guards
+    (single-named-child, byte-range equality), so a slightly loose superset is
+    fine here. *)
 let parse_wrapper_set (json_str : string) : (string, unit) Hashtbl.t =
   let open Yojson.Safe.Util in
   let entries =
@@ -21,13 +21,9 @@ let parse_wrapper_set (json_str : string) : (string, unit) Hashtbl.t =
   let set = Hashtbl.create 64 in
   List.iter
     (fun entry ->
-      let named =
-        match member "named" entry with `Bool b -> b | _ -> false
-      in
+      let named = match member "named" entry with `Bool b -> b | _ -> false in
       let has_fields =
-        match member "fields" entry with
-        | `Assoc fs -> fs <> []
-        | _ -> false
+        match member "fields" entry with `Assoc fs -> fs <> [] | _ -> false
       in
       let type_name =
         match member "type" entry with `String s -> Some s | _ -> None
@@ -58,18 +54,13 @@ let is_list_shape_wrapper ~language ~node_type =
 
 let list_shape_wrappers ~language =
   let set = load_wrapper_set language in
-  Hashtbl.fold (fun k () acc -> k :: acc) set []
-  |> List.sort String.compare
+  Hashtbl.fold (fun k () acc -> k :: acc) set [] |> List.sort String.compare
 
 (* ===================================================================== *)
 (* DEL definition — from grammar.json                                    *)
 (* ===================================================================== *)
 
-type string_def = {
-  opener : string;
-  closer : string;
-  escape : char option;
-}
+type string_def = { opener : string; closer : string; escape : char option }
 
 type del_definition = {
   bracket_pairs : (string * string) list;
@@ -79,27 +70,32 @@ type del_definition = {
 }
 
 let empty_del_definition =
-  { bracket_pairs = []; string_defs = []; line_comments = []; block_comments = [] }
+  {
+    bracket_pairs = [];
+    string_defs = [];
+    line_comments = [];
+    block_comments = [];
+  }
 
-(** Tree-sitter grammar.json wraps content in transparent nodes
-    (TOKEN, IMMEDIATE_TOKEN, FIELD, ALIAS, PREC and variants). Walk
-    through them to find the inner content. *)
+(** Tree-sitter grammar.json wraps content in transparent nodes (TOKEN,
+    IMMEDIATE_TOKEN, FIELD, ALIAS, PREC and variants). Walk through them to find
+    the inner content. *)
 let rec unwrap_node (json : Yojson.Safe.t) : Yojson.Safe.t =
   match json with
   | `Assoc fields -> (
       match List.assoc_opt "type" fields with
       | Some (`String t)
-        when t = "TOKEN" || t = "IMMEDIATE_TOKEN" || t = "FIELD"
-             || t = "ALIAS" || t = "PREC" || t = "PREC_LEFT"
-             || t = "PREC_RIGHT" || t = "PREC_DYNAMIC" -> (
+        when t = "TOKEN" || t = "IMMEDIATE_TOKEN" || t = "FIELD" || t = "ALIAS"
+             || t = "PREC" || t = "PREC_LEFT" || t = "PREC_RIGHT"
+             || t = "PREC_DYNAMIC" -> (
           match List.assoc_opt "content" fields with
           | Some inner -> unwrap_node inner
           | None -> json)
       | _ -> json)
   | _ -> json
 
-(** Extract a STRING literal from a node, transparently unwrapping
-    wrapper types. Returns [None] for anything else. *)
+(** Extract a STRING literal from a node, transparently unwrapping wrapper
+    types. Returns [None] for anything else. *)
 let string_value (node : Yojson.Safe.t) : string option =
   match unwrap_node node with
   | `Assoc fields -> (
@@ -130,51 +126,39 @@ let str_exists f s =
   in
   aux 0
 
-(** Heuristic: a string-literal or comment delimiter is short,
-    non-alphanumeric, and not a structural bracket. Filters out
-    keyword false positives like Java's [requires] / [provides]
-    SEQ patterns. *)
+(** Heuristic: a string-literal or comment delimiter is short, non-alphanumeric,
+    and not a structural bracket. Filters out keyword false positives like
+    Java's [requires] / [provides] SEQ patterns. *)
 let looks_like_delimiter s =
   let len = String.length s in
-  len >= 1
-  && len <= 4
-  && not (str_exists is_alnum s)
-  && not
-       (List.mem s
-          [ "("; ")"; "["; "]"; "{"; "}"; "<"; ">"; ","; ";" ])
+  len >= 1 && len <= 4
+  && (not (str_exists is_alnum s))
+  && not (List.mem s [ "("; ")"; "["; "]"; "{"; "}"; "<"; ">"; ","; ";" ])
 
-(** [members_of_seq node] returns the SEQ's members list, or empty if
-    [node] isn't a SEQ. Strips wrapper types first. *)
+(** [members_of_seq node] returns the SEQ's members list, or empty if [node]
+    isn't a SEQ. Strips wrapper types first. *)
 let members_of_seq (node : Yojson.Safe.t) : Yojson.Safe.t list =
   match unwrap_node node with
   | `Assoc fields -> (
-      match
-        ( List.assoc_opt "type" fields,
-          List.assoc_opt "members" fields )
-      with
+      match (List.assoc_opt "type" fields, List.assoc_opt "members" fields) with
       | Some (`String "SEQ"), Some (`List ms) -> ms
       | _ -> [])
   | _ -> []
 
-(** [choice_alternatives node] returns the CHOICE's members list, or
-    [[node]] if [node] isn't a CHOICE. Lets callers handle openers
-    that may be wrapped in a CHOICE (PHP's line comment is
-    [CHOICE(STRING("//"), PATTERN("#..."))]). *)
+(** [choice_alternatives node] returns the CHOICE's members list, or [[node]] if
+    [node] isn't a CHOICE. Lets callers handle openers that may be wrapped in a
+    CHOICE (PHP's line comment is [CHOICE(STRING("//"), PATTERN("#..."))]). *)
 let choice_alternatives (node : Yojson.Safe.t) : Yojson.Safe.t list =
   match unwrap_node node with
   | `Assoc fields -> (
-      match
-        ( List.assoc_opt "type" fields,
-          List.assoc_opt "members" fields )
-      with
+      match (List.assoc_opt "type" fields, List.assoc_opt "members" fields) with
       | Some (`String "CHOICE"), Some (`List ms) -> ms
       | _ -> [ node ])
   | _ -> [ node ]
 
-(** [is_repeat_like node] is [true] for REPEAT/REPEAT1 nodes
-    (transparent wrappers stripped). Used to require some content
-    between a SEQ's first and last STRING for it to look like a
-    string-literal rule. *)
+(** [is_repeat_like node] is [true] for REPEAT/REPEAT1 nodes (transparent
+    wrappers stripped). Used to require some content between a SEQ's first and
+    last STRING for it to look like a string-literal rule. *)
 let is_repeat_like (node : Yojson.Safe.t) : bool =
   match unwrap_node node with
   | `Assoc fields -> (
@@ -193,10 +177,10 @@ let extract_bracket_pairs (grammar : Yojson.Safe.t) : (string * string) list =
   let visit node =
     match members_of_seq node with
     | [] -> ()
-    | members when List.length members >= 2 ->
+    | members when List.length members >= 2 -> (
         let first = string_value (List.hd members) in
         let last = string_value (List.nth members (List.length members - 1)) in
-        (match (first, last) with
+        match (first, last) with
         | Some o, Some c ->
             List.iter
               (fun (op, cl) ->
@@ -212,8 +196,8 @@ let extract_bracket_pairs (grammar : Yojson.Safe.t) : (string * string) list =
 
 (* ----- Comment markers ----- *)
 
-(** [extras_rule_names grammar] returns the names of rules referenced
-    by the grammar's [extras] field via SYMBOL nodes. *)
+(** [extras_rule_names grammar] returns the names of rules referenced by the
+    grammar's [extras] field via SYMBOL nodes. *)
 let extras_rule_names (grammar : Yojson.Safe.t) : string list =
   match grammar with
   | `Assoc fields -> (
@@ -224,8 +208,7 @@ let extras_rule_names (grammar : Yojson.Safe.t) : string list =
               match e with
               | `Assoc fs -> (
                   match
-                    ( List.assoc_opt "type" fs,
-                      List.assoc_opt "name" fs )
+                    (List.assoc_opt "type" fs, List.assoc_opt "name" fs)
                   with
                   | Some (`String "SYMBOL"), Some (`String n) -> Some n
                   | _ -> None)
@@ -234,10 +217,9 @@ let extras_rule_names (grammar : Yojson.Safe.t) : string list =
       | _ -> [])
   | _ -> []
 
-(** [find_rule grammar name] returns the rule body for a top-level
-    rule by name, or [None] if absent. *)
-let find_rule (grammar : Yojson.Safe.t) (name : string) :
-    Yojson.Safe.t option =
+(** [find_rule grammar name] returns the rule body for a top-level rule by name,
+    or [None] if absent. *)
+let find_rule (grammar : Yojson.Safe.t) (name : string) : Yojson.Safe.t option =
   match grammar with
   | `Assoc fields -> (
       match List.assoc_opt "rules" fields with
@@ -257,8 +239,7 @@ let extract_comment_markers (grammar : Yojson.Safe.t) :
       (* The opener may be wrapped in a CHOICE — descend into all
          alternatives. *)
       let openers =
-        choice_alternatives first_member
-        |> List.filter_map string_value
+        choice_alternatives first_member |> List.filter_map string_value
       in
       let last_member = List.nth members (List.length members - 1) in
       let closer = string_value last_member in
@@ -281,9 +262,8 @@ let extract_comment_markers (grammar : Yojson.Safe.t) :
   in
   List.iter
     (fun name ->
-      if String.length name >= 7 && String.sub name 0 7 = "comment"
-      then ()
-      (* fall through to walk: only descend if name contains "comment" *)
+      if String.length name >= 7 && String.sub name 0 7 = "comment" then ()
+        (* fall through to walk: only descend if name contains "comment" *)
       else if not (str_exists (fun c -> c = 'C' || c = 'c') name) then ()
       else ();
       let lname = String.lowercase_ascii name in
@@ -310,19 +290,21 @@ let extract_string_defs (grammar : Yojson.Safe.t)
     ~(comment_markers : (string * string) list) : string_def list =
   let comment_set =
     List.fold_left
-      (fun acc pair -> Hashtbl.add acc pair (); acc)
+      (fun acc pair ->
+        Hashtbl.add acc pair ();
+        acc)
       (Hashtbl.create 4) comment_markers
   in
   let seen = Hashtbl.create 8 in
   let result = ref [] in
   let visit node =
     match members_of_seq node with
-    | members when List.length members >= 2 ->
+    | members when List.length members >= 2 -> (
         let first = string_value (List.hd members) in
         let last = string_value (List.nth members (List.length members - 1)) in
-        (match (first, last) with
-        | Some o, Some c
-          when looks_like_delimiter o && looks_like_delimiter c ->
+        match (first, last) with
+        | Some o, Some c when looks_like_delimiter o && looks_like_delimiter c
+          ->
             (* Skip if this looks like a comment block we've already
                classified, or starts with [/*] (assume block comment
                regardless of the apparent closer). *)
@@ -332,7 +314,11 @@ let extract_string_defs (grammar : Yojson.Safe.t)
               (* Require at least one repeat-like content between the
                  two delimiters — actual string literals always have
                  that shape. *)
-              let middle = List.filteri (fun i _ -> i > 0 && i < List.length members - 1) members in
+              let middle =
+                List.filteri
+                  (fun i _ -> i > 0 && i < List.length members - 1)
+                  members
+              in
               let has_repeat = List.exists is_repeat_like middle in
               if has_repeat && not (Hashtbl.mem seen (o, c)) then begin
                 Hashtbl.add seen (o, c) ();
@@ -347,25 +333,24 @@ let extract_string_defs (grammar : Yojson.Safe.t)
 
 (* ----- Per-language extensions ----- *)
 
-(** Per-language additions to the auto-derived DEL definition.
-
-    Languages whose string handling is in tree-sitter's external
-    scanner (Kotlin's multi-dollar strings, PHP's heredocs, Scala's
-    interpolated strings) leave the [string_defs] field empty when
-    auto-derived. Per-language extension declarations fill the gap
-    with the simple boundary pairs we care about for the DEL lexer.
-
-    Limited scope: we declare the basic "open delimiter, scan to
-    close delimiter, with optional escape" cases. More complex
-    constructs (heredoc tag matching, prefix-based string
-    interpolation, count-aware multi-dollar strings) are deliberately
-    left out at this layer; they'd need specialised lexer code
-    rather than declarative data. *)
 type extensions = {
   extra_strings : string_def list;
   extra_line_comments : string list;
   extra_block_comments : (string * string) list;
 }
+(** Per-language additions to the auto-derived DEL definition.
+
+    Languages whose string handling is in tree-sitter's external scanner
+    (Kotlin's multi-dollar strings, PHP's heredocs, Scala's interpolated
+    strings) leave the [string_defs] field empty when auto-derived. Per-language
+    extension declarations fill the gap with the simple boundary pairs we care
+    about for the DEL lexer.
+
+    Limited scope: we declare the basic "open delimiter, scan to close
+    delimiter, with optional escape" cases. More complex constructs (heredoc tag
+    matching, prefix-based string interpolation, count-aware multi-dollar
+    strings) are deliberately left out at this layer; they'd need specialised
+    lexer code rather than declarative data. *)
 
 let no_extensions =
   { extra_strings = []; extra_line_comments = []; extra_block_comments = [] }
@@ -462,8 +447,8 @@ let derive_del_definition (json_str : string) : del_definition =
       in
       { bracket_pairs; string_defs; line_comments; block_comments }
 
-let apply_extensions (def : del_definition) (ext : extensions) :
-    del_definition =
+let apply_extensions (def : del_definition) (ext : extensions) : del_definition
+    =
   let merge_unique acc xs =
     List.fold_left
       (fun acc x -> if List.mem x acc then acc else acc @ [ x ])
@@ -473,8 +458,7 @@ let apply_extensions (def : del_definition) (ext : extensions) :
     bracket_pairs = def.bracket_pairs;
     string_defs = def.string_defs @ ext.extra_strings;
     line_comments = merge_unique def.line_comments ext.extra_line_comments;
-    block_comments =
-      merge_unique def.block_comments ext.extra_block_comments;
+    block_comments = merge_unique def.block_comments ext.extra_block_comments;
   }
 
 let del_definition ~language =

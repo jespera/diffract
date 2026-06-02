@@ -17,10 +17,10 @@ and 'kind t = {
   node_type : string;
   is_named : bool;
   is_extra : bool;
-      (** True iff tree-sitter generated this node from one of the
-          grammar's [extras] rules — typically comments and (rarely)
-          whitespace tokens. Such nodes can appear anywhere between
-          tokens without being part of the syntactic structure. *)
+      (** True iff tree-sitter generated this node from one of the grammar's
+          [extras] rules — typically comments and (rarely) whitespace tokens.
+          Such nodes can appear anywhere between tokens without being part of
+          the syntactic structure. *)
   hash : int;
   start_byte : int;
   end_byte : int;
@@ -209,8 +209,8 @@ let format_tree tree =
     (* Recurse into children, showing field names *)
     List.iter
       (fun child ->
-        if child.node.is_named then begin
-          match child.field_name with
+        if child.node.is_named then
+          begin match child.field_name with
           | Some name ->
               let child_indent = String.make (indent + 2) ' ' in
               Buffer.add_string buf child_indent;
@@ -218,7 +218,7 @@ let format_tree tree =
               Buffer.add_string buf ":\n";
               format_node (indent + 4) child.node
           | None -> format_node (indent + 2) child.node
-        end)
+          end)
       node.children
   in
   format_node 0 tree.root;

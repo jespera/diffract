@@ -15,7 +15,7 @@ $obj.$method($arg)
 **Match modes (required - must specify one):**
 - `match: strict` - Exact positional matching (no extra children allowed, ordered). Use for function calls, arrays.
 - `match: partial` - Subset matching (ignores extra children, unordered). Use for object literals, JSX attributes.
-- `match: field` - Field-based matching (matches by tree-sitter field name, ignores extra fields, preserves order within each field). Use for definitions with decorators/attributes.
+- `match: field` - Declaration matching that ignores optional fields the pattern omits (decorators, annotations, modifier groups, return types), by aligning the pattern to a subsequence of the declaration's children. Use for decorated/annotated definitions.
 
 ## Comparing Match Modes
 
@@ -226,8 +226,10 @@ This finds `console.log` calls only inside class bodies, not at the top level:
 section 1 binds `$body` to the class body node; section 2 uses `on $body` to
 search within that node only.
 
-`on $VAR` also works when the bound variable is a **sequence** metavar. In that
-case the inner pattern is matched against each element of the sequence in turn.
+`on $VAR` requires `$VAR` to be a **single** metavar (it scopes the section to
+that one bound subtree). To iterate a **sequence** metavar element-by-element,
+use `foreach $VAR` instead — the section's pattern is matched against, and its
+`-`/`+` transform applied to, each element in turn.
 
 ```
 @@
@@ -349,8 +351,8 @@ Conjunctive sibling sections (no `on $VAR`) and outer+inner sections (with
 `on $VAR`) cannot be mixed in the same pattern. Attempting to do so raises an
 error at parse time.
 
-Use `Match.transform_nested` (rather than `Match.transform`) when the pattern
-contains two or more `@@` sections.
+`Matcher.find` and `Matcher.transform` handle single- and multi-section
+patterns alike — there is no separate multi-section entry point.
 
 ## Metavariable Scoping
 
@@ -533,124 +535,75 @@ Removes the `deprecated` property from objects that have both `name` and
 
 ### Field-mode transforms
 
-With `match: field`, children are matched by tree-sitter field name. Fields not
-mentioned in the pattern are preserved, while changes are applied to the
-specific fields that appear in `-`/`+` lines.
+`match: field` matches a declaration while ignoring the optional fields the
+pattern omits. **On transform it replaces the whole matched declaration span** —
+so any field the pattern does not restate, including the decorators/return types
+it ignored for *matching*, is dropped. The CLI prints a warning for a field (or
+partial) section carrying a whole-span `-`/`+` replacement.
 
-**Modify an attribute (same field set):**
-```
-@@
-match: field
-@@
-- #[deprecated]
-+ #[deprecated(note = "use new API")]
-function test() {
-    echo "hi";
-}
-```
+Restating the whole declaration is exactly right for a wholesale rewrite — just
+keep what you intend to keep:
 
-This changes the `#[deprecated]` attribute while leaving the function name,
-parameters, and body untouched.
-
-**Add a new field (e.g., return type):**
 ```
 @@
 match: field
 metavar $NAME: single
-metavar $BODY: sequence
+metavar $BODY: single
 @@
-- function $NAME() { $BODY }
-+ function $NAME(): void { $BODY }
+- fun $NAME() { $BODY }
++ fun $NAME() { logCall(); $BODY }
 ```
 
-This adds a return type to PHP functions. Because this uses field mode, source
-attributes (like `#[Route("/")]`) are preserved even though the pattern doesn't
-mention them:
-
-```diff
- <?php
- #[Route("/")]
--function foo() { return 1; }
-+function foo(): void { return 1; }
-```
+To change *part* of a declaration while preserving the rest, do **not**
+field-replace the whole thing; match/guard it and edit elements in a
+`foreach`/`on` section (see below).
 
 ### How match modes affect transforms
 
-| Mode | What gets replaced | Unmentioned source children |
-|------|-------------------|----------------------------|
-| `strict` | The entire matched node | N/A (all children must match) |
-| `partial` | Individual matched children | Preserved |
-| `field` | Children within matched fields | Preserved (other fields kept) |
+| Mode | What a whole-span `-`/`+` replaces |
+|------|------------------------------------|
+| `strict` | the entire matched node (matched exactly — nothing tolerated) |
+| `partial` | the entire matched container — **tolerated extra elements are dropped** |
+| `field` | the entire matched declaration — **ignored optional fields are dropped** |
 
-### Expansion transforms
+The footgun is partial/field: they exist to *tolerate/ignore* content during
+matching, and a whole-span replace then *deletes* it. For surgical edits, use
+`foreach`/`on`.
 
-Expansion transforms let you join or restructure the elements of a sequence
-metavar in the replacement. Two capabilities are unlocked:
+### Sequence rendering: `join` and `foreach`
 
-1. **Verbatim expansion** — join all elements with a separator character.
-2. **Per-element transform** — apply a nested patch to each element and join the results.
+When a `sequence` metavar is referenced in a `+` template, its elements are
+rendered and substituted in place. Two independent knobs:
 
-#### Separator-prefix lines
+- **`join $VAR by "<sep>"`** (a preamble directive) — the string placed between
+  rendered elements (interpreting `\n`, `\t`, `\\`); default is empty.
+- **`foreach $VAR`** (a following `@@` section) — a per-element transform: the
+  section matches one element and its `-`/`+` lines rewrite it, and the results
+  are joined. Without a `foreach`, elements render as their source text.
 
-Instead of `+ `, use a separator character followed by a space as the line
-prefix in the replace side. Any punctuation character that is not a reserved
-spatch role marker (`-`, `+`, space, tab) and not an identifier character
-(`$`, letters, digits, `_`) is accepted. The prefix character IS the join
-string between elements, except `~` which stands for newline (`\n`).
+The sequence metavar must be declared `metavar $VAR: sequence` and appear on the
+match side.
 
-Common conventions:
-
-| Prefix | Join string |
-|--------|-------------|
-| `~ `   | newline     |
-| `, `   | `,`         |
-| `; `   | `;`         |
-| `\| `  | `\|`        |
-
-Other punctuation characters like `!`, `&`, `.`, `/` work the same way — the
-character itself becomes the separator. The second character of the line must
-be a space, which prevents code lines starting with punctuation (e.g. `($ARGS)`)
-from being misidentified as expansion lines.
-
-The variable on the expansion line must be declared as `metavar $VAR: sequence`.
-
-#### Example: splitting a named import
-
-Move one named export to a different package, comma-joining the remaining names:
+#### Example: identity render with a separator
 
 ```
 @@
 match: strict
-metavar $BEFORE: sequence
-metavar $AFTER: sequence
+metavar $ELEMS: sequence
+join $ELEMS by " && "
 @@
-- import { $BEFORE Stack $AFTER } from "@mui/system";
-+ import {
-,   $BEFORE $AFTER
-+ } from "@mui/system";
-+ import { Stack } from "@mui/not.system";
+- all([$ELEMS])
++ ($ELEMS)
 ```
 
-Given `import { Box, Stack, Paper } from "@mui/system";`, the patch produces:
-
-```typescript
-import {
-Box,Paper
-} from "@mui/system";
-import { Stack } from "@mui/not.system";
-```
-
-`$BEFORE` binds to `[Box,]` and `$AFTER` binds to `[Paper]`; their elements are
-gathered together and joined with `,`.
+`all([x, y, z])` becomes `(x && y && z)`.
 
 #### Example: converting a match expression to a method chain
 
-Convert `matchStringExhaustive(tag, { A: () => 1, B: () => 2 })` into a fluent
-chain `match(tag).with("A", () => 1).with("B", () => 2).exhaustive()`.
-
-This requires a **two-section pattern**: the outer section captures the whole
-call and names the sequence of case pairs; the inner section (prefixed with
-`on $CASES`) describes how to transform each individual pair.
+The outer section captures the call and names the sequence of case pairs; a
+`foreach` section describes how to rewrite each pair. The outer template
+references `$CASES`, which is replaced by the joined per-element results (here
+the default empty join).
 
 ```
 @@
@@ -658,15 +611,11 @@ match: strict
 metavar $TAG: single
 metavar $CASES: sequence
 @@
-- matchStringExhaustive($TAG, {
--   $CASES
-- });
-+ match($TAG)
-~   $CASES
-+   .exhaustive();
+- matchExhaustive($TAG, { $CASES });
++ match($TAG)$CASES.exhaustive();
 @@
-match: field
-on $CASES
+match: strict
+foreach $CASES
 metavar $KEY: single
 metavar $VAL: single
 @@
@@ -674,44 +623,19 @@ metavar $VAL: single
 + .with("$KEY", $VAL)
 ```
 
-Step by step:
-- The outer `@@` section matches the `matchStringExhaustive(...)` call and binds
-  `$TAG` to the first argument and `$CASES` to all `key: value` pairs inside the
-  object literal.
-- `~ $CASES` is an expansion line: each element of `$CASES` is transformed by
-  the inner section and the results are joined with newlines.
-- The inner `@@` section (with `on $CASES`) applies to each pair: `A: () => 1`
-  becomes `.with("A", () => 1)`.
+Given `matchExhaustive(tag, { A: () => 1, B: () => 2 });` the result is
+`match(tag).with("A", () => 1).with("B", () => 2).exhaustive();`.
 
-Given:
-```typescript
-matchStringExhaustive(tag, {
-  A: () => 1,
-  B: () => 2,
-});
-```
-
-The result is:
-```typescript
-match(tag)
-.with("A", () => 1)
-.with("B", () => 2)
-.exhaustive();
-```
-
-Use `Match.transform_nested` (instead of `Match.transform`) when the pattern
-contains two or more `@@` sections — whether for expansion or conjunctive
-sibling transforms.
+A `foreach` element with an empty replacement (a `-` line, no `+`) deletes the
+element and cleans up the adjacent separator — useful for removing a deprecated
+property or unused argument from a list.
 
 #### Constraints
 
-- Expansion prefix lines are only valid in the replacement side (like `+ ` lines).
-  The second character must be a space.
-- An expansion variable must be declared as `sequence` — using a `single`
-  metavar on an expansion line is an error.
-- Expansion variables must also appear in the match (`-` or context) side.
-- Inner sections used for per-element transforms cannot themselves use expansion
-  lines.
+- `join`/`foreach` target `sequence` metavars that also appear on the match
+  side.
+- A `foreach` section is a normal section (its own `match:` mode and metavars);
+  it cannot itself contain a nested `foreach`.
 
 ### Rules
 
@@ -742,91 +666,62 @@ Diffract.Tree.traverse (fun node ->
     (Diffract.Tree.text tree.source node)
 ) tree.root
 
-(* Pattern matching with concrete syntax *)
+(* Pattern matching with concrete syntax. `find` returns composite_match list
+   (one entry per section per match); print each matched span. *)
 let pattern_text = {|@@
 match: strict
 metavar $obj: single
 metavar $method: single
 @@
 $obj.$method()|} in
-let matches = Diffract.Match.find_matches
-  ~ctx
-  ~language:"typescript"
-  ~pattern_text
-  ~source_text:code in
-List.iter (fun m ->
-  Printf.printf "Match at line %d:\n" (m.start_point.row + 1);
-  List.iter (fun (var, value) ->
-    Printf.printf "  %s = %s\n" var value
-  ) m.bindings
-) matches
+let composites =
+  Diffract.Matcher.find ~ctx ~language:"typescript" ~pattern_text
+    ~source_text:code
+in
+List.iter
+  (fun (c : Diffract.Matcher.composite_match) ->
+    List.iter
+      (fun (r : Diffract.Matcher.M.match_result) ->
+        Printf.printf "match: %s\n"
+          (String.sub code r.start_byte (r.end_byte - r.start_byte)))
+      c.sections)
+  composites
 
-(* Apply a semantic patch *)
+(* Apply a semantic patch. `transform` returns the rewritten source; render a
+   diff with Text_diff if it changed. *)
 let patch = {|@@
 match: strict
 metavar $MSG: single
 @@
 - console.log($MSG)
 + logger.info($MSG)|} in
-let result = Diffract.Match.transform
-  ~ctx
-  ~language:"typescript"
-  ~pattern_text:patch
-  ~source_text:code in
-if result.edits <> [] then begin
-  let diff = Diffract.Match.generate_diff
-    ~file_path:"source.ts"
-    ~original:result.original_source
-    ~transformed:result.transformed_source in
-  print_string diff
-end
+let transformed =
+  Diffract.Matcher.transform ~ctx ~language:"typescript" ~pattern_text:patch
+    ~source_text:code
+in
+if transformed <> code then
+  print_string
+    (Diffract.Text_diff.generate_diff ~file_path:"source.ts" ~original:code
+       ~transformed)
 
-(* Apply a multi-section expansion patch — use transform_nested *)
+(* Multi-section, foreach, and conjunctive patches all go through the same
+   `transform` — there is no separate entry point. *)
 let patch = {|@@
 match: strict
 metavar $TAG: single
 metavar $CASES: sequence
 @@
-- matchStringExhaustive($TAG, {
--   $CASES
-- });
-+ match($TAG)
-~   $CASES
-+   .exhaustive();
+- matchExhaustive($TAG, { $CASES });
++ match($TAG)$CASES.exhaustive();
 @@
-match: field
-on $CASES
+match: strict
+foreach $CASES
 metavar $KEY: single
 metavar $VAL: single
 @@
 - $KEY: $VAL
 + .with("$KEY", $VAL)|} in
-let result = Diffract.Match.transform_nested
-  ~ctx
-  ~language:"typescript"
-  ~pattern_text:patch
-  ~source_text:code in
-print_string result.transformed_source
-
-(* Apply a conjunctive sibling patch — use transform_nested.
-   Both sections must match or neither transform is applied. *)
-let patch = {|@@
-match: strict
-@@
-- import { useAppSelector } from "app/hooks";
-+ import { useUser } from "app/UserContext";
-
-@@
-match: strict
-metavar $NAME: single
-metavar $PARAM: single
-@@
-- const $NAME = useAppSelector(($PARAM) => $PARAM.users.user);
-+ const { user: $NAME } = useUser();|} in
-let result = Diffract.Match.transform_nested
-  ~ctx
-  ~language:"typescript"
-  ~pattern_text:patch
-  ~source_text:code in
-print_string result.transformed_source
+print_string
+  (Diffract.Matcher.transform ~ctx ~language:"typescript" ~pattern_text:patch
+     ~source_text:code)
 ```
