@@ -495,6 +495,49 @@ let test_transform_surgical_field_modifiers () =
     "annotation + modifier kept, body rewritten"
     "@Deprecated\nprivate fun bar(): Int { return 2 }" out
 
+(* Whole-container partial rewrite: marking the entire container (no context
+   line) replaces it whole, including its delimiters, and drops the tolerated
+   extras (the honest reading of marking the whole thing). The delimiters carry
+   no recorded span, so the deletion must extend to the match boundary rather
+   than leaving the brackets behind as malformed nested output. *)
+let test_transform_whole_container_partial () =
+  let pattern =
+    "@@\n\
+     match: partial\n\
+     metavar $V: single\n\
+     @@\n\
+     - { color: $V }\n\
+     + { colour: $V }"
+  in
+  let out =
+    transform ~language:"typescript" ~pattern
+      ~source:"const s = { color: red, size: 10 };"
+  in
+  Alcotest.(check string)
+    "whole container replaced, not nested" "const s = { colour: red };" out
+
+(* A bare ellipsis on a `-`/`+` line is rejected: it is a match-only construct.
+   An ellipsis nested inside a marked expression (replaced wholesale) is fine. *)
+let test_reject_bare_ellipsis_on_edit_line () =
+  let raises pattern =
+    try
+      ignore
+        (transform ~language:"typescript" ~pattern
+           ~source:"function f(){ a(); old(); }");
+      false
+    with Failure _ -> true
+  in
+  Alcotest.(check bool)
+    "`- ...` rejected" true
+    (raises "@@\nmatch: strict\n@@\n- ...\n- old();");
+  Alcotest.(check bool)
+    "`+ ...` rejected" true
+    (raises "@@\nmatch: strict\n@@\n- old();\n+ ...");
+  (* nested ellipsis in a replaced expression is allowed (no exception) *)
+  Alcotest.(check bool)
+    "nested `bar(...)` on a `-` line is allowed" false
+    (raises "@@\nmatch: strict\n@@\n- old(...)\n+ new()")
+
 (* Adjacent matches are each rewritten once (non-overlapping). *)
 let test_transform_adjacent_matches () =
   let pattern = "@@\nmatch: strict\nmetavar $x: single\n@@\n- wrap($x)\n+ $x" in
@@ -2140,6 +2183,10 @@ let tests =
       test_transform_surgical_partial_inplace;
     test_case "transform: surgical field rewrite keeps ignored modifiers" `Quick
       test_transform_surgical_field_modifiers;
+    test_case "transform: whole-container partial replaces whole, not nested"
+      `Quick test_transform_whole_container_partial;
+    test_case "transform: bare ellipsis on -/+ line rejected" `Quick
+      test_reject_bare_ellipsis_on_edit_line;
     test_case "transform: adjacent matches" `Quick
       test_transform_adjacent_matches;
     test_case "transform: placeholder boundary" `Quick
