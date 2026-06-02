@@ -10,7 +10,8 @@ let is_spread_at text i =
     match text.[i + 3] with
     | '$' | '_' -> true
     | c ->
-        (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+        (c >= 'a' && c <= 'z')
+        || (c >= 'A' && c <= 'Z')
         || (c >= '0' && c <= '9')
   else false
 
@@ -101,6 +102,46 @@ let walk_leaves ~single_metavars ~sequence_metavars ~ellipsis_map ~keep source
   walk root;
   List.rev !tokens
 
+(* Like [walk_leaves] but pairs each token with the 0-based line index of its
+   leaf (count of newlines in [source] before its start byte). Ellipsis
+   preprocessing preserves newlines, so this index is the same as in the
+   pre-preprocessing body — which lets callers map a token to the pattern line
+   it came from (and thus its `-`/context role). *)
+let walk_leaves_with_lines ~single_metavars ~sequence_metavars ~ellipsis_map
+    ~keep source root =
+  let line_of off =
+    let n = ref 0 in
+    for i = 0 to off - 1 do
+      if source.[i] = '\n' then incr n
+    done;
+    !n
+  in
+  let tokens = ref [] in
+  let rec walk (node : Tree.pat Tree.t) =
+    if node.is_extra && not (Tree.is_error node) then ()
+    else
+      match node.children with
+      | [] ->
+          if keep node && node.start_byte <> node.end_byte then
+            let tok =
+              classify_leaf ~single_metavars ~sequence_metavars ~ellipsis_map
+                source node
+            in
+            tokens := (tok, line_of node.start_byte) :: !tokens
+      | children ->
+          List.iter (fun (c : Tree.pat Tree.child) -> walk c.node) children
+  in
+  walk root;
+  List.rev !tokens
+
+let tokenize_with_lines ~ctx ~language ~single_metavars ~sequence_metavars body
+    : (Stmatch.pattern_token * int) list =
+  let body, ellipsis_map = preprocess_ellipsis body in
+  let tree = Tree.parse_as_pattern ~ctx ~language body in
+  walk_leaves_with_lines ~single_metavars ~sequence_metavars ~ellipsis_map
+    ~keep:(fun _ -> true)
+    tree.Tree.source tree.Tree.root
+
 let tokenize ~ctx ~language ~single_metavars ~sequence_metavars body :
     Stmatch.pattern_token list =
   (* Rewrite ellipsis to placeholders before parsing. *)
@@ -112,7 +153,8 @@ let tokenize ~ctx ~language ~single_metavars ~sequence_metavars body :
      the pattern side. *)
   let tree = Tree.parse_as_pattern ~ctx ~language body in
   walk_leaves ~single_metavars ~sequence_metavars ~ellipsis_map
-    ~keep:(fun _ -> true) tree.Tree.source tree.Tree.root
+    ~keep:(fun _ -> true)
+    tree.Tree.source tree.Tree.root
 
 let tokenize_span ~ctx ~language ~single_metavars ~sequence_metavars ~lo ~hi
     text : Stmatch.pattern_token list =
