@@ -84,6 +84,7 @@ module Make (C : Cursor.S) : sig
     ?initial_bindings:binding list ->
     ?ignore_node_type:bool ->
     ?descend:bool ->
+    ?spans:(int * int) array option ->
     pattern_token list ->
     C.t ->
     (pattern_token list * C.t * binding list) option
@@ -95,6 +96,12 @@ module Make (C : Cursor.S) : sig
       as a cheap superset probe to decide whether a candidate is worth the cost
       of source-context re-tokenization — the precise (node-type-checked) match
       is run afterwards.
+
+      [spans] (default [None]): when [Some a], records into [a] (indexed by this
+      call's pattern position) the source byte range each consumed token matched
+      — the per-token spans surgical transforms read. The partial/field drivers
+      thread a global array through this so each element's spans land at the
+      element's offset in the full pattern.
 
       [descend] (default [false]): when [true], the matched prefix is the one
       that consumes the {b most} pattern while still exhausting the source
@@ -127,6 +134,8 @@ module Make (C : Cursor.S) : sig
 
   val match_set_at :
     ?initial_bindings:binding list ->
+    ?spans:(int * int) array option ->
+    ?offset:int ->
     pattern_token list ->
     C.t ->
     (C.t * binding list) option
@@ -166,6 +175,7 @@ module Make (C : Cursor.S) : sig
 
   val match_partial_at :
     ?initial_bindings:binding list ->
+    ?spans:(int * int) array option ->
     pattern_token list ->
     C.t ->
     (C.t * binding list) option
@@ -213,6 +223,7 @@ module Make (C : Cursor.S) : sig
   val match_field_at :
     ?initial_bindings:binding list ->
     ?ignore_node_type:bool ->
+    ?spans:(int * int) array option ->
     pattern_token list ->
     C.t ->
     (C.t * binding list) option

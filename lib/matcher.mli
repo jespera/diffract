@@ -132,13 +132,15 @@ val debug_tokens :
 
 val pattern_warnings : string -> string list
 (** [pattern_warnings pattern_text] returns non-fatal warnings from a static
-    look at the parsed pattern (no source needed). Currently it flags a partial-
-    or field-mode section that carries a whole-span [-]/[+] replacement: such a
-    section silently drops the very content those modes tolerate/ignore (extra
-    container elements; optional declaration fields). The operation is
-    legitimate but error-prone, so it warns rather than fails; a
-    [foreach]-scoped edit (which doesn't replace the container) is exempt.
-    Intended for the CLI to print before applying. *)
+    look at the parsed pattern (no source needed). Transforms are surgical, so a
+    [-]/[+] on a sub-part is no longer a footgun; this flags only a partial- or
+    field-mode section that marks the {b whole container} (a body with no
+    context line, so every matched token is removed and the edit spans the whole
+    match). That drops the very content those modes tolerate/ignore (extra
+    container elements; optional declaration fields) — legitimate as a wholesale
+    rewrite, but an easy mistake, so it warns rather than fails. A sub-part edit
+    (context lines preserved) or a [foreach]-scoped edit is exempt. Intended for
+    the CLI to print before applying. *)
 
 val find_in_tree :
   ctx:Context.t ->
@@ -192,16 +194,19 @@ val transform :
     left-to-right), in contrast to {!find}'s overlapping search. A match-only
     pattern (no [-]/[+] lines) returns [source_text] unchanged.
 
+    Transforms are {b surgical} in all modes (see
+    [docs/surgical-transforms.md]): a [-]/[+] on a sub-part edits only that
+    part, leaving the rest of the match — context, partial's tolerated extra
+    elements, field's ignored optional fields (decorators, modifiers, return
+    types), and the source captured by [...] — byte-for-byte. A pattern whose
+    [-]/[+] cover the whole match replaces the whole match (the degenerate
+    single-region case). Deletion cleanup is context-aware: strict deletions are
+    line-oriented; partial/field deletions absorb an adjacent list separator so
+    it doesn't dangle.
+
     Beyond single-metavar substitution this handles: sequence splicing (a
     [sequence] metavar referenced in a [+] template is rendered and joined by
     its [join] separator), per-element [foreach] transforms (an inner section's
     edit applied to each element of a sequence), and element removal (a
     [foreach] element with an empty replacement is deleted, and one adjacent
-    separator is consumed so the list stays well-formed).
-
-    Field-mode sections transform too: the replace side substitutes over the
-    matched declaration span. Note the matched span is the declaration node,
-    which {b includes} any annotation/modifier children (PHP, Kotlin, Scala) but
-    {b excludes} decorators that the grammar places as siblings of the
-    declaration (TS methods) — so a field-mode replace rewrites the former and
-    leaves the latter in place. *)
+    separator is consumed so the list stays well-formed). *)

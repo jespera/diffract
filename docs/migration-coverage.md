@@ -17,40 +17,37 @@ replacement, stricter operators, `join`/`foreach` replacing the `~`/`,`
 expansion lines) are recorded in §5–§6 below. The old matcher and its tests,
 examples, and benchmarks are now gone.
 
-## 1. The transform model: surgical (strict) / whole-span (partial, field)
+## 1. The transform model: surgical edits
 
-**Strict mode is surgical** (Coccinelle-style): an edit is localized to the
-`-`/`+` *lines*, and context — including the source captured by `...` — is
-preserved byte-for-byte. **Partial and field modes are still whole-span**: the
-entire matched span is replaced by the whole instantiated replace side (see
-`docs/surgical-transforms.md §8` for why the split, and the follow-up to close
-it).
+Transforms are **surgical** (Coccinelle-style) in all three modes: an edit is
+localized to the `-`/`+` *lines*, and everything else is preserved
+byte-for-byte — context, partial's tolerated extras, field's ignored optional
+fields, and the source captured by `...` (see `docs/surgical-transforms.md §8`
+for the mechanism).
 
 What this means in practice:
 
 - Rename a call: `- foo($x) / + bar($x)`. The whole match is marked, so it is
-  replaced whole — the surgical and whole-span results coincide.
-- Remove or edit a *sub-part* while keeping its siblings, in strict mode, by
-  bracketing the rest with `...`:
+  replaced whole — the degenerate single-hunk case.
+- Remove or edit a *sub-part* while keeping its siblings — mark only that part:
   ```
    <Foo
-     ...
   -   bar={$x}
-     ...
    />
   ```
-  removes only `bar={$x}`; the other attributes (captured by `...`) stay. The
-  `...` is matched-and-not-edited, never emitted literally.
-- A `-`/context line whose **whole construct** is marked still replaces the
-  whole construct — that is the degenerate single-hunk case, and it is the
-  honest reading of marking the whole thing.
+  in partial mode removes only `bar={$x}` and keeps the other attributes. In
+  strict mode, bracket the rest with `...` (matched-and-not-edited, never
+  emitted literally); in field mode the omitted decorators/modifiers/return
+  types stay put.
+- Marking the **whole container** (a body with no context line) still replaces
+  it whole, dropping anything not restated. In partial/field that drops the
+  tolerated extras / ignored fields, so the matcher warns (`pattern_warnings`)
+  — it is the honest reading of marking the whole thing, but an easy mistake in
+  modes built to tolerate/ignore content.
 
-In **partial/field** modes a whole-span `-`/`+` still drops the tolerated
-extras / ignored fields those modes don't mention. The matcher emits a static
-warning (`pattern_warnings`) for that footgun. To edit a sub-part with a guard
-("only in objects shaped like X"), use multi-section: one section
-matches/guards the container, a `foreach`/`on`-scoped section edits the
-elements in place.
+For a sub-part edit that also needs a guard ("only in objects shaped like X"),
+multi-section still works: one section matches/guards the container, a
+`foreach`/`on`-scoped section edits the elements.
 
 ## 2. Concrete keys out of context — resolved
 

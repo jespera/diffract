@@ -539,13 +539,9 @@ Removes the `deprecated` property from objects that have both `name` and
 ### Field-mode transforms
 
 `match: field` matches a declaration while ignoring the optional fields the
-pattern omits. **On transform it replaces the whole matched declaration span** —
-so any field the pattern does not restate, including the decorators/return types
-it ignored for *matching*, is dropped. The CLI prints a warning for a field (or
-partial) section carrying a whole-span `-`/`+` replacement.
-
-Restating the whole declaration is exactly right for a wholesale rewrite — just
-keep what you intend to keep:
+pattern omits. On transform it is **surgical**: the edit covers only the part
+the `-`/`+` lines mark, and the omitted optional fields — decorators,
+annotations, modifiers, return types — are preserved.
 
 ```
 @@
@@ -557,29 +553,29 @@ metavar $BODY: single
 + fun $NAME() { logCall(); $BODY }
 ```
 
-To change *part* of a declaration while preserving the rest, do **not**
-field-replace the whole thing; match/guard it and edit elements in a
-`foreach`/`on` section (see below).
+against `@Deprecated private fun f() { ... }` keeps `@Deprecated private` and
+rewrites the `fun … { … }` part. Marking the *whole* declaration (a body with
+no context line) still replaces it whole — and then the ignored fields are
+dropped, which the matcher warns about.
 
 ### How match modes affect transforms
 
-**Strict mode is surgical**: the edit is localized to the `-`/`+` lines, and
-context (including the source captured by `...`) is preserved byte-for-byte. A
-pattern whose `-`/`+` cover the *whole* match replaces the whole match (the
-degenerate single-region case); a pattern that marks only a sub-part edits only
-that part.
+Transforms are **surgical** in all modes: the edit is localized to the `-`/`+`
+lines, and everything else is preserved byte-for-byte. A pattern whose `-`/`+`
+cover the *whole* match replaces the whole match (the degenerate single-region
+case); a pattern that marks only a sub-part edits only that part.
 
-| Mode | What a `-`/`+` edit does |
-|------|--------------------------|
-| `strict` | edits only the marked `-`/`+` lines; context and `...`-captured siblings preserved |
-| `partial` | replaces the **entire** matched container — **tolerated extra elements are dropped** |
-| `field` | replaces the **entire** matched declaration — **ignored optional fields are dropped** |
+| Mode | A sub-part `-`/`+` edit | Preserved |
+|------|-------------------------|-----------|
+| `strict` | edits the marked lines | context, `...`-captured siblings |
+| `partial` | edits the marked element(s), separator-aware | tolerated extra elements |
+| `field` | edits the marked part of the declaration | ignored optional fields (decorators, modifiers, return types) |
 
-Partial and field are still whole-span (see `docs/surgical-transforms.md §8`).
-That is the footgun: they exist to *tolerate/ignore* content during matching,
-and a whole-span replace then *deletes* it — so the matcher warns
-(`pattern_warnings`). For a surgical partial/field edit, mark only the sub-part
-in a strict section bracketed with `...`, or use `foreach`/`on`.
+The remaining footgun is marking the **whole container** in partial/field
+mode (a body with no context line): that replaces it whole and drops the
+tolerated extras / ignored fields, so the matcher warns (`pattern_warnings`).
+To edit a sub-part, mark only that part (context lines, and partial's
+unlisted elements, are preserved), or use `foreach`/`on`.
 
 ### Sequence rendering: `join` and `foreach`
 
