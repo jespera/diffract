@@ -676,8 +676,7 @@ let test_find_matches_multiple_single_token () =
   Alcotest.(check int) "three a-matches" 3 (List.length results);
   (* The byte ranges should be in document order. *)
   let starts = List.map (fun r -> r.M.start_byte) results in
-  Alcotest.(check (list int))
-    "start bytes ascending" [ 0; 2; 4 ] starts
+  Alcotest.(check (list int)) "start bytes ascending" [ 0; 2; 4 ] starts
 
 let test_find_matches_multi_token_pattern () =
   (* Pattern [a; b] matches twice in nd[a, b, c, a, b]. *)
@@ -693,8 +692,8 @@ let test_find_matches_non_overlapping () =
      overlapping matches. *)
   let tree = nd [ id "a"; id "b"; id "a"; id "b" ] in
   let results = find_matches_of [ con "a"; con "b" ] tree in
-  Alcotest.(check int) "exactly two non-overlapping matches" 2
-    (List.length results)
+  Alcotest.(check int)
+    "exactly two non-overlapping matches" 2 (List.length results)
 
 (* ----- Overlapping / nested matches. ----- *)
 
@@ -710,8 +709,7 @@ let test_find_matches_nested () =
   let overlap =
     M.find_matches ~overlapping:true pat (Test_cursor.of_tree outer)
   in
-  Alcotest.(check int) "non-overlapping: outer only" 1
-    (List.length non_overlap);
+  Alcotest.(check int) "non-overlapping: outer only" 1 (List.length non_overlap);
   Alcotest.(check int) "overlapping: outer + inner" 2 (List.length overlap)
 
 (* Overlapping mode de-duplicates spans: the ancestor chain (root, ...)
@@ -757,14 +755,15 @@ let test_find_matches_bindings_per_result () =
      child (three results). The matcher's "advance past match" semantics
      and "leftmost minimum" mean we match the largest possible at the root
      first, advancing past it. So we get a single match for the whole nd. *)
-  Alcotest.(check int) "single match (root matches first)" 1
-    (List.length results);
+  Alcotest.(check int)
+    "single match (root matches first)" 1 (List.length results);
   match results with
   | [ r ] ->
       let leaf =
         match
           List.find_map
-            (function M.Single { name = "x"; cursor } -> Some cursor | _ -> None)
+            (function
+              | M.Single { name = "x"; cursor } -> Some cursor | _ -> None)
             r.bindings
         with
         | None -> Alcotest.fail "no binding for x"
@@ -793,7 +792,6 @@ let test_find_matches_take_two () =
   Alcotest.(check int) "took two matches" 2 (List.length first_two);
   let starts = List.map (fun r -> r.M.start_byte) first_two in
   Alcotest.(check (list int)) "in order" [ 0; 2 ] starts
-
 
 let outer_loop_tests =
   let open Alcotest in
@@ -911,8 +909,8 @@ let test_match_prefix_partial_element_use_case () =
   | Some (rem, _, bindings) ->
       (* Pattern's [a; :; $x] is consumed against the sub-tree; the trailing
          [,; b; :; $y] is returned for the next call. *)
-      Alcotest.(check int) "4 tokens remaining (',' b ':' $y)" 4
-        (List.length rem);
+      Alcotest.(check int)
+        "4 tokens remaining (',' b ':' $y)" 4 (List.length rem);
       Alcotest.(check (option string))
         "x bound to 1" (Some "1")
         (single_binding_text bindings "x")
@@ -943,8 +941,7 @@ let test_match_prefix_leading_mismatch_fails () =
    container delimiters). The fixture tests exercise the inner set-match
    logic, so they call [match_set_at] directly — see
    [match_partial_at]'s doc in [stmatch.mli]. *)
-let partial_of pattern tree =
-  M.match_set_at pattern (Test_cursor.of_tree tree)
+let partial_of pattern tree = M.match_set_at pattern (Test_cursor.of_tree tree)
 
 (* Empty pattern + container with no children: trivially succeeds. *)
 let test_partial_empty_pattern_no_children () =
@@ -976,8 +973,8 @@ let test_partial_single_element () =
   match partial_of [ con "a" ] tree with
   | None -> Alcotest.fail "expected match"
   | Some (_, bindings) ->
-      Alcotest.(check int) "no bindings (no named wildcards)" 0
-        (List.length bindings)
+      Alcotest.(check int)
+        "no bindings (no named wildcards)" 0 (List.length bindings)
 
 (* Two pair-like elements, in-order match. Each element pattern consumes one
    child's worth of tokens; bindings accumulate. *)
@@ -1121,8 +1118,7 @@ let test_partial_greedy_needs_backtrack () =
   let pat = [ nx "x"; con "b"; con_t ":" ":"; nx "y" ] in
   match partial_of pat tree with
   | None ->
-      Alcotest.fail
-        "expected match — backtracking should find $x→pair_a, $y→2"
+      Alcotest.fail "expected match — backtracking should find $x→pair_a, $y→2"
   | Some (_, bindings) ->
       (* x absorbed pair_a (compound); its leftmost leaf is "a". *)
       Alcotest.(check (option string))

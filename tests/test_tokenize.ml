@@ -298,8 +298,8 @@ let test_with_lines_ellipsis_preserves_line () =
         | _ -> None)
       toks
   in
-  Alcotest.(check (option int)) "$x is on line 2 despite the `...` rewrite"
-    (Some 2) (line_of "$x")
+  Alcotest.(check (option int))
+    "$x is on line 2 despite the `...` rewrite" (Some 2) (line_of "$x")
 
 let tests =
   let open Alcotest in

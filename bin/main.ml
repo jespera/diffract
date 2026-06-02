@@ -248,14 +248,13 @@ let format_search_match ~file_path ~source_text
   | [ single ] -> format_section_match ~file_path ~source_text single
   | sections ->
       let buf = Buffer.create 256 in
-      Buffer.add_string buf
-        (Printf.sprintf "%s: composite match\n" file_path);
+      Buffer.add_string buf (Printf.sprintf "%s: composite match\n" file_path);
       List.iteri
         (fun i r ->
           let prefix = Printf.sprintf "[\xc2\xa7%d]" (i + 1) in
           Buffer.add_string buf
-            (format_section_match ~section_prefix:prefix ~file_path
-               ~source_text r))
+            (format_section_match ~section_prefix:prefix ~file_path ~source_text
+               r))
         sections;
       Buffer.contents buf
 
@@ -329,17 +328,21 @@ let run_search pattern_path target language include_pattern exclude_patterns
     if debug_tokens then print_debug_tokens ~ctx ~language ~pattern_text
     else begin
       print_pattern_warnings ~pattern_text;
-      if Sys.is_directory target then
+      if Sys.is_directory target then (
         match include_pattern with
         | None ->
             `Error
-              (true, "Directory target requires --include (e.g., --include '*.ts')")
+              ( true,
+                "Directory target requires --include (e.g., --include '*.ts')"
+              )
         | Some glob ->
             scan_directory_search ~ctx ~language ~pattern_text
               ~include_pattern:glob ~exclude_dirs target;
-            `Ok ()
+            `Ok ())
       else begin
-        let source_text = In_channel.with_open_text target In_channel.input_all in
+        let source_text =
+          In_channel.with_open_text target In_channel.input_all
+        in
         let tree = Diffract.Tree.parse ~ctx ~language source_text in
         let results =
           Diffract.Matcher.find_in_tree ~ctx ~language ~pattern_text tree
@@ -410,7 +413,8 @@ let run_apply pattern_path target language include_pattern exclude_patterns
         | None ->
             `Error
               ( true,
-                "Directory target requires --include (e.g., --include '*.ts')" )
+                "Directory target requires --include (e.g., --include '*.ts')"
+              )
         | Some glob ->
             scan_directory_apply ~ctx ~language ~pattern_text
               ~include_pattern:glob ~exclude_dirs ~in_place target;
@@ -556,8 +560,8 @@ let cmd =
       `I ("$(b,parse)", "Display the syntax tree of a source file.");
       `I
         ( "$(b,search)",
-          "Find pattern matches in a file or directory (handles code \
-           fragments and sigil-free metavars)." );
+          "Find pattern matches in a file or directory (handles code fragments \
+           and sigil-free metavars)." );
       `I ("$(b,apply)", "Apply a semantic patch to a file or directory.");
       `I ("$(b,diff)", "Show AST-level changes between two file versions.");
       `I ("$(b,languages)", "List available language grammars.");
@@ -571,7 +575,6 @@ let cmd =
     ]
   in
   let info = Cmd.info "diffract" ~version:"0.1.0" ~doc ~man in
-  Cmd.group info
-    [ languages_cmd; parse_cmd; search_cmd; apply_cmd; diff_cmd ]
+  Cmd.group info [ languages_cmd; parse_cmd; search_cmd; apply_cmd; diff_cmd ]
 
 let () = exit (Cmd.eval cmd)

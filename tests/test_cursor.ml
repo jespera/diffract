@@ -48,8 +48,7 @@ end = struct
      same coordinate system as the cursor was initially built in. *)
   type t = { mutable stack : frame list; absolute_root : tree }
 
-  let of_tree t =
-    { stack = [ { curr = t; right = [] } ]; absolute_root = t }
+  let of_tree t = { stack = [ { curr = t; right = [] } ]; absolute_root = t }
 
   let clone c =
     {
@@ -63,8 +62,10 @@ end = struct
     match c.stack with
     | [] -> failwith "Test_cursor: empty stack (logic error)"
     | f :: _ ->
-        { stack = [ { curr = f.curr; right = [] } ];
-          absolute_root = c.absolute_root }
+        {
+          stack = [ { curr = f.curr; right = [] } ];
+          absolute_root = c.absolute_root;
+        }
 
   let current_node c =
     match c.stack with
@@ -314,53 +315,63 @@ let byte_range_pair = Alcotest.(pair int int)
 (* Rendered as "abc" — bytes 0..3. *)
 let test_byte_range_root () =
   with_cursor (nd [ id "a"; id "b"; id "c" ]) @@ fun c ->
-  Alcotest.(check byte_range_pair) "root spans 0..3" (0, 3) (Test_cursor.byte_range c)
+  Alcotest.(check byte_range_pair)
+    "root spans 0..3" (0, 3) (Test_cursor.byte_range c)
 
 let test_byte_range_single_leaf_child () =
   (* Rendered "ab", cursor at leaf "a" → (0,1). *)
   with_cursor (nd [ id "a"; id "b" ]) @@ fun c ->
   assert (Test_cursor.move_first_child c);
-  Alcotest.(check byte_range_pair) "leaf a spans 0..1" (0, 1) (Test_cursor.byte_range c)
+  Alcotest.(check byte_range_pair)
+    "leaf a spans 0..1" (0, 1) (Test_cursor.byte_range c)
 
 let test_byte_range_second_sibling () =
   (* Rendered "ab", cursor at leaf "b" → (1,2). *)
   with_cursor (nd [ id "a"; id "b" ]) @@ fun c ->
   assert (Test_cursor.move_first_child c);
   assert (Test_cursor.move_next_sibling c);
-  Alcotest.(check byte_range_pair) "leaf b spans 1..2" (1, 2) (Test_cursor.byte_range c)
+  Alcotest.(check byte_range_pair)
+    "leaf b spans 1..2" (1, 2) (Test_cursor.byte_range c)
 
 let test_byte_range_multi_char_leaf () =
   (* leaf "abc" + leaf "de" → "abcde", first leaf spans (0,3). *)
   with_cursor (nd [ leaf "id" "abc"; leaf "id" "de" ]) @@ fun c ->
   assert (Test_cursor.move_first_child c);
-  Alcotest.(check byte_range_pair) "abc spans 0..3" (0, 3) (Test_cursor.byte_range c)
+  Alcotest.(check byte_range_pair)
+    "abc spans 0..3" (0, 3) (Test_cursor.byte_range c)
 
 let test_byte_range_nested () =
   (* nd[a, nd[b, c]]: rendered "abc". Inner nd spans (1,3). *)
   with_cursor (nd [ id "a"; nd [ id "b"; id "c" ] ]) @@ fun c ->
   assert (Test_cursor.move_first_child c);
   assert (Test_cursor.move_next_sibling c);
-  Alcotest.(check byte_range_pair) "inner nd spans 1..3" (1, 3) (Test_cursor.byte_range c)
+  Alcotest.(check byte_range_pair)
+    "inner nd spans 1..3" (1, 3) (Test_cursor.byte_range c)
 
 let test_byte_range_independent_of_clone () =
   with_cursor (nd [ id "a"; id "b" ]) @@ fun c ->
   let c2 = Test_cursor.clone c in
   assert (Test_cursor.move_first_child c);
-  Alcotest.(check byte_range_pair) "c at leaf a: (0,1)" (0, 1) (Test_cursor.byte_range c);
-  Alcotest.(check byte_range_pair) "c2 unchanged at root: (0,2)" (0, 2) (Test_cursor.byte_range c2)
+  Alcotest.(check byte_range_pair)
+    "c at leaf a: (0,1)" (0, 1) (Test_cursor.byte_range c);
+  Alcotest.(check byte_range_pair)
+    "c2 unchanged at root: (0,2)" (0, 2)
+    (Test_cursor.byte_range c2)
 
 (* ----- named_children ----- *)
 
 (* Leaf has no children: named_children returns an empty list. *)
 let test_named_children_of_leaf () =
   with_cursor (id "a") @@ fun c ->
-  Alcotest.(check int) "leaf has no named children" 0
+  Alcotest.(check int)
+    "leaf has no named children" 0
     (List.length (Test_cursor.named_children c))
 
 (* Internal node returns one cursor per direct child. *)
 let test_named_children_count () =
   with_cursor (nd [ id "a"; id "b"; id "c" ]) @@ fun c ->
-  Alcotest.(check int) "three children" 3
+  Alcotest.(check int)
+    "three children" 3
     (List.length (Test_cursor.named_children c))
 
 (* Each returned cursor walks its own subtree and produces the expected
@@ -370,7 +381,7 @@ let test_named_children_leaf_texts () =
   let texts =
     Test_cursor.named_children c
     |> List.map (fun child ->
-           Test_cursor.leaf_text (Test_cursor.move_first_leaf child))
+        Test_cursor.leaf_text (Test_cursor.move_first_leaf child))
   in
   Alcotest.(check (list string)) "leaves in order" [ "a"; "b"; "c" ] texts
 
@@ -397,7 +408,9 @@ let test_named_children_scoped () =
   match Test_cursor.named_children c with
   | [ child1; _; _ ] ->
       let leaf_a = Test_cursor.move_first_leaf child1 in
-      Alcotest.(check string) "sub-cursor at 'a'" "a" (Test_cursor.leaf_text leaf_a);
+      Alcotest.(check string)
+        "sub-cursor at 'a'" "a"
+        (Test_cursor.leaf_text leaf_a);
       (* Inside child1's scope, there are no more subtrees past 'a'. *)
       Alcotest.(check bool)
         "advancing past child's scope returns false" false
@@ -416,8 +429,7 @@ let test_named_children_at_inner_node () =
   Alcotest.(check int) "inner node has two children" 2 (List.length children);
   let texts =
     List.map
-      (fun child ->
-        Test_cursor.leaf_text (Test_cursor.move_first_leaf child))
+      (fun child -> Test_cursor.leaf_text (Test_cursor.move_first_leaf child))
       children
   in
   Alcotest.(check (list string)) "inner children: x, y" [ "x"; "y" ] texts
@@ -426,15 +438,10 @@ let test_named_children_at_inner_node () =
 let test_named_children_clone_independence () =
   with_cursor (nd [ id "a"; id "b" ]) @@ fun c ->
   let children = Test_cursor.named_children c in
-  let _ =
-    List.map
-      (fun child -> Test_cursor.move_first_leaf child)
-      children
-  in
+  let _ = List.map (fun child -> Test_cursor.move_first_leaf child) children in
   (* Original cursor still at root. *)
   Alcotest.(check byte_range_pair)
-    "original at root after enumeration" (0, 2)
-    (Test_cursor.byte_range c)
+    "original at root after enumeration" (0, 2) (Test_cursor.byte_range c)
 
 (* ----- source_substring ----- *)
 
@@ -442,26 +449,26 @@ let test_named_children_clone_independence () =
    expected substrings. *)
 let test_source_substring_basic () =
   with_cursor (nd [ id "a"; id "b"; id "c" ]) @@ fun c ->
-  Alcotest.(check string) "whole source" "abc"
+  Alcotest.(check string)
+    "whole source" "abc"
     (Test_cursor.source_substring c 0 3);
-  Alcotest.(check string) "middle char" "b"
-    (Test_cursor.source_substring c 1 2);
-  Alcotest.(check string) "first two" "ab"
-    (Test_cursor.source_substring c 0 2)
+  Alcotest.(check string) "middle char" "b" (Test_cursor.source_substring c 1 2);
+  Alcotest.(check string) "first two" "ab" (Test_cursor.source_substring c 0 2)
 
 (* Empty range yields empty string. *)
 let test_source_substring_empty () =
   with_cursor (nd [ id "a"; id "b" ]) @@ fun c ->
-  Alcotest.(check string) "empty range" ""
-    (Test_cursor.source_substring c 1 1)
+  Alcotest.(check string) "empty range" "" (Test_cursor.source_substring c 1 1)
 
 (* Multi-character leaves: synthesized source concatenates each leaf's
    full text. *)
 let test_source_substring_multi_char () =
   with_cursor (nd [ leaf "id" "hello"; leaf "id" "world" ]) @@ fun c ->
-  Alcotest.(check string) "whole" "helloworld"
+  Alcotest.(check string)
+    "whole" "helloworld"
     (Test_cursor.source_substring c 0 10);
-  Alcotest.(check string) "second leaf" "world"
+  Alcotest.(check string)
+    "second leaf" "world"
     (Test_cursor.source_substring c 5 10)
 
 (* Cursor's current position doesn't affect source_substring — same
@@ -471,8 +478,8 @@ let test_source_substring_position_independent () =
   let at_root = Test_cursor.source_substring c 0 3 in
   assert (Test_cursor.move_first_child c);
   let after_descent = Test_cursor.source_substring c 0 3 in
-  Alcotest.(check string) "same source slice regardless of position" at_root
-    after_descent
+  Alcotest.(check string)
+    "same source slice regardless of position" at_root after_descent
 
 (* The motivating use: read bytes between two adjacent named children
    to detect what separator the source uses. *)
@@ -519,11 +526,9 @@ let tests =
     test_case "byte_range: nested subtree" `Quick test_byte_range_nested;
     test_case "byte_range: clone independence" `Quick
       test_byte_range_independent_of_clone;
-    test_case "named_children: leaf has none" `Quick
-      test_named_children_of_leaf;
+    test_case "named_children: leaf has none" `Quick test_named_children_of_leaf;
     test_case "named_children: count" `Quick test_named_children_count;
-    test_case "named_children: leaf texts" `Quick
-      test_named_children_leaf_texts;
+    test_case "named_children: leaf texts" `Quick test_named_children_leaf_texts;
     test_case "named_children: compound children" `Quick
       test_named_children_compound;
     test_case "named_children: sub-cursor is scoped" `Quick
@@ -534,8 +539,7 @@ let tests =
       test_named_children_clone_independence;
     test_case "source_substring: basic slices" `Quick
       test_source_substring_basic;
-    test_case "source_substring: empty range" `Quick
-      test_source_substring_empty;
+    test_case "source_substring: empty range" `Quick test_source_substring_empty;
     test_case "source_substring: multi-char leaves" `Quick
       test_source_substring_multi_char;
     test_case "source_substring: position-independent" `Quick
