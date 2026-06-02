@@ -426,6 +426,52 @@ let test_transform_surgical_jsx_attribute () =
     "bar attribute removed, baz kept"
     "const e = (\n  <Foo\n    baz={y}\n  />\n);" out
 
+(* Partial-mode surgical removal: marking one object property for removal
+   deletes only it (with its separator) and preserves the tolerated extras —
+   no longer the whole-span drop. *)
+let test_transform_surgical_partial_property () =
+  let pattern =
+    "@@\nmatch: partial\nmetavar $v: single\n@@\n {\n-   color: $v,\n }"
+  in
+  let out =
+    transform ~language:"typescript" ~pattern
+      ~source:"const s = { color: red, size: 10 };"
+  in
+  Alcotest.(check string)
+    "color removed with its comma, size kept" "const s = { size: 10 };" out
+
+(* Partial-mode surgical removal of a JSX attribute keeps the sibling
+   attribute (the tolerated extra), closing the whitespace gap. *)
+let test_transform_surgical_partial_jsx () =
+  let pattern =
+    "@@\nmatch: partial\nmetavar $x: single\n@@\n <Foo\n-   bar={$x}\n />"
+  in
+  let out =
+    transform ~language:"tsx" ~pattern
+      ~source:"const e = <Foo bar={x} baz={y} />;"
+  in
+  Alcotest.(check string)
+    "bar removed, baz kept" "const e = <Foo baz={y} />;" out
+
+(* Field-mode surgical rewrite preserves the optional fields the pattern omits
+   for matching (here a Kotlin annotation + visibility modifier), instead of
+   dropping them as the whole-span replace did. *)
+let test_transform_surgical_field_modifiers () =
+  let pattern =
+    "@@\n\
+     match: field\n\
+     @@\n\
+     - fun foo(): Int { return 1 }\n\
+     + fun bar(): Int { return 2 }"
+  in
+  let out =
+    transform ~language:"kotlin" ~pattern
+      ~source:"@Deprecated\nprivate fun foo(): Int { return 1 }"
+  in
+  Alcotest.(check string)
+    "annotation + modifier kept, body rewritten"
+    "@Deprecated\nprivate fun bar(): Int { return 2 }" out
+
 (* Adjacent matches are each rewritten once (non-overlapping). *)
 let test_transform_adjacent_matches () =
   let pattern = "@@\nmatch: strict\nmetavar $x: single\n@@\n- wrap($x)\n+ $x" in
@@ -1702,7 +1748,13 @@ let test_pattern_warnings () =
         metavar $V: single\n\
         @@\n\
         - $K: $V\n\
-        + .with($V)")
+        + .with($V)");
+  (* Surgical sub-part marking (context delimiters preserved) does NOT warn —
+     only whole-container marking drops the tolerated extras. *)
+  Alcotest.(check bool)
+    "partial sub-part removal does not warn" false
+    (nonempty
+       "@@\nmatch: partial\nmetavar $v: single\n@@\n {\n-   color: $v,\n }")
 
 (* A metavar declared but never present as a token in the pattern is rejected
    — catches typos and metavars dropped by a malformed surrounding parse
@@ -2057,6 +2109,12 @@ let tests =
       `Quick test_transform_surgical_ellipsis_replace;
     test_case "transform: surgical JSX attribute removal keeps siblings" `Quick
       test_transform_surgical_jsx_attribute;
+    test_case "transform: surgical partial property removal keeps siblings"
+      `Quick test_transform_surgical_partial_property;
+    test_case "transform: surgical partial JSX attribute removal" `Quick
+      test_transform_surgical_partial_jsx;
+    test_case "transform: surgical field rewrite keeps ignored modifiers" `Quick
+      test_transform_surgical_field_modifiers;
     test_case "transform: adjacent matches" `Quick
       test_transform_adjacent_matches;
     test_case "transform: placeholder boundary" `Quick

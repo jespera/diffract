@@ -918,22 +918,33 @@ let mode_name = function
   | Partial -> "partial"
   | Field -> "field"
 
-(* Static, source-independent warnings about a pattern. Currently: a
-   partial- or field-mode section that carries a whole-span [-]/[+]
-   replacement. Those modes exist to *tolerate* extra container elements
-   (partial) or *ignore* optional declaration fields (field) during matching;
-   replacing the whole matched span then silently *drops* exactly that
-   tolerated/ignored content. It's a legitimate operation (a deliberate
-   wholesale rewrite), just an easy mistake — hence a warning, not an error.
-   A [foreach]-scoped section edits elements without replacing the container,
-   so it is exempt. *)
+(* Static, source-independent warnings about a pattern.
+
+   Partial/field transforms are surgical: a [-]/[+] on a *sub-part* edits only
+   that part and preserves the tolerated extras / ignored fields. The one case
+   that still drops them is marking the {b whole container} — a body with no
+   context line, so every matched token is removed and the edit spans the whole
+   match. That is the honest reading of "replace the whole thing", but an easy
+   mistake in modes whose entire point is to tolerate/ignore content, so it
+   warns (not errors). A section with context lines (surgical sub-part marking)
+   or a [foreach] scope is exempt. *)
 let pattern_warnings pattern_text =
   let p = parse_pattern pattern_text in
   List.filter_map
     (fun (s : section) ->
       let is_transform = replace_side s.body <> None in
       let is_foreach = match s.scope with Foreach _ -> true | _ -> false in
-      if is_transform && (not is_foreach) && (s.mode = Partial || s.mode = Field)
+      (* Whole-container marking: no context line carries content, so nothing
+         in the match is preserved. *)
+      let marks_whole =
+        not
+          (List.exists
+             (function Ctx s -> String.trim s <> "" | _ -> false)
+             (classify_spatch s.body))
+      in
+      if
+        is_transform && (not is_foreach) && marks_whole
+        && (s.mode = Partial || s.mode = Field)
       then
         let what, dropped =
           match s.mode with
@@ -944,10 +955,10 @@ let pattern_warnings pattern_text =
         in
         Some
           (Printf.sprintf
-             "warning: this %s-mode section replaces the whole matched %s, so \
-              %s will be dropped. To change part of it while keeping the rest, \
-              use this section as a guard and edit elements in a \
-              `foreach`/`on` section."
+             "warning: this %s-mode section marks the whole matched %s for \
+              replacement, so %s will be dropped. To change part of it while \
+              keeping the rest, mark only that part (context lines are \
+              preserved) or use a `foreach`/`on` section."
              (mode_name s.mode) what dropped)
       else None)
     p.sections
@@ -1106,13 +1117,11 @@ let leaf_hunks = function
      token's end to the following context token's start.
    - A [+]-only hunk (pure insertion): insert at the preceding context token's
      end, falling back to the following context token's start. *)
-(* When a deletion removes a whole line — the bytes from the previous newline
-   to [lo] are only indentation, and [hi] sits at end-of-line — absorb that
-   leading indentation and the trailing newline, so the line vanishes cleanly
-   instead of leaving a blank, mis-indented stub. Mid-line deletions (something
-   survives on the line either side) keep the tight span. Applied only to
-   deletions; a replacement fills the slot in place. *)
-let line_delete_cleanup source lo hi =
+(* Whole-line cleanup: when the bytes from the previous newline to [lo] are
+   only indentation and [hi] sits at end-of-line, absorb the leading
+   indentation and the trailing newline so the line vanishes cleanly instead of
+   leaving a blank, mis-indented stub. Otherwise keep the tight span. *)
+let line_cleanup source lo hi =
   let len = String.length source in
   let is_hspace c = c = ' ' || c = '\t' in
   let j = ref lo in
@@ -1125,7 +1134,63 @@ let line_delete_cleanup source lo hi =
   let trailing_nl = !k < len && source.[!k] = '\n' in
   if leading_blank && trailing_nl then (!j, !k + 1) else (lo, hi)
 
-let surgical_edits hunks (m : M.match_result) seq_renderings source =
+(* Cleanup for a deleted list element (partial/field): an adjacent element
+   separator ([,] / [;]) would otherwise dangle ([{ , size }]). Absorb the
+   *following* separator and the whitespace after it; failing that the
+   *preceding* separator and the whitespace before it — the same rule
+   {!removal_span} uses for [foreach] removal, here driven off the raw source.
+   Falls back to {!line_cleanup} when there is no separator on either side.
+
+   This is only applied in container (partial/field) contexts. In strict
+   contexts a [;] is a statement terminator, not a list separator, so absorbing
+   it would eat the previous statement's terminator — strict deletions use
+   {!line_cleanup} alone. *)
+let element_cleanup source lo hi =
+  let len = String.length source in
+  let is_ws c = c = ' ' || c = '\t' || c = '\n' || c = '\r' in
+  let is_sep c = c = ',' || c = ';' in
+  let f = ref hi in
+  while !f < len && is_ws source.[!f] do
+    incr f
+  done;
+  if !f < len && is_sep source.[!f] then begin
+    let e = ref (!f + 1) in
+    while !e < len && is_ws source.[!e] do
+      incr e
+    done;
+    (lo, !e)
+  end
+  else begin
+    let p = ref lo in
+    while !p > 0 && is_ws source.[!p - 1] do
+      decr p
+    done;
+    if !p > 0 && is_sep source.[!p - 1] then begin
+      let s = ref (!p - 1) in
+      while !s > 0 && is_ws source.[!s - 1] do
+        decr s
+      done;
+      (!s, hi)
+    end
+    else
+      (* No separator (e.g. whitespace-separated JSX attributes). A whole-line
+         element is handled by line_cleanup; otherwise absorb the following
+         horizontal-whitespace gap so adjacent elements close up to one space
+         rather than leaving a double gap. *)
+      let lo', hi' = line_cleanup source lo hi in
+      if (lo', hi') <> (lo, hi) then (lo', hi')
+      else begin
+        let e = ref hi in
+        while !e < len && (source.[!e] = ' ' || source.[!e] = '\t') do
+          incr e
+        done;
+        (lo, !e)
+      end
+  end
+
+let surgical_edits ~list_context hunks (m : M.match_result) seq_renderings
+    source =
+  let delete_cleanup = if list_context then element_cleanup else line_cleanup in
   let spans = m.spans in
   let span_of i =
     if i >= 0 && i < Array.length spans then spans.(i) else (-1, -1)
@@ -1150,7 +1215,7 @@ let surgical_edits hunks (m : M.match_result) seq_renderings source =
           let lo = List.fold_left (fun a (s, _) -> min a s) max_int del_spans in
           let hi = List.fold_left (fun a (_, e) -> max a e) min_int del_spans in
           let lo, hi =
-            if repl = "" then line_delete_cleanup source lo hi else (lo, hi)
+            if repl = "" then delete_cleanup source lo hi else (lo, hi)
           in
           Some { start_byte = lo; end_byte = hi; replacement = repl }
       | [] when h.del_idxs <> [] ->
@@ -1167,7 +1232,7 @@ let surgical_edits hunks (m : M.match_result) seq_renderings source =
             | _ -> m.end_byte
           in
           let lo, hi =
-            if repl = "" then line_delete_cleanup source lo hi else (lo, hi)
+            if repl = "" then delete_cleanup source lo hi else (lo, hi)
           in
           if hi >= lo then
             Some { start_byte = lo; end_byte = hi; replacement = repl }
@@ -1201,7 +1266,14 @@ let edits_of_composite ir (composite : composite_match) seq_renderings source =
   List.map2
     (fun leaf (m : M.match_result) ->
       if Array.length m.spans > 0 then
-        surgical_edits (leaf_hunks leaf) m seq_renderings source
+        (* partial/field match container elements separated by [,]/[;]; strict
+           matches a positional construct whose deletions are line-oriented. *)
+        let list_context =
+          match leaf with
+          | PartialContainer _ | FieldContainer _ -> true
+          | _ -> false
+        in
+        surgical_edits ~list_context (leaf_hunks leaf) m seq_renderings source
       else
         match leaf_replace leaf with
         | None -> []

@@ -1,10 +1,10 @@
 # Surgical transforms: design note
 
-Status: **implemented for strict mode; partial/field still whole-span.** This
-note argues for changing the transform model from *whole-span replacement* to
-*surgical* (Coccinelle-style) edits, sketches how, and (§8) records what was
-built. The §1–§7 discussion is the original design argument; read §8 for the
-as-built behaviour.
+Status: **implemented for strict, partial, and field modes.** This note argues
+for changing the transform model from *whole-span replacement* to *surgical*
+(Coccinelle-style) edits, sketches how, and (§8) records what was built. The
+§1–§7 discussion is the original design argument; read §8 for the as-built
+behaviour.
 
 ## 1. The problem
 
@@ -211,18 +211,21 @@ whole-construct rewrites are unchanged.
 
 ## 8. As built
 
-**Strict mode is surgical; partial and field modes still use whole-span
-replacement** (and still emit the `pattern_warnings` footgun warning). The
-split falls out of where per-token source spans are available.
+**Strict, partial, and field modes are all surgical.** A `-`/`+` on a sub-part
+edits only that part; context, partial's tolerated extras, field's ignored
+optional fields, and `...`-captured source all survive byte-for-byte.
 
 The pieces, bottom-up:
 
-- **Per-token spans** (`Stmatch`). The strict driver (`drive`) records, per
-  pattern-token index, the source byte range that token consumed
-  (`match_at_spans`). `find_matches` populates a new `match_result.spans` array
-  on the non-overlapping (transform) path by re-driving the committed leftmost
-  match with span recording. Search (`overlapping`) and the partial/field find
-  loops leave `spans = [||]`.
+- **Per-token spans** (`Stmatch`). `match_result` gains a `spans` array — per
+  pattern-token source byte range. Strict records it in `drive`
+  (`match_at_spans`); `find_matches` populates it on the non-overlapping
+  (transform) path by re-driving the committed leftmost match. Partial and
+  field thread a global `spans` array (with a running offset) through
+  `match_set_at` / `match_field_at`: each element's `match_prefix` records its
+  tokens' spans, blitted into the global array at the element's offset, and
+  only on the committed path so backtracking trials don't pollute it. Search
+  (`overlapping`) leaves `spans = [||]`.
 
 - **Hunks** (`Matcher`). A transform body compiles to a list of `hunk`s
   (`compile_hunks`): a maximal run of `-`/`+` lines between context lines. Each
@@ -235,44 +238,48 @@ The pieces, bottom-up:
 - **Surgical edits** (`surgical_edits`). When a match has `spans`, each hunk
   becomes one localized edit: delete/replace `[min start, max end)` over its
   `-` tokens' spans, insert a `+`-only hunk at the preceding context token's
-  end. Everything else — context, partial/field's tolerated extras, the source
-  captured by `...` — is covered by no edit and survives byte-for-byte.
+  end. Everything else is covered by no edit and survives.
 
-- **Whole-span fallback.** When a match has no `spans` (partial/field), or as
-  the natural degenerate case of a whole-construct strict rewrite (one hunk,
-  every token `-`, so the edit spans the whole match), behaviour equals the
-  former whole-span model. The existing transform suite is the
-  behaviour-preservation check; only one case changed (`removal within context`
-  now keeps the surrounding function instead of rebuilding it from the
-  pattern).
+- **Whole-span fallback.** When a match has no `spans` (search only, never the
+  transform path now), or as the natural degenerate case of a whole-construct
+  rewrite (one hunk, every token `-`, so the edit spans the whole match),
+  behaviour equals the former whole-span model. The existing transform suite is
+  the behaviour-preservation check; only one case changed (`removal within
+  context` now keeps the surrounding function instead of rebuilding it).
 
-**Whitespace at edit boundaries.** A pure deletion that removes a whole line
-(only indentation before the span, a newline after) absorbs that indentation
-and the trailing newline, so the line vanishes cleanly
-(`line_delete_cleanup`). A *replacement* is in-place: the `-` span is the bare
-token run (no indentation), so the `+` content should likewise omit structural
-indentation — the source's existing indentation stays put and prefixes the new
-text. Mid-line deletions keep the tight span.
+**Whitespace at edit boundaries.** Deletion cleanup depends on context.
+*Strict* deletions are line-oriented (`line_cleanup`): a whole-line deletion
+absorbs its indentation and trailing newline. *Partial/field* deletions are
+element-oriented (`element_cleanup`): they absorb an adjacent list separator
+(`,`/`;`) so it doesn't dangle (`{ , size }`), or close a whitespace gap, then
+fall back to line cleanup. The split matters because in strict code a `;` is a
+statement terminator (handled by line cleanup), not a list separator. A
+*replacement* is in-place: the `-` span is the bare token run, so the `+`
+content should omit structural indentation — the source's indentation stays put
+and prefixes the new text.
 
-**What this fixes.** Surprise §1.2 (strict `...` emitting literal `...` and
-dropping captured siblings) is gone — `...` is matched-and-not-edited, and only
-the `-` line is touched. The headline JSX-attribute and statement-removal cases
-work via the strict `...` idiom:
+**What this fixes.** All three §1 surprises are gone:
+
+- §1.2 — strict `...` no longer emits literal `...`; only the `-` line is
+  touched, captured siblings preserved.
+- §1.1 — a partial `-` on one element removes just it (with its separator),
+  keeping the tolerated extras.
+- §1.3 — a field `-`/`+` rewrites the part it marks and keeps the
+  decorators/annotations/modifiers/return types it ignored for matching.
 
 ```
  <Foo
-   ...
 -   bar={$x}
-   ...
  />
 ```
 
-removes only `bar={$x}`, preserving the other attributes.
+in partial mode removes only `bar={$x}` from a `<Foo bar={x} baz={y} />`,
+keeping `baz`.
 
-**Remaining (follow-up).** Partial (§1.1) and field (§1.3) still rebuild the
-whole matched span and so still drop tolerated extras / ignored fields — hence
-the surviving warning. Making them surgical needs per-token (or per-element)
-span recording threaded through `match_partial_at` / `match_field_at`, which
-their set/subsequence drivers don't yet surface. Once they do, `surgical_edits`
-applies unchanged and the `pattern_warnings` footgun can be re-scoped to the
-genuinely-destructive whole-container case (per §4).
+**The warning, re-scoped.** `pattern_warnings` no longer fires for a
+partial/field sub-part edit (it is surgical now). It fires only when a
+partial/field section marks the **whole container** — a body with no context
+line, so every matched token is removed and the edit spans the whole match,
+dropping the tolerated extras / ignored fields. That is the honest reading of
+"replace the whole thing", but an easy mistake in modes built to tolerate/
+ignore content, so it warns rather than errors.

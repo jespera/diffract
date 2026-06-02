@@ -414,7 +414,7 @@ module Make (C : Cursor.S) = struct
     | _ -> None
 
   let match_prefix ?(initial_bindings = []) ?(ignore_node_type = false)
-      ?(descend = false) pattern cursor =
+      ?(descend = false) ?(spans = None) pattern cursor =
     match pattern with
     | [] ->
         (* Empty pattern can't be a valid prefix-match of a non-empty
@@ -428,7 +428,7 @@ module Make (C : Cursor.S) = struct
     | _ -> (
         match
           drive ~mode:Drive_match_prefix ~initial_bindings ~ignore_node_type
-            ~descend pattern cursor
+            ~descend ~spans pattern cursor
         with
         | Drive_source_exhausted (remaining, c, b) -> Some (remaining, c, b)
         | Drive_pattern_exhausted (c, b) ->
@@ -533,38 +533,63 @@ module Make (C : Cursor.S) = struct
      children. Typical patterns with distinct leading concrete tokens
      per element have effectively linear behaviour because non-matching
      children fail [match_prefix] immediately on the first token. *)
-  let match_set_at ?(initial_bindings = []) pattern cursor =
+  let match_set_at ?(initial_bindings = []) ?(spans = None) ?(offset = 0)
+      pattern cursor =
     let children = C.named_children cursor in
     let separator = infer_separator cursor children in
-    let rec consume remaining bindings unused =
+    (* Record one element's per-token source spans into the global [spans]
+       array (indexed by the full pattern) at [base]. Only called on the
+       committed path, so abandoned backtracking trials never pollute it. *)
+    let record_element base local consumed =
+      match spans with
+      | Some g ->
+          let n = Array.length g in
+          for k = 0 to consumed - 1 do
+            if base + k < n then g.(base + k) <- local.(k)
+          done
+      | None -> ()
+    in
+    let rec consume remaining bindings unused base =
       if remaining = [] then Some (cursor, bindings)
       else
         let rec try_each tried = function
           | [] -> None
           | child :: rest -> (
               let probe = C.clone child in
+              let local = Array.make (List.length remaining) (-1, -1) in
               (* [descend]: each element must fully cover one child, so a
                  leading wildcard descends into the child (matching e.g. a
                  key) rather than greedily swallowing the whole child and
                  leaking the rest of the element to the next child. *)
               match
-                match_prefix ~initial_bindings:bindings ~descend:true remaining
-                  probe
+                match_prefix ~initial_bindings:bindings ~descend:true
+                  ~spans:(Some local) remaining probe
               with
               | None -> try_each (child :: tried) rest
               | Some (after_match, _, new_bindings) -> (
                   (* [new_bindings] already includes [bindings] (the seed)
                      plus any bindings recorded during this match_prefix
                      call — replace the accumulator with it directly. *)
+                  let consumed =
+                    List.length remaining - List.length after_match
+                  in
                   let after_strip = strip_separator separator after_match in
+                  let stripped =
+                    List.length after_match - List.length after_strip
+                  in
                   let new_unused = List.rev_append tried rest in
-                  match consume after_strip new_bindings new_unused with
-                  | Some _ as result -> result
+                  match
+                    consume after_strip new_bindings new_unused
+                      (base + consumed + stripped)
+                  with
+                  | Some _ as result ->
+                      record_element base local consumed;
+                      result
                   | None -> try_each (child :: tried) rest))
         in
         try_each [] unused
     in
-    consume pattern initial_bindings children
+    consume pattern initial_bindings children offset
 
   (* Partial-mode entry point with source-driven delimiter handling.
 
@@ -583,7 +608,7 @@ module Make (C : Cursor.S) = struct
      declarations whose children are positional, etc.) yield [None]
      immediately and never spuriously collapse the pattern into a single
      child as a strict subtree match. *)
-  let match_partial_at ?(initial_bindings = []) pattern cursor =
+  let match_partial_at ?(initial_bindings = []) ?(spans = None) pattern cursor =
     let lead = C.leading_anonymous_leaves cursor in
     let tail = C.trailing_anonymous_leaves cursor in
     let n_lead = List.length lead in
@@ -596,8 +621,13 @@ module Make (C : Cursor.S) = struct
         let front, rest = split_at_n n_lead pattern in
         let middle, back = split_at_n (n_pat - n_lead - n_tail) rest in
         if not (strict_leaf_match front lead) then None
-        else if not (strict_leaf_match back tail) then None
-        else match_set_at ~initial_bindings middle cursor
+        else if not (strict_leaf_match back tail) then
+          None
+          (* The leading/trailing delimiter tokens (front/back) are matched
+             positionally against anonymous leaves and left without spans; only
+             the middle's set-matched elements record source spans, at their
+             global offset [n_lead]. *)
+        else match_set_at ~initial_bindings ~spans ~offset:n_lead middle cursor
 
   (* Field-mode entry point: align an ordered pattern leaf-stream to a
      subsequence of a node's named children.
@@ -644,22 +674,41 @@ module Make (C : Cursor.S) = struct
      Returns [None] when the pattern cannot be fully consumed. The cursor is
      returned unchanged at the node on success, mirroring {!match_partial_at}. *)
   let match_field_at ?(initial_bindings = []) ?(ignore_node_type = false)
-      pattern cursor =
+      ?(spans = None) pattern cursor =
     let children = C.all_children cursor in
-    let rec go remaining children bindings =
+    let record base local consumed =
+      match spans with
+      | Some g ->
+          let n = Array.length g in
+          for k = 0 to consumed - 1 do
+            if base + k < n then g.(base + k) <- local.(k)
+          done
+      | None -> ()
+    in
+    (* [base] is the global pattern index of [remaining]'s head — advances only
+       when a child is MATCHed (consumes pattern), never on a SKIP. *)
+    let rec go remaining children bindings base =
       match remaining with
       | [] -> Some (cursor, bindings)
       | _ -> (
           match children with
           | [] -> None
           | child :: rest -> (
+              let local = Array.make (List.length remaining) (-1, -1) in
               let matched =
                 match
                   match_prefix ~initial_bindings:bindings ~ignore_node_type
-                    remaining (C.clone child)
+                    ~spans:(Some local) remaining (C.clone child)
                 with
-                | Some (remaining', _, bindings') ->
-                    go remaining' rest bindings'
+                | Some (remaining', _, bindings') -> (
+                    let consumed =
+                      List.length remaining - List.length remaining'
+                    in
+                    match go remaining' rest bindings' (base + consumed) with
+                    | Some _ as r ->
+                        record base local consumed;
+                        r
+                    | None -> None)
                 | None -> None
               in
               match matched with
@@ -668,9 +717,9 @@ module Make (C : Cursor.S) = struct
                  anonymous leaf the pattern doesn't mention) and try the
                  next. A required child the pattern does address can't be
                  skipped away — its pattern token would find no later home. *)
-              | None -> go remaining rest bindings))
+              | None -> go remaining rest bindings base))
     in
-    go pattern children initial_bindings
+    go pattern children initial_bindings 0
 
   type match_result = {
     start_byte : int;
@@ -806,7 +855,10 @@ module Make (C : Cursor.S) = struct
       if !exhausted then Seq.Nil
       else
         let attempt = C.clone !cursor in
-        match match_partial_at ~initial_bindings pattern attempt with
+        let spans = Array.make (max 1 (List.length pattern)) (-1, -1) in
+        match
+          match_partial_at ~initial_bindings ~spans:(Some spans) pattern attempt
+        with
         | Some (matched_cursor, bindings) ->
             let start_byte, end_byte = C.byte_range matched_cursor in
             let is_dup = List.mem (start_byte, end_byte) !seen in
@@ -814,7 +866,7 @@ module Make (C : Cursor.S) = struct
             if is_dup then next ()
             else begin
               seen := (start_byte, end_byte) :: !seen;
-              Seq.Cons ({ start_byte; end_byte; bindings; spans = [||] }, next)
+              Seq.Cons ({ start_byte; end_byte; bindings; spans }, next)
             end
         | None ->
             if not (advance_one !cursor) then begin
@@ -844,7 +896,10 @@ module Make (C : Cursor.S) = struct
       if !exhausted then Seq.Nil
       else
         let attempt = C.clone !cursor in
-        match match_field_at ~initial_bindings pattern attempt with
+        let spans = Array.make (max 1 (List.length pattern)) (-1, -1) in
+        match
+          match_field_at ~initial_bindings ~spans:(Some spans) pattern attempt
+        with
         | Some (matched_cursor, bindings) ->
             let start_byte, end_byte = C.byte_range matched_cursor in
             let is_dup = List.mem (start_byte, end_byte) !seen in
@@ -852,7 +907,7 @@ module Make (C : Cursor.S) = struct
             if is_dup then next ()
             else begin
               seen := (start_byte, end_byte) :: !seen;
-              Seq.Cons ({ start_byte; end_byte; bindings; spans = [||] }, next)
+              Seq.Cons ({ start_byte; end_byte; bindings; spans }, next)
             end
         | None ->
             if not (advance_one !cursor) then begin
@@ -882,10 +937,14 @@ module Make (C : Cursor.S) = struct
       if !exhausted then Seq.Nil
       else
         let attempt = C.clone !cursor in
+        let spans = ref [||] in
         let result =
           match tokens_for attempt with
           | [] -> None
-          | pattern -> match_field_at ~initial_bindings pattern attempt
+          | pattern ->
+              let s = Array.make (max 1 (List.length pattern)) (-1, -1) in
+              spans := s;
+              match_field_at ~initial_bindings ~spans:(Some s) pattern attempt
         in
         match result with
         | Some (matched_cursor, bindings) ->
@@ -895,7 +954,7 @@ module Make (C : Cursor.S) = struct
             if is_dup then next ()
             else begin
               seen := (start_byte, end_byte) :: !seen;
-              Seq.Cons ({ start_byte; end_byte; bindings; spans = [||] }, next)
+              Seq.Cons ({ start_byte; end_byte; bindings; spans = !spans }, next)
             end
         | None ->
             if not (advance_one !cursor) then begin
