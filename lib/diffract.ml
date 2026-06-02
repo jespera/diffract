@@ -3,9 +3,14 @@
 module Bindings = Tree_sitter_bindings
 module Context = Context
 module Tree = Tree
-module Match = Match
 module Tree_diff = Tree_diff
 module Grammar_metadata = Grammar_metadata
+module Cursor = Cursor
+module Stmatch = Stmatch
+module Tree_sitter_cursor = Tree_sitter_cursor
+module Tokenize = Tokenize
+module Matcher = Matcher
+module Text_diff = Text_diff
 
 (** Parse source code and return the tree representation *)
 let parse_tree ~ctx ~language source = Tree.parse ~ctx ~language source

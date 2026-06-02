@@ -229,11 +229,11 @@ let align_children mapping ~before_source ~after_source
     if ai >= 0 then begin
       (* Emit any unmatched after-children before this anchor *)
       while !next_after < ai do
-        if not after_used.(!next_after) then begin
+        if not after_used.(!next_after) then
           (* This after-child was claimed by similarity match, skip *)
-          if not (Array.exists (fun a -> a = !next_after) before_anchor) then
-            result := Added { node = after_arr.(!next_after) } :: !result
-        end;
+          begin if not (Array.exists (fun a -> a = !next_after) before_anchor)
+          then result := Added { node = after_arr.(!next_after) } :: !result
+          end;
         incr next_after
       done;
       (* Emit the matched pair *)

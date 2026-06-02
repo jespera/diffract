@@ -45,6 +45,7 @@
 ; Embed each grammar's node-types.json as a string constant in
 ; embedded_metadata.ml. Generated at build time so the JSON files
 ; remain the single source of truth in grammars/metadata/.
+
 (rule
  (target embedded_metadata.ml)
  (deps
@@ -54,7 +55,8 @@
   (:php ../grammars/metadata/php.node-types.json)
   (:scala ../grammars/metadata/scala.node-types.json))
  (action
-  (with-stdout-to %{target}
+  (with-stdout-to
+   %{target}
    (progn
     (echo "(* Auto-generated. Do not edit. See grammars/metadata/. *)\n")
     (echo "let typescript = {grammar_metadata|")
@@ -84,6 +86,7 @@
 ; embedded_grammar_json.ml. Same trick as embedded_metadata.ml but
 ; for the grammar rules (extras, externals, string and comment
 ; definitions) used to auto-derive the DEL definition.
+
 (rule
  (target embedded_grammar_json.ml)
  (deps
@@ -93,7 +96,8 @@
   (:php ../grammars/metadata/php.grammar.json)
   (:scala ../grammars/metadata/scala.grammar.json))
  (action
-  (with-stdout-to %{target}
+  (with-stdout-to
+   %{target}
    (progn
     (echo "(* Auto-generated. Do not edit. See grammars/metadata/. *)\n")
     (echo "let typescript = {grammar_json|")

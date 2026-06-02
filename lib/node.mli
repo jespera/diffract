@@ -33,10 +33,10 @@ val is_named : t -> bool
     punctuation). *)
 
 val is_extra : t -> bool
-(** [is_extra node] returns true if the node was generated from one of
-    the grammar's [extras] rules — typically comments and (rarely)
-    whitespace tokens. Such nodes can appear anywhere between tokens
-    without being part of the syntactic structure. *)
+(** [is_extra node] returns true if the node was generated from one of the
+    grammar's [extras] rules — typically comments and (rarely) whitespace
+    tokens. Such nodes can appear anywhere between tokens without being part of
+    the syntactic structure. *)
 
 val is_null : t -> bool
 (** [is_null node] returns true if this is a null/missing node. *)

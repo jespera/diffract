@@ -17,11 +17,11 @@ dune build
 # Run all tests
 dune test
 
-# Run specific test group (e.g., just Match tests)
-dune exec tests/test_runner.exe -- test Match
+# Run specific test group (e.g., just the end-to-end Matcher tests)
+dune exec tests/test_runner.exe -- test Matcher
 
 # Run a single named test
-dune exec tests/test_runner.exe -- test Match "simple expression match"
+dune exec tests/test_runner.exe -- test Matcher "find calls"
 ```
 
 ## Project Overview
@@ -39,14 +39,26 @@ diffract is an OCaml library and CLI for parsing source files with tree-sitter a
 - `tree_sitter_helper.c` - C helper layer wrapping TSNode in OCaml custom blocks (libffi can't handle 32-byte structs by value)
 - `node.ml` - FFI-based tree traversal (internal, used during parsing)
 - `languages.ml` - Static grammar registry (language name → `external` C binding)
-- `match.ml` - Index-based pattern matching with concrete syntax
-- `pattern.ml` - Pattern matching DSL
+
+**Matcher (`lib/`)** — the tokenizer-based matcher (the only matcher):
+- `tokenize.ml` - Parse a pattern body with tree-sitter as a *lexer*, keeping leaves; produces a `pattern_token` stream (sigil-free metavars, ellipsis, fragments)
+- `cursor.ml` - Abstract tree-cursor interface (`Cursor.S`) the matching engine runs over
+- `tree_sitter_cursor.ml` - `Cursor.S` over a real tree-sitter parse
+- `stmatch.ml` - The matching engine: strict/partial/field leaf-level matching with backtracking (`Make` functor over a `Cursor.S`)
+- `matcher.ml` - End-to-end: preamble parse → tokenize → match → transform; the public `find`/`transform`/`debug_tokens`/`pattern_warnings` API
+- `text_diff.ml` - Line-based unified diff (for `apply`'s output)
 
 **Tree-sitter Integration Flow:**
 1. C helper layer wraps TSNode/TSTree in OCaml custom blocks with finalizers
 2. ctypes-foreign binds to libtree-sitter and C helpers
 3. `languages.ml` dispatches to grammar language functions statically linked into the binary
 4. `tree.ml` converts FFI nodes to pure OCaml representation once during parsing
+
+**Matching Flow:** a pattern's preamble (`@@` sections) is parsed, its body is
+tokenized into a `(text, node_type)` leaf stream, and `stmatch` walks the
+source tree (via a `Cursor.S`) matching those tokens — comparing leaves on
+both text and node type. Metavars are sigil-free (a leaf is a metavar iff its
+text equals a declared name). See `docs/universal-tokenizer.md`.
 
 ## Adding a New Language
 
@@ -120,61 +132,50 @@ function test() {
 Matching modes (required - must specify one):
 - `match: strict` - Exact positional matching (no extra children allowed, ordered). Use for function calls, arrays.
 - `match: partial` - Subset matching (ignores extra children, unordered). Use for object literals, JSX attributes.
-- `match: field` - Field-based matching (matches children by tree-sitter field name instead of position, ignores extra source fields not in pattern, preserves order within each field). Use for definitions with decorators/attributes.
+- `match: field` - Declaration matching that ignores optional fields the pattern omits (decorators, annotations, modifier groups, return types). The pattern's leaf stream is aligned to a *subsequence* of the declaration node's children: a child the pattern addresses is matched in full, a child it omits is skipped. Use for decorated/annotated definitions. (No per-language config — see `docs/field-mode.md`.) **Transform caveat:** a field (or partial) section that replaces the whole matched span drops the very fields it ignores; the CLI warns. To edit part of a declaration while keeping the rest, use a `foreach`/`on` section.
 
 ### Conjunctive sibling sections
 
 A pattern file with multiple `@@` sections and **no** `on $VAR` directives is a
 conjunctive rule: every section must find at least one match for any transforms
-to fire. If any section finds nothing, the source is returned unchanged. Each
-section has its own independent metavar scope. A section without `-`/`+` lines
-acts as a pure guard (must match but produces no edits). Use
-`Match.transform_nested` to apply conjunctive patterns.
+to fire. If any section finds nothing, the source is returned unchanged.
+Metavars of the same name across sections refer to the same binding (threaded
+in declaration order); a section without `-`/`+` lines acts as a pure guard
+(must match but produces no edits). `Matcher.find`/`Matcher.transform` handle
+multi-section patterns directly.
 
-### Expansion lines
+### Sequence rendering: `join` and `foreach`
 
-A replacement line may use a separator character as its prefix instead of `+`,
-followed by a space. The prefix character IS the join string between expanded
-elements, except `~` which stands for newline. The line must reference at least
-one `sequence` metavar.
+When a `sequence` metavar is referenced inside a `+` replacement template, its
+elements are rendered and substituted in place. Two independent knobs control
+this:
 
-Any punctuation character that is not a reserved spatch role marker (`-`, `+`,
-space, tab) and not an identifier character (`$`, letters, digits, `_`) is valid.
-Common conventions:
+- **`join $VAR by "<sep>"`** (a preamble directive): the string placed between
+  rendered elements. `<sep>` interprets `\n`, `\t`, `\\`. The default (no
+  directive) is the empty string, so elements are concatenated.
+- **`foreach $VAR`** (a following `@@` section): a per-element transform. The
+  section matches one element of `$VAR` and its `-`/`+` lines rewrite it; the
+  rewritten elements are then joined. Without a `foreach`, elements render as
+  their source text (identity).
 
-```
-~   $VAR      — expand $VAR, joining with newline (~ stands for \n)
-,   $VAR      — expand $VAR, joining with ","
-;   $VAR      — expand $VAR, joining with ";"
-|   $VAR      — expand $VAR, joining with "|"
-```
+The sequence metavar must be declared `metavar $VAR: sequence` and appear on the
+match side. Everything goes through `Matcher.transform`.
 
-Other characters like `!`, `&`, `.` also work and are used literally as the separator.
-
-The sequence variable(s) must be declared as `metavar $VAR: sequence` in the preamble.
-
-**Verbatim expansion** (no following section): elements are joined with the specified separator and substituted directly. Use `Match.transform` as normal.
-
-**Transform expansion** (with following `@@` section): if a subsequent section declares `on $VAR` matching an expansion line's variable, that section's transform is applied to each element and the results are joined. Use `Match.transform_nested` to enable this.
-
-#### Example — comma-join (verbatim expansion)
+#### Example — identity render with a join separator
 
 ```
 @@
 match: strict
-metavar $BEFORE: sequence
-metavar $AFTER: sequence
+metavar $ELEMS: sequence
+join $ELEMS by " && "
 @@
-- import { $BEFORE Stack $AFTER } from "@mui/system";
-+ import {
-,   $BEFORE $AFTER
-+ } from "@mui/system";
-+ import { Stack } from "@mui/not.system";
+- all([$ELEMS])
++ ($ELEMS)
 ```
 
-`$BEFORE` and `$AFTER` elements are gathered and comma-joined.
+`all([x, y, z])` becomes `(x && y && z)`.
 
-#### Example — method chain (transform expansion, requires `transform_nested`)
+#### Example — method chain (`foreach` per-element transform)
 
 ```
 @@
@@ -182,15 +183,11 @@ match: strict
 metavar $TAG: single
 metavar $PROPS: sequence
 @@
-- matchStringExhaustive($TAG, {
--   $PROPS
-- });
-+ match($TAG)
-~   $PROPS
-+   .exhaustive();
+- matchExhaustive($TAG, { $PROPS });
++ match($TAG)$PROPS.exhaustive();
 @@
-match: field
-on $PROPS
+match: strict
+foreach $PROPS
 metavar $KEY: single
 metavar $VAL: single
 @@
@@ -198,11 +195,11 @@ metavar $VAL: single
 + .with("$KEY", $VAL)
 ```
 
-The inner section's transform (`- $KEY: $VAL` / `+ .with("$KEY", $VAL)`) is applied to each element node in `$PROPS`; results are joined with newline.
+`matchExhaustive(tag, { a: f, b: g });` becomes
+`match(tag).with("a", f).with("b", g).exhaustive();` — the `foreach` section
+rewrites each property, and `$PROPS` in the outer template is replaced by the
+joined results (default empty join here).
 
-#### Constraints
-
-- Expansion prefix lines are valid only in the replacement side (like `+` lines).
-- Expansion vars must be declared as `sequence` metavars and must appear in the match side.
-- Inner sections used for transform expansion cannot themselves contain expansion lines.
-- `on $VAR` in an inner section targets an expansion slot when the var matches; this is distinct from context-nesting use of `on $VAR`.
+A `foreach` element with an empty replacement (a `-` line, no `+`) deletes the
+element and cleans up the adjacent separator — e.g. removing a deprecated
+property or unused argument from a list.

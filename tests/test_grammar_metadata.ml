@@ -1,31 +1,28 @@
 (** Smoke tests for the [Grammar_metadata] pipeline.
 
-    These verify that the build pipeline successfully extracts and
-    parses each grammar's [node-types.json], and that the structural
-    criterion picks up the wrapper types we expect. They do not
-    exercise any consumer of the metadata — that lives in whatever
-    matcher architecture eventually consumes the pipeline. *)
+    These verify that the build pipeline successfully extracts and parses each
+    grammar's [node-types.json], and that the structural criterion picks up the
+    wrapper types we expect. They do not exercise any consumer of the metadata —
+    that lives in whatever matcher architecture eventually consumes the
+    pipeline. *)
 
 open Diffract
 
-(** Every registered language should expose a non-empty wrapper set;
-    the metadata files are versioned and the parser should always
-    succeed. A failure here means the build pipeline didn't deliver
-    a usable [node-types.json], or [Grammar_metadata]'s extraction
-    rejected everything. *)
+(** Every registered language should expose a non-empty wrapper set; the
+    metadata files are versioned and the parser should always succeed. A failure
+    here means the build pipeline didn't deliver a usable [node-types.json], or
+    [Grammar_metadata]'s extraction rejected everything. *)
 let test_every_language_has_wrappers () =
   List.iter
     (fun lang ->
       let wrappers = Grammar_metadata.list_shape_wrappers ~language:lang in
       Alcotest.(check bool)
         (Printf.sprintf "%s: at least one wrapper extracted" lang)
-        true
-        (wrappers <> []))
+        true (wrappers <> []))
     (Grammar_metadata.all_languages ())
 
-(** The structural criterion should pick out file-level and list
-    container wrappers we expect to be present in every grammar
-    that has them. *)
+(** The structural criterion should pick out file-level and list container
+    wrappers we expect to be present in every grammar that has them. *)
 let test_known_wrappers_present () =
   let cases =
     [
@@ -45,10 +42,9 @@ let test_known_wrappers_present () =
         (Grammar_metadata.is_list_shape_wrapper ~language:lang ~node_type:t))
     cases
 
-(** Structured nodes (those that carry meaning beyond a container
-    role) should not be flagged as wrappers. We check a couple
-    obvious cases — these have field-named children, which excludes
-    them by the criterion. *)
+(** Structured nodes (those that carry meaning beyond a container role) should
+    not be flagged as wrappers. We check a couple obvious cases — these have
+    field-named children, which excludes them by the criterion. *)
 let test_structured_nodes_not_wrappers () =
   let cases =
     [
@@ -66,12 +62,10 @@ let test_structured_nodes_not_wrappers () =
         (Grammar_metadata.is_list_shape_wrapper ~language:lang ~node_type:t))
     cases
 
-(** Unknown languages return an empty wrapper list — the runtime
-    should degrade gracefully rather than crash on a typo. *)
+(** Unknown languages return an empty wrapper list — the runtime should degrade
+    gracefully rather than crash on a typo. *)
 let test_unknown_language_empty () =
-  let wrappers =
-    Grammar_metadata.list_shape_wrappers ~language:"esperanto"
-  in
+  let wrappers = Grammar_metadata.list_shape_wrappers ~language:"esperanto" in
   Alcotest.(check (list string))
     "unknown language returns empty wrapper list" [] wrappers
 
@@ -88,8 +82,7 @@ let test_brackets_per_language () =
       let def = Grammar_metadata.del_definition ~language:lang in
       Alcotest.(check bool)
         (Printf.sprintf "%s: has bracket pairs" lang)
-        true
-        (def.bracket_pairs <> []);
+        true (def.bracket_pairs <> []);
       Alcotest.(check bool)
         (Printf.sprintf "%s: includes (,)" lang)
         true
@@ -104,8 +97,8 @@ let test_brackets_per_language () =
         (List.mem ("{", "}") def.bracket_pairs))
     (Grammar_metadata.all_languages ())
 
-(** Languages with generic syntax (TypeScript, Kotlin) get <,> in
-    their bracket pairs; PHP and Scala don't. *)
+(** Languages with generic syntax (TypeScript, Kotlin) get <,> in their bracket
+    pairs; PHP and Scala don't. *)
 let test_angle_brackets_present_only_where_used () =
   let has_angle lang =
     List.mem ("<", ">")
@@ -117,17 +110,16 @@ let test_angle_brackets_present_only_where_used () =
   Alcotest.(check bool) "php: has <,>" false (has_angle "php");
   Alcotest.(check bool) "scala: has <,>" false (has_angle "scala")
 
-(** Each language should expose at least one string definition,
-    coming either from auto-derivation (TypeScript, TSX) or from
-    per-language extensions (Kotlin, PHP, Scala). *)
+(** Each language should expose at least one string definition, coming either
+    from auto-derivation (TypeScript, TSX) or from per-language extensions
+    (Kotlin, PHP, Scala). *)
 let test_strings_per_language () =
   List.iter
     (fun lang ->
       let def = Grammar_metadata.del_definition ~language:lang in
       Alcotest.(check bool)
         (Printf.sprintf "%s: has at least one string definition" lang)
-        true
-        (def.string_defs <> []))
+        true (def.string_defs <> []))
     (Grammar_metadata.all_languages ())
 
 (** Spot-check specific string definitions per language. *)
@@ -178,8 +170,8 @@ let test_known_strings_present () =
     "php: has ' (via extension)" true
     (has_string ~language:"php" ~opener:"'")
 
-(** Line comments. // for all C-family languages we support; PHP
-    additionally has # via extension. *)
+(** Line comments. // for all C-family languages we support; PHP additionally
+    has # via extension. *)
 let test_line_comments () =
   let has lang marker =
     List.mem marker
@@ -191,16 +183,14 @@ let test_line_comments () =
   Alcotest.(check bool) "php: # (via extension)" true (has "php" "#");
   Alcotest.(check bool) "scala: //" true (has "scala" "//")
 
-(** Block comments. /* ... */ for all C-family languages.
-    Kotlin's is from extension (multiline_comment external). *)
+(** Block comments. /* ... */ for all C-family languages. Kotlin's is from
+    extension (multiline_comment external). *)
 let test_block_comments () =
   let has lang pair =
     List.mem pair
       (Grammar_metadata.del_definition ~language:lang).block_comments
   in
-  Alcotest.(check bool)
-    "typescript: /* */" true
-    (has "typescript" ("/*", "*/"));
+  Alcotest.(check bool) "typescript: /* */" true (has "typescript" ("/*", "*/"));
   Alcotest.(check bool)
     "kotlin: /* */ (via extension)" true
     (has "kotlin" ("/*", "*/"));
@@ -215,9 +205,7 @@ let test_block_comments () =
    two-dollar string as that rather than as a single dollar
    followed by a one-dollar string. *)
 let test_kotlin_string_ordering_longest_first () =
-  let strs =
-    (Grammar_metadata.del_definition ~language:"kotlin").string_defs
-  in
+  let strs = (Grammar_metadata.del_definition ~language:"kotlin").string_defs in
   let openers =
     List.map (fun (s : Grammar_metadata.string_def) -> s.opener) strs
   in
@@ -261,14 +249,11 @@ let tests =
       test_structured_nodes_not_wrappers;
     Alcotest.test_case "unknown language returns empty" `Quick
       test_unknown_language_empty;
-    Alcotest.test_case "brackets per language" `Quick
-      test_brackets_per_language;
+    Alcotest.test_case "brackets per language" `Quick test_brackets_per_language;
     Alcotest.test_case "angle brackets only where used" `Quick
       test_angle_brackets_present_only_where_used;
-    Alcotest.test_case "strings per language" `Quick
-      test_strings_per_language;
-    Alcotest.test_case "known strings present" `Quick
-      test_known_strings_present;
+    Alcotest.test_case "strings per language" `Quick test_strings_per_language;
+    Alcotest.test_case "known strings present" `Quick test_known_strings_present;
     Alcotest.test_case "line comments" `Quick test_line_comments;
     Alcotest.test_case "block comments" `Quick test_block_comments;
     Alcotest.test_case "kotlin string ordering longest-first" `Quick

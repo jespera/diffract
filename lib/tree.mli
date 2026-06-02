@@ -35,10 +35,10 @@ and 'kind t = {
   node_type : string;
   is_named : bool;
   is_extra : bool;
-      (** True iff tree-sitter generated this node from one of the
-          grammar's [extras] rules — typically comments and (rarely)
-          whitespace tokens. Such nodes can appear anywhere between
-          tokens without being part of the syntactic structure. *)
+      (** True iff tree-sitter generated this node from one of the grammar's
+          [extras] rules — typically comments and (rarely) whitespace tokens.
+          Such nodes can appear anywhere between tokens without being part of
+          the syntactic structure. *)
   hash : int;
   start_byte : int;
   end_byte : int;

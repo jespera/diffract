@@ -39,7 +39,7 @@ sudo pacman -S tree-sitter
 ### Build Steps
 
 ```bash
-# Install OCaml dependencies (add --with-test to include test/benchmark deps)
+# Install OCaml dependencies (add --with-test to include test deps)
 opam install . --deps-only --with-test
 
 # Build grammar libraries (TypeScript, Kotlin)
@@ -73,14 +73,17 @@ ocamlformat --check $(find lib -name '*.ml' -o -name '*.mli')
 diffract parse example.ts
 diffract parse --language kotlin example.kt
 
-# Match a pattern against a single file
-diffract match pattern.txt source.ts
+# Search for a pattern in a single file
+diffract search pattern.txt source.ts
 
 # Scan a directory for pattern matches
-diffract match --include '*.ts' pattern.txt src/
+diffract search --include '*.ts' pattern.txt src/
 
 # Scan with custom directory exclusions
-diffract match --include '*.ts' -e vendor -e dist pattern.txt src/
+diffract search --include '*.ts' -e vendor -e dist pattern.txt src/
+
+# Show how a pattern tokenizes (diagnose a pattern that matches nothing)
+diffract search --debug-tokens pattern.txt source.ts
 
 # Apply a semantic patch (preview diff)
 diffract apply patch.txt source.ts
@@ -128,29 +131,15 @@ Lines prefixed with `- ` are matched and removed; lines with `+ ` are inserted.
 Unprefixed (or space-prefixed) lines are context that appears in both match and replace.
 Metavariables carry values from the match side to the replace side.
 
-### Expansion transforms
+### Sequence rendering: `join` and `foreach`
 
-Use a separator character as a line prefix (instead of `+ `) to expand each
-element of a sequence metavar and join the results. Any punctuation character
-that isn't a reserved spatch marker or identifier character works; `~` stands
-for newline, every other character is used literally as the join string:
-
-**patch.txt** — move one export, comma-join the rest:
-```
-@@
-match: strict
-metavar $BEFORE: sequence
-metavar $AFTER: sequence
-@@
-- import { $BEFORE Stack $AFTER } from "@mui/system";
-+ import {
-,   $BEFORE $AFTER
-+ } from "@mui/system";
-+ import { Stack } from "@mui/not.system";
-```
+A `sequence` metavar referenced in a `+` template is rendered and substituted
+in place. Two knobs: a `join $VAR by "<sep>"` preamble directive sets the
+separator between elements (default: empty), and a following `foreach $VAR`
+section applies a per-element transform.
 
 For per-element transforms (e.g. converting a match expression to a method
-chain), use a two-section pattern and `Match.transform_nested`:
+chain), use a two-section pattern with `foreach`:
 
 ```
 @@
@@ -158,15 +147,11 @@ match: strict
 metavar $TAG: single
 metavar $CASES: sequence
 @@
-- matchStringExhaustive($TAG, {
--   $CASES
-- });
-+ match($TAG)
-~   $CASES
-+   .exhaustive();
+- matchExhaustive($TAG, { $CASES });
++ match($TAG)$CASES.exhaustive();
 @@
-match: field
-on $CASES
+match: strict
+foreach $CASES
 metavar $KEY: single
 metavar $VAL: single
 @@
@@ -176,19 +161,16 @@ metavar $VAL: single
 
 Applied to:
 ```typescript
-matchStringExhaustive(tag, { A: () => 1, B: () => 2 });
+matchExhaustive(tag, { A: () => 1, B: () => 2 });
 ```
 
 Produces:
 ```typescript
-match(tag)
-.with("A", () => 1)
-.with("B", () => 2)
-.exhaustive();
+match(tag).with("A", () => 1).with("B", () => 2).exhaustive();
 ```
 
 See [Transform documentation](docs/patterns.md#transforms-semantic-patches) for
-partial-mode, field-mode, and expansion transforms.
+partial-mode, field-mode, and sequence transforms.
 
 ### Directory Scanning
 
@@ -219,17 +201,17 @@ Found 2 match(es) in 2 file(s) (scanned 47 files)
 
 - [Pattern format and library API](docs/patterns.md)
 - [Architecture and internals](docs/internals.md)
-- [Testing and benchmarks](docs/benchmarks.md)
+- [Testing](docs/benchmarks.md)
+- [The universal tokenizer matcher](docs/universal-tokenizer.md)
 
-## Match Architecture (Quick Overview)
+## Matcher Architecture (Quick Overview)
 
 The matching pipeline is split into focused modules:
 
-- `match_parse` handles `@@` preambles, metavars, ellipsis expansion, and spatch line classification.
-- `match_engine` performs the structural matching (`strict`, `field`, `partial`) and sequence metavars (except in `partial` mode).
-- `match_search` drives traversal, nested pattern contexts, indexing, and formatting.
-- `match_transform` computes edits from match results and applies them to source text.
-- `match` exposes the public API surface.
+- `tokenize` parses a pattern body with tree-sitter as a *lexer*, keeping leaves as a `(text, node_type)` token stream (sigil-free metavars, ellipsis, fragments).
+- `cursor` / `tree_sitter_cursor` define and implement the tree-cursor interface the engine runs over.
+- `stmatch` is the matching engine: leaf-level `strict` / `partial` / `field` matching with backtracking, over any `Cursor.S`.
+- `matcher` ties it together — preamble parse → tokenize → match → transform — and exposes the public `find` / `transform` / `debug_tokens` / `pattern_warnings` API.
 
 ## License
 

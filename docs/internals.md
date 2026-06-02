@@ -11,11 +11,12 @@ diffract/
 │   ├── tree_sitter_helper.c         # C helper functions for tree-sitter
 │   ├── node.ml             # FFI-based tree traversal (internal)
 │   ├── languages.ml        # Static grammar registry
-│   ├── match.ml            # Public match API (facade)
-│   ├── match_types.ml      # Match-related types
-│   ├── match_parse.ml      # Pattern parsing and preamble handling
-│   ├── match_engine.ml     # Core matching algorithm
-│   └── match_search.ml     # Search, indexing, and formatting helpers
+│   ├── tokenize.ml         # Pattern body -> (text, node_type) token stream
+│   ├── cursor.ml           # Abstract tree-cursor interface (Cursor.S)
+│   ├── tree_sitter_cursor.ml  # Cursor.S over a real tree-sitter parse
+│   ├── stmatch.ml          # Matching engine (strict/partial/field, backtracking)
+│   ├── matcher.ml          # End-to-end find/transform; public matcher API
+│   └── text_diff.ml        # Line-based unified diff (for `apply`)
 ├── bin/                    # CLI
 │   └── main.ml
 ├── grammars/               # Tree-sitter grammars
@@ -139,20 +140,42 @@ val find_by_type : string -> t -> t list
 val traverse : (t -> unit) -> t -> unit
 ```
 
-## Pattern Matching (`lib/match_*.ml`)
+## Pattern Matching (`lib/tokenize.ml`, `lib/stmatch.ml`, `lib/matcher.ml`)
 
-Pattern matching is implemented as a pipeline:
+The matcher is **tokenizer-based**: it uses tree-sitter as a *lexer* for the
+pattern (keeping leaves, discarding hierarchy) and matches that leaf stream
+against the source tree, comparing leaves on both **text and node type**. This
+is what lets patterns be sub-syntactic *fragments* (e.g. `} else {`) that
+aren't valid standalone ASTs. See `docs/universal-tokenizer.md` for the full
+design.
 
-1. **Parse**: `match_parse.ml` parses the `@@` preamble, validates metavars,
-   expands ellipsis (`...`) into sequence metavars, and parses the pattern with
-   tree-sitter (`Tree.parse_as_pattern`).
-2. **Match**: `match_engine.ml` performs structural matching with three modes
-   (`strict`, `field`, `partial`) and supports sequence metavars (except in `partial` mode).
-3. **Search**: `match_search.ml` traverses trees, handles nested patterns, and
-   formats match results.
-4. **Transform**: `match_transform.ml` computes text edits from match results and
-   applies expansion slots for multi-section semantic patches.
-   `match.ml` re-exports the public API.
+The pipeline:
+
+1. **Preamble parse** (`matcher.ml`): split the `@@` sections, read each
+   section's `match:` mode, `metavar` declarations, `on`/`foreach` scope, and
+   `join` directives.
+2. **Tokenize** (`tokenize.ml`): parse the pattern body with the source
+   language's grammar and walk its leaves into a `pattern_token` stream —
+   `Concrete (text, node_type)`, `Subtree` (single metavar), or `Siblings`
+   (sequence metavar / ellipsis). Metavars are **sigil-free**: a leaf is a
+   metavar iff its text equals a declared name. ERROR nodes and zero-width
+   "missing" leaves are handled so fragments and terminator-less patterns work.
+3. **Match** (`stmatch.ml`): a `Make` functor over a `Cursor.S` runs the engine
+   — `strict` (exact, ordered), `partial` (subset of a bracketed container's
+   children), and `field` (align the pattern to a subsequence of a
+   declaration's children) — with backtracking.
+4. **Drive + transform** (`matcher.ml`): walk the source via
+   `Tree_sitter_cursor`, compose multi-section patterns (shared metavars,
+   `on`/`foreach` scoping), and apply the `-`/`+` replacement side
+   (substitution, `foreach`/`join` sequence rendering, element removal). The
+   matched span is replaced wholesale (`text_diff.ml` renders the diff for
+   `apply`).
+
+Context-sensitive node types (e.g. an object key being `property_identifier`
+vs a standalone `identifier`) are handled by **source-context tokenization**:
+the pattern fragment is re-tokenized spliced into its real surrounding source,
+then its own leaves are extracted by byte span — used for `foreach` concrete
+keys and field-mode concrete names.
 
 Example (public API):
 
@@ -160,117 +183,23 @@ Example (public API):
 let ctx = Diffract.Context.create () in
 let pattern_text = {|@@
 match: strict
-metavar $OBJ: single
-metavar $METHOD: single
+metavar $obj: single
+metavar $method: single
 @@
-$OBJ.$METHOD()
+$obj.$method()
 |} in
 
-let matches = Diffract.Match.find_matches
-  ~ctx
-  ~language:"typescript"
-  ~pattern_text
-  ~source_text:code in
-List.iter (fun m ->
-  Printf.printf "Match at line %d\n" (m.start_point.row + 1)
-) matches
-```
-
-## Index-Based Pattern Matching (`lib/match.ml`)
-
-When matching multiple patterns against the same source file, the naive approach traverses the entire AST once per pattern, resulting in O(n × k) complexity where n is the number of nodes and k is the number of patterns.
-
-The index-based approach builds a hash table mapping node types to node lists, then queries this index for each pattern:
-
-```
-Complexity comparison:
-  Traversal: O(n) per pattern = O(n × k) total
-  Indexed:   O(n) build + O(m) per pattern = O(n + k × m)
-  Where m = average candidates per pattern type (typically m << n)
-```
-
-### Data Structures
-
-```ocaml
-(** Index for fast node lookup by type *)
-type ast_index = {
-  by_type: (string, Tree.t list) Hashtbl.t;
-}
-```
-
-### Algorithm
-
-**Index Building (O(n)):**
-```
-build_index(root):
-  index = empty hashtable
-  traverse(root, node ->
-    type = node.type
-    index[type] = node :: index[type]
-  )
-  return index
-```
-
-**Indexed Matching:**
-```
-find_matches_with_index(index, pattern, source):
-  pattern_node = unwrap_pattern(pattern)  // Get actual pattern content
-
-  if pattern_node is metavar placeholder:
-    // Can't filter by type, fall back to full traversal
-    return find_matches_in_subtree(pattern, source)
-
-  // Query index for candidates
-  pattern_type = pattern_node.type
-  candidates = index[pattern_type]  // O(1) lookup
-
-  // Match only against candidates of the right type
-  return filter_map(candidates, node ->
-    match_node(pattern, node)  // Returns Some(bindings) or None
-  )
-```
-
-**Multi-Pattern Matching:**
-```
-find_matches_multi(language, patterns, source):
-  tree = parse(source)
-  index = build_index(tree.root)  // Built once
-
-  results = []
-  for i, pattern_text in patterns:
-    pattern = parse_pattern(pattern_text)
-    matches = find_matches_with_index(index, pattern, tree)
-    results.append((i, matches))
-
-  return results
-```
-
-### Usage
-
-```ocaml
-(* Match multiple patterns efficiently *)
-let patterns = [
-  {|@@
-match: strict
-metavar $msg: single
-@@
-console.log($msg)|};
-  {|@@
-match: strict
-metavar $msg: single
-@@
-console.error($msg)|};
-] in
-let results = Match.find_matches_multi ~language:"typescript" ~patterns ~source_text in
-(* Returns (pattern_index, match_result) pairs *)
-
-(* Or build index manually for custom workflows *)
-let tree = Tree.parse ~language:"typescript" source_text in
-let index = Match.build_index tree.root in
-(* Reuse index for multiple queries *)
-let pattern = Match.parse_pattern ~language:"typescript" pattern_text in
-let matches = Match.find_matches_with_index ~index ~pattern
-    ~source:tree.source ~source_root:tree.root
+let composites =
+  Diffract.Matcher.find ~ctx ~language:"typescript" ~pattern_text
+    ~source_text:code
+in
+List.iter
+  (fun (c : Diffract.Matcher.composite_match) ->
+    List.iter
+      (fun (r : Diffract.Matcher.M.match_result) ->
+        Printf.printf "match at byte %d\n" r.start_byte)
+      c.sections)
+  composites
 ```
 
 ## Adding a New Language

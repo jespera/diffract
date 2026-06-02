@@ -4,9 +4,14 @@ module Context = Context
 (** Re-export modules for convenient access *)
 
 module Tree = Tree
-module Match = Match
 module Tree_diff = Tree_diff
 module Grammar_metadata = Grammar_metadata
+module Cursor = Cursor
+module Stmatch = Stmatch
+module Tree_sitter_cursor = Tree_sitter_cursor
+module Tokenize = Tokenize
+module Matcher = Matcher
+module Text_diff = Text_diff
 
 (** {1 Parsing} *)
 

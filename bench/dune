@@ -1,0 +1,3 @@
+(executables
+ (names find_matches)
+ (libraries diffract unix))

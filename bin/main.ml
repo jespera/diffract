@@ -26,6 +26,26 @@ let in_place_flag =
   let doc = "Write changes directly to files instead of printing a diff." in
   Arg.(value & flag & info [ "in-place" ] ~doc)
 
+let debug_tokens_flag =
+  let doc =
+    "Print how the pattern tokenizes (per section, with declared metavars and \
+     any that are ABSENT) and exit, without searching or transforming. Use to \
+     diagnose a pattern that matches nothing."
+  in
+  Arg.(value & flag & info [ "debug-tokens" ] ~doc)
+
+(* Print the tokenized pattern for [--debug-tokens] and return [`Ok ()]. *)
+let print_debug_tokens ~ctx ~language ~pattern_text =
+  print_string (Diffract.Matcher.debug_tokens ~ctx ~language ~pattern_text);
+  `Ok ()
+
+(* Print any static pattern warnings to stderr (e.g. a partial/field section
+   that replaces the whole matched span, dropping tolerated/ignored content). *)
+let print_pattern_warnings ~pattern_text =
+  List.iter
+    (fun w -> Printf.eprintf "diffract: %s\n" w)
+    (Diffract.Matcher.pattern_warnings pattern_text)
+
 (* ── File utilities ─────────────────────────────────────────────────── *)
 
 let default_excludes =
@@ -59,98 +79,20 @@ let find_files ~pattern ~exclude_dirs root =
   in
   traverse [] root |> List.rev
 
-let format_file_match ~file_path ~source_text
-    (result : Diffract.Match.nested_match_result) =
-  let line = result.start_point.row + 1 in
-  let matched_text = Diffract.Tree.text source_text result.node in
-  let preview =
-    let text = String.map (fun c -> if c = '\n' then ' ' else c) matched_text in
-    if String.length text > 60 then String.sub text 0 57 ^ "..." else text
-  in
-  let buf = Buffer.create 256 in
-  Buffer.add_string buf (Printf.sprintf "%s:%d: %s\n" file_path line preview);
-  let bindings =
-    result.bindings
-    |> List.sort_uniq (fun (v1, _) (v2, _) -> String.compare v1 v2)
-  in
-  List.iter
-    (fun (var, value) ->
-      let value_preview =
-        let v = String.map (fun c -> if c = '\n' then ' ' else c) value in
-        if String.length v > 40 then String.sub v 0 37 ^ "..." else v
-      in
-      Buffer.add_string buf (Printf.sprintf "  %s = %s\n" var value_preview))
-    bindings;
-  Buffer.contents buf
-
-let match_file ~ctx ~language ~pattern_text file_path =
-  try
-    let source_text =
-      In_channel.with_open_text file_path In_channel.input_all
-    in
-    let result =
-      Diffract.Match.search ~ctx ~language ~pattern_text ~source_text
-    in
-    Ok (source_text, result)
-  with
-  | Failure msg | Sys_error msg -> Error msg
-
-let scan_directory_match ~ctx ~language ~pattern_text ~include_pattern
-    ~exclude_dirs dir_path =
-  let files = find_files ~pattern:include_pattern ~exclude_dirs dir_path in
-  let total_files = List.length files in
-  let total_matches = ref 0 in
-  let files_with_matches = ref 0 in
-  let files_with_parse_errors = ref [] in
-  let errors = ref [] in
-  List.iter
-    (fun file_path ->
-      match match_file ~ctx ~language ~pattern_text file_path with
-      | Error msg -> errors := (file_path, msg) :: !errors
-      | Ok (source_text, result) ->
-          if result.Diffract.Match.parse_error_count > 0 then
-            files_with_parse_errors :=
-              (file_path, result.parse_error_count) :: !files_with_parse_errors;
-          if result.matches <> [] then begin
-            incr files_with_matches;
-            total_matches := !total_matches + List.length result.matches;
-            List.iter
-              (fun m ->
-                print_string (format_file_match ~file_path ~source_text m);
-                print_newline ())
-              result.matches
-          end)
-    files;
-  Printf.printf "Found %d match(es) in %d file(s) (scanned %d files)\n"
-    !total_matches !files_with_matches total_files;
-  if !files_with_parse_errors <> [] then begin
-    Printf.printf "\nParse errors (%d files):\n"
-      (List.length !files_with_parse_errors);
-    List.iter
-      (fun (path, count) -> Printf.printf "  %s: %d error(s)\n" path count)
-      (List.rev !files_with_parse_errors)
-  end;
-  if !errors <> [] then begin
-    Printf.printf "\nErrors (%d files):\n" (List.length !errors);
-    List.iter
-      (fun (path, msg) -> Printf.printf "  %s: %s\n" path msg)
-      (List.rev !errors)
-  end
-
 let transform_file ~ctx ~language ~pattern_text ~in_place file_path =
   let source_text = In_channel.with_open_text file_path In_channel.input_all in
-  let result =
-    Diffract.Match.transform_nested ~ctx ~language ~pattern_text ~source_text
+  let transformed =
+    Diffract.Matcher.transform ~ctx ~language ~pattern_text ~source_text
   in
-  if result.edits = [] then (false, "")
+  if transformed = source_text then (false, "")
   else begin
     let diff =
-      Diffract.Match.generate_diff ~file_path ~original:result.original_source
-        ~transformed:result.transformed_source
+      Diffract.Text_diff.generate_diff ~file_path ~original:source_text
+        ~transformed
     in
     if in_place then
       Out_channel.with_open_text file_path (fun oc ->
-          output_string oc result.transformed_source);
+          output_string oc transformed);
     (true, diff)
   end
 
@@ -172,11 +114,11 @@ let scan_directory_apply ~ctx ~language ~pattern_text ~include_pattern
           incr total_edits;
           if not in_place then print_string diff
         end
-      with
-      | Failure msg | Sys_error msg -> errors := (file_path, msg) :: !errors)
+      with Failure msg | Sys_error msg ->
+        errors := (file_path, msg) :: !errors)
     files;
-  Printf.printf "Transformed %d file(s) (scanned %d files)\n"
-    !files_changed total_files;
+  Printf.printf "Transformed %d file(s) (scanned %d files)\n" !files_changed
+    total_files;
   if !errors <> [] then begin
     Printf.printf "\nErrors (%d files):\n" (List.length !errors);
     List.iter
@@ -229,15 +171,153 @@ let parse_cmd =
   let doc = "Display the concrete syntax tree of a source file." in
   let file =
     Arg.(
-      required & pos 0 (some file) None
+      required
+      & pos 0 (some file) None
       & info [] ~docv:"FILE" ~doc:"Source file to parse.")
   in
-  Cmd.v (Cmd.info "parse" ~doc)
-    Term.(ret (const run_parse $ file $ language))
+  Cmd.v (Cmd.info "parse" ~doc) Term.(ret (const run_parse $ file $ language))
 
-(* ── match subcommand ───────────────────────────────────────────────── *)
+(* ── search subcommand (tokenizer-based matcher) ────────────────────── *)
 
-let run_match pattern_path target language include_pattern exclude_patterns =
+let line_col_of_byte source byte =
+  let line = ref 1 and col = ref 1 in
+  let n = min byte (String.length source) in
+  for i = 0 to n - 1 do
+    if source.[i] = '\n' then begin
+      incr line;
+      col := 1
+    end
+    else incr col
+  done;
+  (!line, !col)
+
+let collapse ?(max = 60) s =
+  let s = String.map (fun c -> if c = '\n' then ' ' else c) s in
+  if String.length s > max then String.sub s 0 (max - 3) ^ "..." else s
+
+(* Format one section's match. If [section_prefix] is given (composite
+   case, 2+ sections), the location line is prefixed with e.g. "[§1] " and
+   binding lines are indented further. *)
+let format_section_match ?section_prefix ~file_path ~source_text
+    (r : Diffract.Matcher.M.match_result) =
+  let module M = Diffract.Matcher.M in
+  let module Cur = Diffract.Tree_sitter_cursor in
+  let line, col = line_col_of_byte source_text r.M.start_byte in
+  let matched =
+    String.sub source_text r.M.start_byte (r.M.end_byte - r.M.start_byte)
+  in
+  let buf = Buffer.create 128 in
+  let header_indent, binding_indent =
+    match section_prefix with
+    | None -> ("", "  ")
+    | Some p -> ("  " ^ p ^ " ", "       ")
+  in
+  Buffer.add_string buf
+    (Printf.sprintf "%s%s:%d:%d: %s\n" header_indent file_path line col
+       (collapse matched));
+  List.iter
+    (fun b ->
+      let name, value =
+        match b with
+        | M.Single { name; cursor } ->
+            let s, e = Cur.byte_range cursor in
+            (name, String.sub source_text s (e - s))
+        | M.Sequence { name; cursors } ->
+            let parts =
+              List.map
+                (fun c ->
+                  let s, e = Cur.byte_range c in
+                  String.sub source_text s (e - s))
+                cursors
+            in
+            (name, String.concat ", " parts)
+      in
+      Buffer.add_string buf
+        (Printf.sprintf "%s%s = %s\n" binding_indent name
+           (collapse ~max:40 value)))
+    r.M.bindings;
+  Buffer.contents buf
+
+(* Format one composite match. Single-section composites print in the
+   flat, headerless format (identical to pre-multi-section output);
+   multi-section composites print a "composite match" header and each
+   section labelled "[§N]". *)
+let format_search_match ~file_path ~source_text
+    (c : Diffract.Matcher.composite_match) =
+  match c.sections with
+  | [ single ] -> format_section_match ~file_path ~source_text single
+  | sections ->
+      let buf = Buffer.create 256 in
+      Buffer.add_string buf
+        (Printf.sprintf "%s: composite match\n" file_path);
+      List.iteri
+        (fun i r ->
+          let prefix = Printf.sprintf "[\xc2\xa7%d]" (i + 1) in
+          Buffer.add_string buf
+            (format_section_match ~section_prefix:prefix ~file_path
+               ~source_text r))
+        sections;
+      Buffer.contents buf
+
+let search_file ~ctx ~language ~pattern_text file_path =
+  try
+    let source_text =
+      In_channel.with_open_text file_path In_channel.input_all
+    in
+    (* Parse once; reuse the tree for both matching and parse diagnostics. *)
+    let tree = Diffract.Tree.parse ~ctx ~language source_text in
+    let results =
+      Diffract.Matcher.find_in_tree ~ctx ~language ~pattern_text tree
+    in
+    Ok (source_text, results, Diffract.Tree.error_count tree)
+  with Failure msg | Sys_error msg -> Error msg
+
+let scan_directory_search ~ctx ~language ~pattern_text ~include_pattern
+    ~exclude_dirs dir_path =
+  let files = find_files ~pattern:include_pattern ~exclude_dirs dir_path in
+  let total_files = List.length files in
+  let total_matches = ref 0 in
+  let files_with_matches = ref 0 in
+  let files_with_parse_errors = ref [] in
+  let errors = ref [] in
+  List.iter
+    (fun file_path ->
+      match search_file ~ctx ~language ~pattern_text file_path with
+      | Error msg -> errors := (file_path, msg) :: !errors
+      | Ok (source_text, results, parse_errors) ->
+          if parse_errors > 0 then
+            files_with_parse_errors :=
+              (file_path, parse_errors) :: !files_with_parse_errors;
+          if results <> [] then begin
+            incr files_with_matches;
+            total_matches := !total_matches + List.length results;
+            List.iter
+              (fun r ->
+                print_string (format_search_match ~file_path ~source_text r))
+              results
+          end)
+    files;
+  Printf.printf "Found %d match(es) in %d file(s) (scanned %d files)\n"
+    !total_matches !files_with_matches total_files;
+  if !files_with_parse_errors <> [] then begin
+    Printf.printf
+      "\n\
+       Parse errors (%d files; matches in or near unparseable regions may be \
+       missed):\n"
+      (List.length !files_with_parse_errors);
+    List.iter
+      (fun (path, count) -> Printf.printf "  %s: %d error node(s)\n" path count)
+      (List.rev !files_with_parse_errors)
+  end;
+  if !errors <> [] then begin
+    Printf.printf "\nErrors (%d files):\n" (List.length !errors);
+    List.iter
+      (fun (path, msg) -> Printf.printf "  %s: %s\n" path msg)
+      (List.rev !errors)
+  end
+
+let run_search pattern_path target language include_pattern exclude_patterns
+    debug_tokens =
   let ctx = Diffract.Context.create () in
   let exclude_dirs =
     if exclude_patterns = [] then default_excludes else exclude_patterns
@@ -246,68 +326,74 @@ let run_match pattern_path target language include_pattern exclude_patterns =
     let pattern_text =
       In_channel.with_open_text pattern_path In_channel.input_all
     in
-    if Sys.is_directory target then
-      match include_pattern with
-      | None ->
-          `Error
-            ( true,
-              "Directory target requires --include (e.g., --include '*.ts')" )
-      | Some glob ->
-          scan_directory_match ~ctx ~language ~pattern_text
-            ~include_pattern:glob ~exclude_dirs target;
-          `Ok ()
+    if debug_tokens then print_debug_tokens ~ctx ~language ~pattern_text
     else begin
-      let source_text = In_channel.with_open_text target In_channel.input_all in
-      let search_result =
-        Diffract.Match.search ~ctx ~language ~pattern_text ~source_text
-      in
-      let results = search_result.matches in
-      if results = [] then print_endline "No matches found"
+      print_pattern_warnings ~pattern_text;
+      if Sys.is_directory target then
+        match include_pattern with
+        | None ->
+            `Error
+              (true, "Directory target requires --include (e.g., --include '*.ts')")
+        | Some glob ->
+            scan_directory_search ~ctx ~language ~pattern_text
+              ~include_pattern:glob ~exclude_dirs target;
+            `Ok ()
       else begin
-        let has_contexts =
-          List.exists (fun r -> r.Diffract.Match.contexts <> []) results
+        let source_text = In_channel.with_open_text target In_channel.input_all in
+        let tree = Diffract.Tree.parse ~ctx ~language source_text in
+        let results =
+          Diffract.Matcher.find_in_tree ~ctx ~language ~pattern_text tree
         in
-        if has_contexts then
-          Printf.printf "Found %d nested match(es):\n\n" (List.length results)
-        else Printf.printf "Found %d match(es):\n\n" (List.length results);
-        List.iter
-          (fun result ->
-            print_endline
-              (Diffract.Match.format_nested_match source_text result);
-            print_newline ())
-          results
-      end;
-      if search_result.parse_error_count > 0 then
-        Printf.printf "\nWarning: %d parse error(s) in source file\n"
-          search_result.parse_error_count;
-      `Ok ()
+        if results = [] then print_endline "No matches found"
+        else begin
+          Printf.printf "Found %d match(es):\n\n" (List.length results);
+          List.iter
+            (fun r ->
+              print_string
+                (format_search_match ~file_path:target ~source_text r))
+            results
+        end;
+        let parse_errors = Diffract.Tree.error_count tree in
+        if parse_errors > 0 then
+          Printf.printf
+            "\n\
+             Warning: %d parse error node(s) in source (matches in or near \
+             unparseable regions may be missed)\n"
+            parse_errors;
+        `Ok ()
+      end
     end
   with
   | Sys_error msg -> `Error (false, Printf.sprintf "Error reading file: %s" msg)
   | Failure msg -> `Error (false, msg)
 
-let match_cmd =
-  let doc = "Find pattern matches in a source file or directory." in
+let search_cmd =
+  let doc =
+    "Find pattern matches using the tokenizer-based matcher (strict mode; \
+     supports code fragments and sigil-free metavars)."
+  in
   let pattern =
     Arg.(
-      required & pos 0 (some file) None
+      required
+      & pos 0 (some file) None
       & info [] ~docv:"PATTERN" ~doc:"Pattern file.")
   in
   let target =
     Arg.(
-      required & pos 1 (some string) None
+      required
+      & pos 1 (some string) None
       & info [] ~docv:"FILE|DIR" ~doc:"Source file or directory to search.")
   in
-  Cmd.v (Cmd.info "match" ~doc)
+  Cmd.v (Cmd.info "search" ~doc)
     Term.(
       ret
-        (const run_match $ pattern $ target $ language $ include_pattern
-       $ exclude_patterns))
+        (const run_search $ pattern $ target $ language $ include_pattern
+       $ exclude_patterns $ debug_tokens_flag))
 
 (* ── apply subcommand ───────────────────────────────────────────────── *)
 
 let run_apply pattern_path target language include_pattern exclude_patterns
-    in_place =
+    in_place debug_tokens =
   let ctx = Diffract.Context.create () in
   let exclude_dirs =
     if exclude_patterns = [] then default_excludes else exclude_patterns
@@ -316,23 +402,27 @@ let run_apply pattern_path target language include_pattern exclude_patterns
     let pattern_text =
       In_channel.with_open_text pattern_path In_channel.input_all
     in
-    if Sys.is_directory target then
-      match include_pattern with
-      | None ->
-          `Error
-            ( true,
-              "Directory target requires --include (e.g., --include '*.ts')" )
-      | Some glob ->
-          scan_directory_apply ~ctx ~language ~pattern_text
-            ~include_pattern:glob ~exclude_dirs ~in_place target;
-          `Ok ()
+    if debug_tokens then print_debug_tokens ~ctx ~language ~pattern_text
     else begin
-      let changed, diff =
-        transform_file ~ctx ~language ~pattern_text ~in_place target
-      in
-      if not changed then print_endline "No matches found"
-      else if not in_place then print_string diff;
-      `Ok ()
+      print_pattern_warnings ~pattern_text;
+      if Sys.is_directory target then (
+        match include_pattern with
+        | None ->
+            `Error
+              ( true,
+                "Directory target requires --include (e.g., --include '*.ts')" )
+        | Some glob ->
+            scan_directory_apply ~ctx ~language ~pattern_text
+              ~include_pattern:glob ~exclude_dirs ~in_place target;
+            `Ok ())
+      else begin
+        let changed, diff =
+          transform_file ~ctx ~language ~pattern_text ~in_place target
+        in
+        if not changed then print_endline "No matches found"
+        else if not in_place then print_string diff;
+        `Ok ()
+      end
     end
   with
   | Sys_error msg -> `Error (false, Printf.sprintf "Error reading file: %s" msg)
@@ -345,26 +435,27 @@ let apply_cmd =
   in
   let pattern =
     Arg.(
-      required & pos 0 (some file) None
+      required
+      & pos 0 (some file) None
       & info [] ~docv:"PATTERN" ~doc:"Semantic patch file.")
   in
   let target =
     Arg.(
-      required & pos 1 (some string) None
+      required
+      & pos 1 (some string) None
       & info [] ~docv:"FILE|DIR" ~doc:"Source file or directory to transform.")
   in
   Cmd.v (Cmd.info "apply" ~doc)
     Term.(
       ret
         (const run_apply $ pattern $ target $ language $ include_pattern
-       $ exclude_patterns $ in_place_flag))
+       $ exclude_patterns $ in_place_flag $ debug_tokens_flag))
 
 (* ── diff subcommand ────────────────────────────────────────────────── *)
 
 let oneline ?(max_len = 120) s =
   let s = String.map (fun c -> if c = '\n' then ' ' else c) s in
-  if String.length s > max_len then String.sub s 0 (max_len - 3) ^ "..."
-  else s
+  if String.length s > max_len then String.sub s 0 (max_len - 3) ^ "..." else s
 
 let rec print_change ~indent ~before_source ~after_source
     (before_n : Diffract.Tree.src Diffract.Tree.t)
@@ -407,9 +498,8 @@ let rec print_change ~indent ~before_source ~after_source
                 (oneline (Diffract.Tree.text after_source node))
           | Diffract.Tree_diff.Changed { before; after; change } ->
               flush_same ();
-              print_change
-                ~indent:(indent ^ "  ")
-                ~before_source ~after_source before after change)
+              print_change ~indent:(indent ^ "  ") ~before_source ~after_source
+                before after change)
         child_changes;
       flush_same ()
 
@@ -440,12 +530,14 @@ let diff_cmd =
   let doc = "Show AST-level changes between two versions of a file." in
   let before_file =
     Arg.(
-      required & pos 0 (some file) None
+      required
+      & pos 0 (some file) None
       & info [] ~docv:"BEFORE" ~doc:"Before (old) file.")
   in
   let after_file =
     Arg.(
-      required & pos 1 (some file) None
+      required
+      & pos 1 (some file) None
       & info [] ~docv:"AFTER" ~doc:"After (new) file.")
   in
   Cmd.v (Cmd.info "diff" ~doc)
@@ -462,14 +554,17 @@ let cmd =
         "$(tname) works with concrete syntax trees produced by tree-sitter. \
          Choose a subcommand:";
       `I ("$(b,parse)", "Display the syntax tree of a source file.");
-      `I ("$(b,match)", "Find pattern matches in a file or directory.");
+      `I
+        ( "$(b,search)",
+          "Find pattern matches in a file or directory (handles code \
+           fragments and sigil-free metavars)." );
       `I ("$(b,apply)", "Apply a semantic patch to a file or directory.");
       `I ("$(b,diff)", "Show AST-level changes between two file versions.");
       `I ("$(b,languages)", "List available language grammars.");
       `S Manpage.s_examples;
       `Pre "  $(tname) parse example.ts";
-      `Pre "  $(tname) match pattern.pat source.ts";
-      `Pre "  $(tname) match --include '*.ts' pattern.pat src/";
+      `Pre "  $(tname) search pattern.pat source.ts";
+      `Pre "  $(tname) search --include '*.ts' pattern.pat src/";
       `Pre "  $(tname) apply patch.pat source.ts";
       `Pre "  $(tname) apply --in-place --include '*.ts' patch.pat src/";
       `Pre "  $(tname) diff before.ts after.ts";
@@ -477,6 +572,6 @@ let cmd =
   in
   let info = Cmd.info "diffract" ~version:"0.1.0" ~doc ~man in
   Cmd.group info
-    [ languages_cmd; parse_cmd; match_cmd; apply_cmd; diff_cmd ]
+    [ languages_cmd; parse_cmd; search_cmd; apply_cmd; diff_cmd ]
 
 let () = exit (Cmd.eval cmd)
