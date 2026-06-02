@@ -87,26 +87,21 @@ module Make (C : Cursor.S) = struct
        [Drive_enumerated] with the accumulated list.
      - [Drive_match_prefix]: single match; source exhaustion is a success
        (reports how much pattern was left). *)
-  type drive_mode =
-    | Drive_match_at
-    | Drive_match_at_all
-    | Drive_match_prefix
+  type drive_mode = Drive_match_at | Drive_match_at_all | Drive_match_prefix
 
   type drive_result =
     | Drive_pattern_exhausted of C.t * binding list
         (** Pattern was fully consumed. Source may still have content. *)
     | Drive_source_exhausted of pattern_token list * C.t * binding list
-        (** Could not advance the cursor at pattern index [i]; the returned
-            list is [pattern[i..n-1]]. Only produced when
+        (** Could not advance the cursor at pattern index [i]; the returned list
+            is [pattern[i..n-1]]. Only produced when
             [mode = Drive_match_prefix]. *)
-    | Drive_failed
-        (** All backtracking exhausted; no match path succeeded. *)
+    | Drive_failed  (** All backtracking exhausted; no match path succeeded. *)
     | Drive_enumerated of (C.t * binding list) list
-        (** All matches found by [Drive_match_at_all], in discovery order
-            (which is leftmost-minimum first, then alternatives via
-            backtracking). Each entry's cursor is a cloned snapshot taken
-            at the moment its match completed, so subsequent enumeration
-            does not mutate it. *)
+        (** All matches found by [Drive_match_at_all], in discovery order (which
+            is leftmost-minimum first, then alternatives via backtracking). Each
+            entry's cursor is a cloned snapshot taken at the moment its match
+            completed, so subsequent enumeration does not mutate it. *)
 
   (* The shared driver. Runs the leaf-walking loop, distinguishing the two
      kinds of failure (mismatch vs source-exhausted), and returns a
@@ -121,10 +116,18 @@ module Make (C : Cursor.S) = struct
      order (seed bindings come first since they originated from earlier
      pattern positions). *)
   let drive ~mode ?(initial_bindings = []) ?(ignore_node_type = false)
-      ?(descend = false) (pattern : pattern_token list)
-      (initial_cursor : C.t) : drive_result =
+      ?(descend = false) ?(spans : (int * int) array option = None)
+      (pattern : pattern_token list) (initial_cursor : C.t) : drive_result =
     let pattern = Array.of_list pattern in
     let n = Array.length pattern in
+    (* [spans], when supplied, records the source byte range each token
+       consumed (index = token position). Filled during [forward_pass]; the
+       committed path's values survive backtracking because a re-run only
+       overwrites from the restored checkpoint onward with the same committed
+       leaves. Surgical transforms read this to locate `-` regions. *)
+    let record i sp =
+      match spans with Some a when i < Array.length a -> a.(i) <- sp | _ -> ()
+    in
     let checkpoints : checkpoint list ref = ref [] in
     let cursor = ref initial_cursor in
     let first = ref true in
@@ -166,6 +169,7 @@ module Make (C : Cursor.S) = struct
         | Subtree { name } ->
             let snapshot = !bindings in
             let cur_clone = C.clone !cursor in
+            record i (C.byte_range cur_clone);
             (match name with
             | None -> ()
             | Some n -> (
@@ -245,9 +249,9 @@ module Make (C : Cursor.S) = struct
             let leaf = C.move_first_leaf !cursor in
             if
               C.leaf_text leaf <> t.text
-              || ((not ignore_node_type)
-                 && C.leaf_node_type leaf <> t.node_type)
+              || ((not ignore_node_type) && C.leaf_node_type leaf <> t.node_type)
             then raise Mismatch
+            else record i (C.byte_range !cursor)
       done
     in
     (* Accumulator for Drive_match_at_all. Stays empty in the other modes. *)
@@ -289,7 +293,8 @@ module Make (C : Cursor.S) = struct
       match outcome with
       | `Pattern_done -> (
           match mode with
-          | Drive_match_at -> Drive_pattern_exhausted (!cursor, List.rev !bindings)
+          | Drive_match_at ->
+              Drive_pattern_exhausted (!cursor, List.rev !bindings)
           | Drive_match_prefix ->
               (* In [descend] mode a clean prefix endpoint requires the source
                  subtree to be exhausted here too. If source remains (the
@@ -307,8 +312,7 @@ module Make (C : Cursor.S) = struct
                  later backtracking mutates, so a shallow capture would be
                  corrupted by the next backtrack pass. *)
               let bindings_snapshot = List.rev_map clone_binding !bindings in
-              enumerated :=
-                (C.clone !cursor, bindings_snapshot) :: !enumerated;
+              enumerated := (C.clone !cursor, bindings_snapshot) :: !enumerated;
               backtrack ())
       | `Mismatch -> backtrack ()
       | `Source_at i -> (
@@ -398,6 +402,16 @@ module Make (C : Cursor.S) = struct
     | Drive_enumerated _ ->
         (* Only produced by Drive_match_at_all. *)
         assert false
+
+  let match_at_spans ?(initial_bindings = []) pattern cursor =
+    let n = List.length pattern in
+    let spans = Array.make (max 1 n) (-1, -1) in
+    match
+      drive ~mode:Drive_match_at ~initial_bindings ~spans:(Some spans) pattern
+        cursor
+    with
+    | Drive_pattern_exhausted (c, b) -> Some (c, b, spans)
+    | _ -> None
 
   let match_prefix ?(initial_bindings = []) ?(ignore_node_type = false)
       ?(descend = false) pattern cursor =
@@ -538,7 +552,7 @@ module Make (C : Cursor.S) = struct
                   probe
               with
               | None -> try_each (child :: tried) rest
-              | Some (after_match, _, new_bindings) ->
+              | Some (after_match, _, new_bindings) -> (
                   (* [new_bindings] already includes [bindings] (the seed)
                      plus any bindings recorded during this match_prefix
                      call — replace the accumulator with it directly. *)
@@ -546,7 +560,7 @@ module Make (C : Cursor.S) = struct
                   let new_unused = List.rev_append tried rest in
                   match consume after_strip new_bindings new_unused with
                   | Some _ as result -> result
-                  | None -> try_each (child :: tried) rest)
+                  | None -> try_each (child :: tried) rest))
         in
         try_each [] unused
     in
@@ -669,8 +683,8 @@ module Make (C : Cursor.S) = struct
   let advance_one cursor =
     C.move_first_child cursor || C.move_next_subtree cursor
 
-  let find_matches_iter ?(overlapping = false) ?(initial_bindings = [])
-      pattern source_cursor =
+  let find_matches_iter ?(overlapping = false) ?(initial_bindings = []) pattern
+      source_cursor =
     (* Walk the tree pre-order. At each position, drive enumerates every
        valid binding configuration; we yield each, with span dedup in
        overlapping mode.
@@ -706,15 +720,14 @@ module Make (C : Cursor.S) = struct
             if overlapping then seen := key :: !seen;
             Seq.Cons (r, next)
           end
-      | [] ->
+      | [] -> (
           if !exhausted then Seq.Nil
           else
             let attempt = C.clone !cursor in
             let start_byte, _ = C.byte_range !cursor in
             let configurations =
               match
-                drive ~mode:Drive_match_at_all ~initial_bindings pattern
-                  attempt
+                drive ~mode:Drive_match_at_all ~initial_bindings pattern attempt
               with
               | Drive_enumerated lst -> lst
               | _ ->
@@ -722,7 +735,7 @@ module Make (C : Cursor.S) = struct
                      Drive_enumerated. *)
                   assert false
             in
-            (match configurations with
+            match configurations with
             | [] ->
                 if not (advance_one !cursor) then exhausted := true;
                 next ()
@@ -737,14 +750,13 @@ module Make (C : Cursor.S) = struct
                       let _, end_byte = C.byte_range end_cursor in
                       { start_byte; end_byte; bindings })
                     to_yield;
-                if overlapping then begin
-                  if not (advance_one !cursor) then exhausted := true
-                end
+                if overlapping then
+                  begin if not (advance_one !cursor) then exhausted := true
+                  end
                 else begin
                   let end_cursor_first, _ = List.hd configurations in
                   let next_cursor = C.clone end_cursor_first in
-                  if C.move_next_subtree next_cursor then
-                    cursor := next_cursor
+                  if C.move_next_subtree next_cursor then cursor := next_cursor
                   else exhausted := true
                 end;
                 next ())
@@ -794,7 +806,8 @@ module Make (C : Cursor.S) = struct
     next
 
   let find_partial_matches ?(initial_bindings = []) pattern source_cursor =
-    List.of_seq (find_partial_matches_iter ~initial_bindings pattern source_cursor)
+    List.of_seq
+      (find_partial_matches_iter ~initial_bindings pattern source_cursor)
 
   let find_field_matches_iter ?(initial_bindings = []) pattern source_cursor =
     (* Walk pre-order; at each node attempt [match_field_at], treating the
@@ -831,7 +844,8 @@ module Make (C : Cursor.S) = struct
     next
 
   let find_field_matches ?(initial_bindings = []) pattern source_cursor =
-    List.of_seq (find_field_matches_iter ~initial_bindings pattern source_cursor)
+    List.of_seq
+      (find_field_matches_iter ~initial_bindings pattern source_cursor)
 
   let find_field_matches_with_iter ?(initial_bindings = []) ~tokens_for
       source_cursor =
