@@ -737,8 +737,36 @@ let validate_declared_metavars_present (p : parsed_pattern) ~ir ~foreaches =
         (s.single_metavars @ s.sequence_metavars))
     p.sections
 
+(* Reject a *standalone* ellipsis on a [-] or [+] line — a line whose whole
+   content is [...]. The ellipsis is a match-side-only construct (it matches
+   zero or more sibling nodes); marking the ellipsis itself for removal is
+   meaningless, and on the replace side it would be emitted as the literal text
+   [...]. Surgical transforms keep [...]-captured source by leaving the ellipsis
+   on a context line, so a bare ellipsis only ever belongs on context.
+
+   An ellipsis *nested inside* a marked expression (e.g. [- $K: bar(...)],
+   where [bar(...)] is replaced wholesale) is fine and not flagged — there the
+   [-] applies to the expression, not to the ellipsis. *)
+let validate_no_ellipsis_in_edits (p : parsed_pattern) =
+  List.iteri
+    (fun i (s : section) ->
+      List.iter
+        (function
+          | (Del content | Add content) when String.trim content = "..." ->
+              failwith
+                (Printf.sprintf
+                   "Section %d: a bare '...' (ellipsis) cannot be on a '-' or \
+                    '+' line — it is a match-only construct. Leave it on a \
+                    context line (the source it captures is preserved) and \
+                    mark only the part you are changing."
+                   (i + 1))
+          | _ -> ())
+        (classify_spatch s.body))
+    p.sections
+
 let compile_to_ir ~ctx ~language (p : parsed_pattern) :
     ir * foreach_transform list =
+  validate_no_ellipsis_in_edits p;
   let foreach_sections, match_sections = List.partition is_foreach p.sections in
   let ir =
     match match_sections with
@@ -1214,6 +1242,26 @@ let surgical_edits ~list_context hunks (m : M.match_result) seq_renderings
       | _ :: _ ->
           let lo = List.fold_left (fun a (s, _) -> min a s) max_int del_spans in
           let hi = List.fold_left (fun a (_, e) -> max a e) min_int del_spans in
+          (* A deleted boundary token with no recorded span — a partial-mode
+             container delimiter ([{]/[}], [<Foo]/[/>]), which never records a
+             span — sits at the match edge. Extend the deletion to the match
+             boundary so a whole-container [-]/[+] covers the delimiters too,
+             rather than deleting only the inner elements and leaving the
+             brackets behind. (A sub-part edit leaves the delimiters as context,
+             so token 0 / the last token are not in [del_idxs] and this is a
+             no-op.) *)
+          let ntok = Array.length spans in
+          let lo =
+            if List.mem 0 h.del_idxs && not (valid (span_of 0)) then
+              min lo m.start_byte
+            else lo
+          in
+          let hi =
+            if
+              List.mem (ntok - 1) h.del_idxs && not (valid (span_of (ntok - 1)))
+            then max hi m.end_byte
+            else hi
+          in
           let lo, hi =
             if repl = "" then delete_cleanup source lo hi else (lo, hi)
           in
@@ -1266,12 +1314,14 @@ let edits_of_composite ir (composite : composite_match) seq_renderings source =
   List.map2
     (fun leaf (m : M.match_result) ->
       if Array.length m.spans > 0 then
-        (* partial/field match container elements separated by [,]/[;]; strict
-           matches a positional construct whose deletions are line-oriented. *)
+        (* Only partial matches a list of elements separated by [,]/[;], where a
+           deletion must absorb the dangling separator. Field matches a
+           declaration's positional children (not a separated list) and strict a
+           positional construct; a [;] there is a statement/declaration
+           terminator, not a list separator, so their deletions are
+           line-oriented (see {!surgical_edits}). *)
         let list_context =
-          match leaf with
-          | PartialContainer _ | FieldContainer _ -> true
-          | _ -> false
+          match leaf with PartialContainer _ -> true | _ -> false
         in
         surgical_edits ~list_context (leaf_hunks leaf) m seq_renderings source
       else

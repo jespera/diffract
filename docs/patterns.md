@@ -107,6 +107,11 @@ Notes:
 - On transform (strict mode), the source `...` captures are **preserved**: a
   `-` line inside an `...`-bracketed pattern removes only the marked part and
   keeps the surrounding siblings (`...` is never emitted literally).
+- A bare `...` cannot sit on a `-` or `+` line — it is a match-only construct,
+  so it belongs on a context line. (An ellipsis *nested* in a marked
+  expression, e.g. `- old(...)` / `+ new()`, is fine: the `-` applies to the
+  whole expression, which is replaced wholesale.) A pattern that breaks this is
+  rejected with an error.
 
 ## Multi-statement Patterns
 
