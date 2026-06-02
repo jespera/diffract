@@ -1,9 +1,9 @@
 (** Line-based unified diff between two strings.
 
     A small, matcher-independent text diff: a line-level LCS, then hunks with
-    three lines of context. Used by the CLI to render the result of a
-    transform as a patch. Lifted out of the matcher so it has no dependency on
-    any particular matching engine. *)
+    three lines of context. Used by the CLI to render the result of a transform
+    as a patch. Lifted out of the matcher so it has no dependency on any
+    particular matching engine. *)
 
 type diff_op = DKeep of string | DRemove of string | DAdd of string
 

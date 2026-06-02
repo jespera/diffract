@@ -222,7 +222,8 @@ let test_byte_range_identifier_leaf () =
   in
   let cursor = Tree_sitter_cursor.of_node ~source:tree.source foo in
   Alcotest.(check byte_range_pair)
-    "foo spans bytes 0..3" (0, 3) (Tree_sitter_cursor.byte_range cursor)
+    "foo spans bytes 0..3" (0, 3)
+    (Tree_sitter_cursor.byte_range cursor)
 
 (* The motivating use: extract bound subtree text via byte_range +
    String.sub. Pattern `foo($x)` against `foo(c > 0);` binds x to the
@@ -244,12 +245,15 @@ let test_byte_range_extracts_binding_text () =
   | Some (_, bs) -> (
       match
         List.find_map
-          (function M.Single { name = "x"; cursor } -> Some cursor | _ -> None)
+          (function
+            | M.Single { name = "x"; cursor } -> Some cursor | _ -> None)
           bs
       with
       | None -> Alcotest.fail "x not bound"
       | Some bound_cursor ->
-          let start_byte, end_byte = Tree_sitter_cursor.byte_range bound_cursor in
+          let start_byte, end_byte =
+            Tree_sitter_cursor.byte_range bound_cursor
+          in
           let text = String.sub source start_byte (end_byte - start_byte) in
           Alcotest.(check string) "x bound to 'c > 0'" "c > 0" text)
 
@@ -275,7 +279,8 @@ let test_find_matches_multiple_calls () =
       (fun r ->
         match
           List.find_map
-            (function M.Single { name = "x"; cursor } -> Some cursor | _ -> None)
+            (function
+              | M.Single { name = "x"; cursor } -> Some cursor | _ -> None)
             r.M.bindings
         with
         | None -> failwith "missing binding for x"
@@ -331,7 +336,8 @@ let test_jsx_self_closing_with_attribute () =
   | Some (_, bs) -> (
       match
         List.find_map
-          (function M.Single { name = "x"; cursor } -> Some cursor | _ -> None)
+          (function
+            | M.Single { name = "x"; cursor } -> Some cursor | _ -> None)
           bs
       with
       | None -> Alcotest.fail "x not bound"
@@ -368,8 +374,7 @@ let test_jsx_multiple_attributes_no_separator () =
     ]
   in
   Alcotest.(check bool)
-    "two-attribute pattern matches without inter-attribute separator"
-    true
+    "two-attribute pattern matches without inter-attribute separator" true
     (M.match_at pattern cursor |> Option.is_some)
 
 (* An opened / closed JSX element with jsx_text content. The wildcard
@@ -439,17 +444,14 @@ let test_jsx_nested_element_as_subtree () =
       | Some c ->
           let s, e = Tree_sitter_cursor.byte_range c in
           Alcotest.(check string)
-            "child bound to nested span element"
-            "<span>world</span>"
+            "child bound to nested span element" "<span>world</span>"
             (String.sub source s (e - s)))
 
 (* find_matches integration on JSX: multiple sibling JSX elements,
    pattern should locate each. Source has two [<Foo .../>] elements
    and one [<Bar .../>] element; the pattern matches only [<Foo .../>]. *)
 let test_jsx_find_matches_multiple_elements () =
-  let source =
-    "const t = <div><Foo a={1}/><Bar a={2}/><Foo a={3}/></div>;"
-  in
+  let source = "const t = <div><Foo a={1}/><Bar a={2}/><Foo a={3}/></div>;" in
   let tree = parse_tsx source in
   let cursor = Tree_sitter_cursor.of_tree tree in
   let pattern =
@@ -502,8 +504,8 @@ let test_named_children_object_literal () =
   in
   let cursor = Tree_sitter_cursor.of_node ~source:tree.source object_node in
   let children = Tree_sitter_cursor.named_children cursor in
-  Alcotest.(check int) "object has two named children (the pairs)" 2
-    (List.length children);
+  Alcotest.(check int)
+    "object has two named children (the pairs)" 2 (List.length children);
   (* Verify each child's node type by inspecting its leaves. *)
   let first_leaves =
     List.map
@@ -529,8 +531,8 @@ let test_named_children_jsx_self_closing () =
   let cursor = Tree_sitter_cursor.of_node ~source:tree.source elem in
   let children = Tree_sitter_cursor.named_children cursor in
   (* Three: the identifier "Foo" plus two jsx_attribute nodes. *)
-  Alcotest.(check int) "JSX self-closing has three named children" 3
-    (List.length children)
+  Alcotest.(check int)
+    "JSX self-closing has three named children" 3 (List.length children)
 
 (* A sub-cursor returned by named_children is scoped to its child's
    subtree. Walking past the subtree via move_next_subtree returns
@@ -555,7 +557,8 @@ let test_named_children_scoped_to_child () =
          pair — eventually false. *)
       let rec walk_to_end c steps =
         if steps > 10 then failwith "walked too far"
-        else if Tree_sitter_cursor.move_next_subtree c then walk_to_end c (steps + 1)
+        else if Tree_sitter_cursor.move_next_subtree c then
+          walk_to_end c (steps + 1)
         else ()
       in
       walk_to_end first_pair 0
@@ -574,8 +577,8 @@ let test_named_children_function_arguments () =
   in
   let cursor = Tree_sitter_cursor.of_node ~source:tree.source args in
   let children = Tree_sitter_cursor.named_children cursor in
-  Alcotest.(check int) "arguments has two named children" 2
-    (List.length children)
+  Alcotest.(check int)
+    "arguments has two named children" 2 (List.length children)
 
 (* ----- source_substring -----
 
@@ -589,7 +592,8 @@ let test_source_substring_whole () =
   let source = "foo(1, 2);" in
   let tree = parse_ts source in
   let cursor = Tree_sitter_cursor.of_tree tree in
-  Alcotest.(check string) "whole source" source
+  Alcotest.(check string)
+    "whole source" source
     (Tree_sitter_cursor.source_substring cursor 0 (String.length source))
 
 (* TS object literal: bytes between the first and second pair are ", ". *)
@@ -653,9 +657,7 @@ let test_source_substring_jsx_no_separator () =
   | _tag :: attr_a :: attr_b :: _ ->
       let _, a_end = Tree_sitter_cursor.byte_range attr_a in
       let b_start, _ = Tree_sitter_cursor.byte_range attr_b in
-      let between =
-        Tree_sitter_cursor.source_substring cursor a_end b_start
-      in
+      let between = Tree_sitter_cursor.source_substring cursor a_end b_start in
       Alcotest.(check string)
         "bytes between attributes are whitespace only" " " between
   | _ -> Alcotest.fail "expected at least three named children"
@@ -700,7 +702,8 @@ let test_partial_object_literal_with_commas () =
       let x_text =
         match
           List.find_map
-            (function M.Single { name = "x"; cursor } -> Some cursor | _ -> None)
+            (function
+              | M.Single { name = "x"; cursor } -> Some cursor | _ -> None)
             bindings
         with
         | Some c ->
@@ -711,7 +714,8 @@ let test_partial_object_literal_with_commas () =
       let y_text =
         match
           List.find_map
-            (function M.Single { name = "y"; cursor } -> Some cursor | _ -> None)
+            (function
+              | M.Single { name = "y"; cursor } -> Some cursor | _ -> None)
             bindings
         with
         | Some c ->
@@ -1009,10 +1013,10 @@ let test_partial_jsx_reordered_attributes () =
             String.sub source s (e - s)
         | None -> failwith (name ^ " not bound")
       in
-      Alcotest.(check string) "x bound to 1 (matched 'a' attribute)" "1"
-        (extract "x");
-      Alcotest.(check string) "z bound to 2 (matched 'b' attribute)" "2"
-        (extract "z")
+      Alcotest.(check string)
+        "x bound to 1 (matched 'a' attribute)" "1" (extract "x");
+      Alcotest.(check string)
+        "z bound to 2 (matched 'b' attribute)" "2" (extract "z")
 
 (* Pattern with the WRONG separator (semicolon against a comma-separated
    source) fails: the wrong-separator token isn't stripped, and the
@@ -1049,8 +1053,7 @@ let test_partial_wrong_separator_fails () =
 
 let show_leaves =
   List.map (fun l ->
-      ( Tree_sitter_cursor.leaf_text l,
-        Tree_sitter_cursor.leaf_node_type l ))
+      (Tree_sitter_cursor.leaf_text l, Tree_sitter_cursor.leaf_node_type l))
 
 let anon_pair = Alcotest.(list (pair string string))
 
@@ -1064,10 +1067,12 @@ let test_anon_leaves_ts_object () =
   in
   let cursor = Tree_sitter_cursor.of_node ~source:tree.source object_node in
   Alcotest.(check anon_pair)
-    "object leading anon = '{'" [ ("{", "{") ]
+    "object leading anon = '{'"
+    [ ("{", "{") ]
     (show_leaves (Tree_sitter_cursor.leading_anonymous_leaves cursor));
   Alcotest.(check anon_pair)
-    "object trailing anon = '}'" [ ("}", "}") ]
+    "object trailing anon = '}'"
+    [ ("}", "}") ]
     (show_leaves (Tree_sitter_cursor.trailing_anonymous_leaves cursor))
 
 let test_anon_leaves_jsx_self_closing () =
@@ -1080,10 +1085,12 @@ let test_anon_leaves_jsx_self_closing () =
   in
   let cursor = Tree_sitter_cursor.of_node ~source:tree.source elem in
   Alcotest.(check anon_pair)
-    "jsx leading anon = '<'" [ ("<", "<") ]
+    "jsx leading anon = '<'"
+    [ ("<", "<") ]
     (show_leaves (Tree_sitter_cursor.leading_anonymous_leaves cursor));
   Alcotest.(check anon_pair)
-    "jsx trailing anon = '/>'" [ ("/>", "/>") ]
+    "jsx trailing anon = '/>'"
+    [ ("/>", "/>") ]
     (show_leaves (Tree_sitter_cursor.trailing_anonymous_leaves cursor))
 
 (* A node with no anonymous children (e.g. a program) returns empty
@@ -1121,7 +1128,8 @@ let tests =
     test_case "siblings skip past nested parens" `Quick
       test_siblings_skips_past_nested_parens;
     test_case "extras (comments) are skipped" `Quick test_extras_are_skipped;
-    test_case "byte_range: identifier leaf" `Quick test_byte_range_identifier_leaf;
+    test_case "byte_range: identifier leaf" `Quick
+      test_byte_range_identifier_leaf;
     test_case "byte_range: extracts binding text" `Quick
       test_byte_range_extracts_binding_text;
     test_case "find_matches: multiple calls" `Quick

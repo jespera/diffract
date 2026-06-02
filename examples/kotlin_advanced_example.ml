@@ -46,9 +46,17 @@ let example_scoped () =
      body; the second section, scoped `on BODY`, finds println only inside it.
      So println in a non-@Service class is not reported. *)
   let pattern =
-    "@@\nmatch: strict\nmetavar CLASS: single\nmetavar BODY: single\n@@\n\
+    "@@\n\
+     match: strict\n\
+     metavar CLASS: single\n\
+     metavar BODY: single\n\
+     @@\n\
      @Service class CLASS { BODY }\n\
-     @@\nmatch: strict\non BODY\nmetavar MSG: single\n@@\n\
+     @@\n\
+     match: strict\n\
+     on BODY\n\
+     metavar MSG: single\n\
+     @@\n\
      println(MSG)"
   in
   let source =
@@ -61,7 +69,11 @@ let example_scoped () =
 let example_transform () =
   (* Rename println -> logger.info across the file. *)
   let pattern =
-    "@@\nmatch: strict\nmetavar MSG: single\n@@\n- println(MSG)\n\
+    "@@\n\
+     match: strict\n\
+     metavar MSG: single\n\
+     @@\n\
+     - println(MSG)\n\
      + logger.info(MSG)"
   in
   let source = "fun f() { println(a); println(b) }" in

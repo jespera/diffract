@@ -51,12 +51,12 @@ module type S = sig
       cursor state, not the underlying tree). *)
 
   val narrow : t -> t
-  (** [narrow c] returns a fresh cursor positioned at the same node as [c]
-      but rescoped: navigation operations (especially {!move_next_subtree})
-      cannot climb above the current node. This is the operation used by
-      multi-section search to scope a section's [find_matches] walk to the
-      subtree bound by [on $VAR], without leaking into the surrounding
-      source. The original cursor is unchanged. *)
+  (** [narrow c] returns a fresh cursor positioned at the same node as [c] but
+      rescoped: navigation operations (especially {!move_next_subtree}) cannot
+      climb above the current node. This is the operation used by multi-section
+      search to scope a section's [find_matches] walk to the subtree bound by
+      [on $VAR], without leaking into the surrounding source. The original
+      cursor is unchanged. *)
 
   val leaf_text : leaf -> string
   (** [leaf_text l] returns the source text of the leaf [l]. *)
@@ -79,10 +79,10 @@ module type S = sig
 
   val is_named : t -> bool
   (** [is_named c] is true iff the node at [c]'s current position is a named
-      node — not an anonymous token like punctuation (commas, brackets).
-      Used by transforms to filter separator leaves out of a sequence
-      binding when rendering its elements. Implementations without the
-      named/anonymous distinction (hand-built test trees) return [true]. *)
+      node — not an anonymous token like punctuation (commas, brackets). Used by
+      transforms to filter separator leaves out of a sequence binding when
+      rendering its elements. Implementations without the named/anonymous
+      distinction (hand-built test trees) return [true]. *)
 
   val byte_range : t -> int * int
   (** [byte_range c] returns the source byte range [(start_byte, end_byte)] of
@@ -100,9 +100,9 @@ module type S = sig
       and scoped to its child's subtree — navigation from it does not escape
       past the child.
 
-      Intended for partial-mode matching: the matcher iterates these
-      sub-cursors and passes each to {!Stmatch.S.match_prefix} to consume one
-      element's worth of pattern tokens.
+      Intended for partial-mode matching: the matcher iterates these sub-cursors
+      and passes each to {!Stmatch.S.match_prefix} to consume one element's
+      worth of pattern tokens.
 
       For implementations distinguishing named vs anonymous tokens (tree-sitter
       grammars), only named children are returned — punctuation like braces and
@@ -110,26 +110,26 @@ module type S = sig
       named/anonymous distinction return all children. *)
 
   val all_children : t -> t list
-  (** [all_children c] returns sub-cursors for {b every} non-extra child of
-      the node at [c] — named children {b and} anonymous leaves (keywords,
+  (** [all_children c] returns sub-cursors for {b every} non-extra child of the
+      node at [c] — named children {b and} anonymous leaves (keywords,
       punctuation) — in document order. Like {!named_children} each returned
       cursor is scoped to its child's subtree.
 
-      Intended for field-mode matching ({!Stmatch.S.match_field_at}), which
-      must see structural keywords that are direct anonymous children of a
+      Intended for field-mode matching ({!Stmatch.S.match_field_at}), which must
+      see structural keywords that are direct anonymous children of a
       declaration (e.g. Kotlin [fun], Scala [def], an [extends] clause's
       keyword) — these are invisible to {!named_children} but the pattern
       addresses them. Implementations without the named/anonymous distinction
       return the same list as {!named_children}. *)
 
   val leading_anonymous_leaves : t -> leaf list
-  (** [leading_anonymous_leaves c] returns the leaves contributed by the run
-      of anonymous (non-named) non-extra children that precede the first named
-      non-extra child of the node at [c]. For a typical bracketed container
-      this is the opening delimiter run — e.g. [\[<\]] for a JSX self-closing
-      element, [\[{\]] for a TS object literal, [\[(\]] for a parenthesised
-      expression. Returns [\[\]] when the node has no leading anonymous run
-      (every child is named) or no children at all.
+  (** [leading_anonymous_leaves c] returns the leaves contributed by the run of
+      anonymous (non-named) non-extra children that precede the first named
+      non-extra child of the node at [c]. For a typical bracketed container this
+      is the opening delimiter run — e.g. [[<]] for a JSX self-closing element,
+      [[{]] for a TS object literal, [[(]] for a parenthesised expression.
+      Returns [[]] when the node has no leading anonymous run (every child is
+      named) or no children at all.
 
       Each anonymous child is normally a single leaf; if it has substructure,
       all of its non-extra leaves are flattened into the returned list in
@@ -138,25 +138,25 @@ module type S = sig
       Intended for source-driven delimiter handling in partial-mode matching:
       the driver consumes this many tokens from the front of the pattern and
       strict-matches them against these leaves, so the pattern's opening
-      delimiter tokens align with whatever the source grammar actually
-      produced. Hand-built test fixtures with no named/anonymous distinction
-      should return [\[\]] (no opening delimiter inference). *)
+      delimiter tokens align with whatever the source grammar actually produced.
+      Hand-built test fixtures with no named/anonymous distinction should return
+      [[]] (no opening delimiter inference). *)
 
   val trailing_anonymous_leaves : t -> leaf list
   (** [trailing_anonymous_leaves c] is the symmetric counterpart of
-      {!leading_anonymous_leaves}: the run of anonymous non-extra children
-      that follow the last named non-extra child. For a bracketed container
-      this is the closing delimiter run — e.g. [\[/>\]] for a JSX
-      self-closing element, [\[}\]] for a TS object literal. Returns [\[\]]
-      if there's no trailing anonymous run. *)
+      {!leading_anonymous_leaves}: the run of anonymous non-extra children that
+      follow the last named non-extra child. For a bracketed container this is
+      the closing delimiter run — e.g. [[/>]] for a JSX self-closing element,
+      [[}]] for a TS object literal. Returns [[]] if there's no trailing
+      anonymous run. *)
 
   val source_substring : t -> int -> int -> string
   (** [source_substring c start_byte end_byte] returns the source text in the
       half-open byte range [\[start_byte, end_byte\)]. The cursor's current
       position is irrelevant — the slice comes from the underlying source.
 
-      Intended for source-derived separator detection in partial-mode
-      matching: given the byte ranges of two adjacent named children, the
-      driver reads the bytes between them to determine what separator (if any)
-      the source uses. *)
+      Intended for source-derived separator detection in partial-mode matching:
+      given the byte ranges of two adjacent named children, the driver reads the
+      bytes between them to determine what separator (if any) the source uses.
+  *)
 end
