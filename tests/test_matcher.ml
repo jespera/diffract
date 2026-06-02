@@ -44,7 +44,7 @@ let token_slices ~language ~singles ~body ~source =
   | Some spans ->
       Array.to_list spans
       |> List.map (fun (s, e) ->
-             if s < 0 then "<none>" else String.sub source s (e - s))
+          if s < 0 then "<none>" else String.sub source s (e - s))
 
 let test_match_at_spans () =
   Alcotest.(check (list string))
@@ -52,6 +52,32 @@ let test_match_at_spans () =
     [ "foo"; "("; "42"; ")" ]
     (token_slices ~language:"typescript" ~singles:[ "$x" ] ~body:"foo($x)"
        ~source:"const a = foo(42);")
+
+(* classify_spatch — the structured body parse match_side/replace_side derive
+   from, and the basis surgical transforms build on. *)
+let describe_spatch =
+  List.map (function
+    | Matcher.Ctx s -> ("ctx", s)
+    | Matcher.Del s -> ("del", s)
+    | Matcher.Add s -> ("add", s))
+
+let test_classify_spatch () =
+  Alcotest.(check (list (pair string string)))
+    "rename: del then add"
+    [ ("del", "foo($x)"); ("add", "bar($x)") ]
+    (describe_spatch (Matcher.classify_spatch "- foo($x)\n+ bar($x)"));
+  Alcotest.(check (list (pair string string)))
+    "context around a removal (one leading space stripped from context)"
+    [ ("ctx", " <Foo"); ("del", "  bar={$x}"); ("ctx", " />") ]
+    (describe_spatch (Matcher.classify_spatch "  <Foo\n-   bar={$x}\n  />"));
+  Alcotest.(check (list (pair string string)))
+    "pure-context guard"
+    [ ("ctx", "import React") ]
+    (describe_spatch (Matcher.classify_spatch "import React"));
+  Alcotest.(check (list (pair string string)))
+    "removal only"
+    [ ("del", "legacy: $v") ]
+    (describe_spatch (Matcher.classify_spatch "- legacy: $v"))
 
 (* ========================================================================= *)
 (* Preamble parsing                                                          *)
@@ -337,6 +363,68 @@ let test_transform_removal_in_context () =
       ~source:"function f() {\n  old();\n}"
   in
   Alcotest.(check string) "old() removed, function kept" "function f() {\n}" out
+
+(* Surgical removal: a `-` on a sub-part of an `...`-bracketed match removes
+   only that part; the siblings captured by `...` are preserved verbatim (not
+   dropped, and `...` is not emitted literally). This is the headline
+   surgical-transform fix. *)
+let test_transform_surgical_ellipsis_removal () =
+  let pattern =
+    "@@\nmatch: strict\n@@\n function f() {\n   ...\n-   old();\n   ...\n }"
+  in
+  let out =
+    transform ~language:"typescript" ~pattern
+      ~source:"function f() {\n  a();\n  old();\n  b();\n}"
+  in
+  Alcotest.(check string)
+    "only old() removed, a()/b() kept" "function f() {\n  a();\n  b();\n}" out
+
+(* Surgical replacement: a `-`/`+` pair on a sub-part replaces only that part,
+   leaving the `...`-captured siblings untouched. *)
+let test_transform_surgical_ellipsis_replace () =
+  (* The `-` span is `old();` (no indentation); the `+` content is the bare
+     replacement, so the source's existing indentation is preserved in place. *)
+  let pattern =
+    "@@\n\
+     match: strict\n\
+     @@\n\
+    \ function f() {\n\
+    \   ...\n\
+     -   old();\n\
+     + renamed();\n\
+    \   ...\n\
+    \ }"
+  in
+  let out =
+    transform ~language:"typescript" ~pattern
+      ~source:"function f() {\n  a();\n  old();\n  b();\n}"
+  in
+  Alcotest.(check string)
+    "old() replaced, a()/b() kept"
+    "function f() {\n  a();\n  renamed();\n  b();\n}" out
+
+(* The original headline case: removing one JSX attribute from an element with
+   others. The strict `...` idiom captures the surrounding attributes as
+   context; surgical editing removes only the marked one and keeps the rest. *)
+let test_transform_surgical_jsx_attribute () =
+  let pattern =
+    "@@\n\
+     match: strict\n\
+     metavar $x: single\n\
+     @@\n\
+    \ <Foo\n\
+    \   ...\n\
+     -   bar={$x}\n\
+    \   ...\n\
+    \ />"
+  in
+  let out =
+    transform ~language:"tsx" ~pattern
+      ~source:"const e = (\n  <Foo\n    bar={x}\n    baz={y}\n  />\n);"
+  in
+  Alcotest.(check string)
+    "bar attribute removed, baz kept"
+    "const e = (\n  <Foo\n    baz={y}\n  />\n);" out
 
 (* Adjacent matches are each rewritten once (non-overlapping). *)
 let test_transform_adjacent_matches () =
@@ -1930,6 +2018,7 @@ let tests =
     test_case "sigil-free equivalent" `Quick test_sigil_free_equivalent;
     test_case "match_at_spans: per-token source spans" `Quick
       test_match_at_spans;
+    test_case "classify_spatch: per-line roles" `Quick test_classify_spatch;
     test_case "comments: source comment ignored" `Quick
       test_comment_in_source_ignored;
     test_case "comments: in-pattern comment ignored" `Quick
@@ -1962,6 +2051,12 @@ let tests =
       test_transform_removal_statement;
     test_case "transform: removal within context" `Quick
       test_transform_removal_in_context;
+    test_case "transform: surgical `...` sub-removal preserves siblings" `Quick
+      test_transform_surgical_ellipsis_removal;
+    test_case "transform: surgical `...` sub-replacement preserves siblings"
+      `Quick test_transform_surgical_ellipsis_replace;
+    test_case "transform: surgical JSX attribute removal keeps siblings" `Quick
+      test_transform_surgical_jsx_attribute;
     test_case "transform: adjacent matches" `Quick
       test_transform_adjacent_matches;
     test_case "transform: placeholder boundary" `Quick

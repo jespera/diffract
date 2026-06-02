@@ -17,10 +17,10 @@ type section = {
   single_metavars : string list;
   sequence_metavars : string list;
   joins : (string * string) list;
-      (** [join $VAR by "<sep>"] directives declared in this section's
-          preamble: [(var, separator)]. The separator joins the rendered
-          elements when [$VAR] is spliced into a replacement (default
-          empty when there's no directive). *)
+      (** [join $VAR by "<sep>"] directives declared in this section's preamble:
+          [(var, separator)]. The separator joins the rendered elements when
+          [$VAR] is spliced into a replacement (default empty when there's no
+          directive). *)
   body : string;
 }
 
@@ -104,7 +104,7 @@ let parse_section_preamble ~section_index preamble_lines =
         set_scope (On (String.trim (chop "on " line)))
       else if String.starts_with ~prefix:"foreach " line then
         set_scope (Foreach (String.trim (chop "foreach " line)))
-      else if String.starts_with ~prefix:"join " line then (
+      else if String.starts_with ~prefix:"join " line then
         let rest = String.trim (chop "join " line) in
         match find_sub " by " rest with
         | None ->
@@ -121,8 +121,8 @@ let parse_section_preamble ~section_index preamble_lines =
                    (String.trim
                       (String.sub rest (idx + 4) (String.length rest - idx - 4))))
             in
-            joins := (var, sep) :: !joins)
-      else if String.starts_with ~prefix:"metavar " line then (
+            joins := (var, sep) :: !joins
+      else if String.starts_with ~prefix:"metavar " line then
         let rest = chop "metavar " line in
         match String.split_on_char ':' rest with
         | [ name; kind ] -> (
@@ -141,7 +141,7 @@ let parse_section_preamble ~section_index preamble_lines =
               (Printf.sprintf
                  "Section %d: invalid metavar declaration (expected 'metavar \
                   <name>: <kind>'): %s"
-                 (section_index + 1) line))
+                 (section_index + 1) line)
       else
         failwith
           (Printf.sprintf "Section %d: unknown preamble line: %s"
@@ -267,9 +267,7 @@ let parse_pattern text =
     let preamble_start = delims.(2 * i) + 1 in
     let preamble_end = delims.((2 * i) + 1) in
     let body_start = delims.((2 * i) + 1) + 1 in
-    let body_end =
-      if i = num_sections - 1 then n else delims.(2 * (i + 1))
-    in
+    let body_end = if i = num_sections - 1 then n else delims.(2 * (i + 1)) in
     let preamble_lines =
       Array.sub lines preamble_start (preamble_end - preamble_start)
       |> Array.to_list
@@ -312,46 +310,46 @@ let parse_pattern text =
    since tree-sitter ignores leading whitespace anyway. Ellipsis is left for
    the tokenizer to handle. Expansion lines are not handled here; that's
    transform-side work. *)
-let match_side body =
+(* A spatch body, line by line, with its role: context (kept on both sides),
+   a `- ` removal, or a `+ ` addition. The role marker is column 0 (like a
+   unified diff); a context line has at most one leading role-indicator space
+   stripped. This is the structured form from which both the match side and
+   the replace side derive — and the basis surgical transforms build on. *)
+type spatch_line = Ctx of string | Del of string | Add of string
+
+let classify_spatch body : spatch_line list =
   String.split_on_char '\n' body
-  |> List.filter_map (fun line ->
-         let len = String.length line in
-         if len >= 2 && line.[0] = '-' && line.[1] = ' ' then
-           Some (String.sub line 2 (len - 2))
-         else if len >= 2 && line.[0] = '+' && line.[1] = ' ' then None
-         else if len >= 1 && line.[0] = ' ' then
-           Some (String.sub line 1 (len - 1))
-         else Some line)
+  |> List.map (fun line ->
+      let len = String.length line in
+      if len >= 2 && line.[0] = '-' && line.[1] = ' ' then
+        Del (String.sub line 2 (len - 2))
+      else if len >= 2 && line.[0] = '+' && line.[1] = ' ' then
+        Add (String.sub line 2 (len - 2))
+      else if len >= 1 && line.[0] = ' ' then Ctx (String.sub line 1 (len - 1))
+      else Ctx line)
+
+(* The match side: context + removed lines (additions dropped). *)
+let match_side body =
+  classify_spatch body
+  |> List.filter_map (function Ctx s | Del s -> Some s | Add _ -> None)
   |> String.concat "\n"
 
-(* Extract the replace side of a body — the mirror of [match_side] with the
-   [-]/[+] roles swapped: [+ ] lines contribute their content, [- ] lines
-   are dropped, context lines have a leading role-indicator space stripped,
-   and other lines are kept whole.
+(* The replace side — the mirror with [-]/[+] swapped: context + added lines,
+   removals dropped.
 
-   Returns [None] only for a pure-context body (no [- ]/[+ ] lines) — that's
-   a match-only guard, which produces no transform. A body with any [- ] or
-   [+ ] line IS a transform: the replacement is its context + [+ ] content
-   with the [- ] lines removed. In particular a body with [- ] lines and no
-   [+ ] line is a *removal* (spatch convention): [- foo] alone replaces the
-   matched span with the empty string. *)
+   Returns [None] only for a pure-context body (no [- ]/[+ ] lines) — a
+   match-only guard, which produces no transform. A body with any [- ] or
+   [+ ] line IS a transform; in particular a body with [- ] lines and no [+ ]
+   is a *removal* (spatch convention): [- foo] alone replaces the matched span
+   with the empty string. *)
 let replace_side body : string option =
-  let lines = String.split_on_char '\n' body in
-  let is_role c line =
-    String.length line >= 2 && line.[0] = c && line.[1] = ' '
-  in
-  let has_edit = List.exists (fun l -> is_role '-' l || is_role '+' l) lines in
-  if not has_edit then None
+  let segs = classify_spatch body in
+  if not (List.exists (function Del _ | Add _ -> true | Ctx _ -> false) segs)
+  then None
   else
     Some
-      (lines
-      |> List.filter_map (fun line ->
-             let len = String.length line in
-             if is_role '+' line then Some (String.sub line 2 (len - 2))
-             else if is_role '-' line then None
-             else if len >= 1 && line.[0] = ' ' then
-               Some (String.sub line 1 (len - 1))
-             else Some line)
+      (segs
+      |> List.filter_map (function Ctx s | Add s -> Some s | Del _ -> None)
       |> String.concat "\n")
 
 (* Intermediate representation for a parsed pattern.
@@ -387,19 +385,47 @@ type replace_template = {
   sequences : string list;
 }
 
+(* A surgical edit hunk: a maximal run of [-]/[+] lines in a transform body,
+   bounded by context lines (or the body edges). It localizes one edit within
+   a match:
+
+   - [del_idxs] are the indices (into a match's [spans] / the pattern token
+     list) of the tokens on this hunk's [-] lines — the source bytes to delete
+     or replace. Empty for a [+]-only hunk (a pure insertion).
+   - [add] is the instantiated text of this hunk's [+] lines (with metavar
+     placeholders), or [None] for a [-]-only hunk (a pure deletion).
+   - [prev_tok]/[next_tok] are the indices of the context tokens immediately
+     before/after the hunk, used to anchor a pure insertion (which has no
+     [del_idxs] span of its own).
+
+   A whole-construct rewrite ([- foo($x)] / [+ bar($x)] with no context) is the
+   special case of a single hunk whose [del_idxs] cover every token — the edit
+   then spans the whole match, i.e. the former whole-span behaviour. *)
+type hunk = {
+  del_idxs : int list;
+  add : replace_template option;
+  prev_tok : int option;
+  next_tok : int option;
+}
+
 type ir =
   | StrictSeq of {
       tokens : Stmatch.pattern_token list;
+      hunks : hunk list;
+          (** Surgical edit hunks for this section's transform body. *)
       replace : replace_template option;
     }
   | PartialContainer of {
       tokens : Stmatch.pattern_token list;
+      hunks : hunk list;
       replace : replace_template option;
     }
   | FieldContainer of {
       tokens : Stmatch.pattern_token list;
           (** Standalone tokenization, the fallback when source-context
-              tokenization can't be established (see {!field_contextual_tokens}). *)
+              tokenization can't be established (see
+              {!field_contextual_tokens}). *)
+      hunks : hunk list;
       match_text : string;  (** The match-side body, for re-tokenization. *)
       singles : string list;
       sequences : string list;
@@ -435,19 +461,111 @@ let check_partial_is_container tokens =
   in
   if not ok then
     failwith
-      "match: partial requires the pattern to be a single bracketed \
-       container (e.g. `{a: $x}` or `<Foo a={$x} />`); the given pattern's \
-       outer form is not a delimited container. For \"a call/element whose \
-       argument contains X\" use a multi-section pattern: a strict section \
-       binds the container and scopes a `match: partial` section to it with \
-       `on $VAR`."
+      "match: partial requires the pattern to be a single bracketed container \
+       (e.g. `{a: $x}` or `<Foo a={$x} />`); the given pattern's outer form is \
+       not a delimited container. For \"a call/element whose argument contains \
+       X\" use a multi-section pattern: a strict section binds the container \
+       and scopes a `match: partial` section to it with `on $VAR`."
+
+(* Tokenize [body]'s match side and group its tokens into surgical {!hunk}s.
+   Returns the plain match tokens (parallel to the [spans] a match records) and
+   the hunks.
+
+   The match tokens are exactly {!match_side}'s — context + removal lines, in
+   order — so token index aligns with the recorded [spans]. Each token is
+   located back to its source line via {!Tokenize.tokenize_with_lines}; a
+   maximal run of [-]/[+] body lines (between context lines) becomes one hunk.
+   [single_metavars]/[sequence_metavars] tag the per-hunk [+] templates so
+   placeholder substitution works on each hunk's added text. *)
+let compile_hunks ~ctx ~language ~single_metavars ~sequence_metavars body =
+  let segs = classify_spatch body in
+  (* The context+removal lines, in order — line i here is line i of the
+     reconstructed match text the tokenizer sees. *)
+  let cd_segs =
+    List.filter (function Ctx _ | Del _ -> true | Add _ -> false) segs
+  in
+  let match_text =
+    cd_segs
+    |> List.map (function Ctx s | Del s -> s | Add _ -> "")
+    |> String.concat "\n"
+  in
+  let toks_lines =
+    Tokenize.tokenize_with_lines ~ctx ~language ~single_metavars
+      ~sequence_metavars match_text
+  in
+  let tokens = List.map fst toks_lines in
+  (* token indices grouped by their context/removal-line index, in order. *)
+  let n_cd = List.length cd_segs in
+  let idxs_by_cd = Array.make (max 1 n_cd) [] in
+  List.iteri
+    (fun idx (_tok, line) ->
+      if line >= 0 && line < n_cd then
+        idxs_by_cd.(line) <- idx :: idxs_by_cd.(line))
+    toks_lines;
+  Array.iteri (fun i l -> idxs_by_cd.(i) <- List.rev l) idxs_by_cd;
+  let mk_template add_lines =
+    {
+      text = add_lines |> List.rev |> String.concat "\n";
+      singles = single_metavars;
+      sequences = sequence_metavars;
+    }
+  in
+  let hunks = ref [] in
+  (* current open hunk: (del_idxs rev, add_lines rev, prev_tok). *)
+  let cur = ref None in
+  let cd = ref 0 in
+  let prev_tok = ref None in
+  let last_of = function
+    | [] -> None
+    | l -> Some (List.nth l (List.length l - 1))
+  in
+  let open_hunk () =
+    match !cur with Some _ -> () | None -> cur := Some ([], [], !prev_tok)
+  in
+  let flush ~next_tok =
+    match !cur with
+    | None -> ()
+    | Some (dels, adds, ptok) ->
+        let add = if adds = [] then None else Some (mk_template adds) in
+        hunks :=
+          { del_idxs = List.rev dels; add; prev_tok = ptok; next_tok } :: !hunks;
+        cur := None
+  in
+  List.iter
+    (fun seg ->
+      match seg with
+      | Ctx _ ->
+          let line_idxs = idxs_by_cd.(!cd) in
+          (match line_idxs with
+          | x :: _ -> flush ~next_tok:(Some x)
+          | [] -> flush ~next_tok:None);
+          (match last_of line_idxs with
+          | Some _ as l -> prev_tok := l
+          | None -> ());
+          incr cd
+      | Del _ ->
+          open_hunk ();
+          let line_idxs = idxs_by_cd.(!cd) in
+          (match !cur with
+          | Some (dels, adds, p) ->
+              cur := Some (List.rev_append line_idxs dels, adds, p)
+          | None -> ());
+          incr cd
+      | Add s -> (
+          open_hunk ();
+          match !cur with
+          | Some (dels, adds, p) -> cur := Some (dels, s :: adds, p)
+          | None -> ()))
+    segs;
+  flush ~next_tok:None;
+  (tokens, List.rev !hunks)
 
 let compile_section ~ctx ~language section =
-  let tokens =
-    Tokenize.tokenize ~ctx ~language ~single_metavars:section.single_metavars
-      ~sequence_metavars:section.sequence_metavars (match_side section.body)
+  let tokens, hunks =
+    compile_hunks ~ctx ~language ~single_metavars:section.single_metavars
+      ~sequence_metavars:section.sequence_metavars section.body
   in
-  (if section.mode = Partial then check_partial_is_container tokens);
+  if section.mode = Partial then check_partial_is_container tokens;
   let replace =
     match replace_side section.body with
     | None -> None
@@ -461,12 +579,13 @@ let compile_section ~ctx ~language section =
   in
   let leaf =
     match section.mode with
-    | Strict -> StrictSeq { tokens; replace }
-    | Partial -> PartialContainer { tokens; replace }
+    | Strict -> StrictSeq { tokens; hunks; replace }
+    | Partial -> PartialContainer { tokens; hunks; replace }
     | Field ->
         FieldContainer
           {
             tokens;
+            hunks;
             match_text = match_side section.body;
             singles = section.single_metavars;
             sequences = section.sequence_metavars;
@@ -536,9 +655,7 @@ let contextual_elem_tokens ~ctx ~language ~match_sections section seq_var =
             if toks = [] then None else Some toks)
 
 let compile_foreach ~ctx ~language ~match_sections section =
-  let seq_var =
-    match section.scope with Foreach n -> n | _ -> assert false
-  in
+  let seq_var = match section.scope with Foreach n -> n | _ -> assert false in
   let elem_tokens =
     match
       contextual_elem_tokens ~ctx ~language ~match_sections section seq_var
@@ -572,7 +689,8 @@ let is_foreach s = match s.scope with Foreach _ -> true | _ -> false
 let wildcard_names tokens =
   List.filter_map
     (function
-      | Stmatch.Subtree { name = Some n } | Stmatch.Siblings { name = Some n } ->
+      | Stmatch.Subtree { name = Some n } | Stmatch.Siblings { name = Some n }
+        ->
           Some n
       | _ -> None)
     tokens
@@ -600,7 +718,9 @@ let rec ir_tokens = function
 let validate_declared_metavars_present (p : parsed_pattern) ~ir ~foreaches =
   let appeared =
     wildcard_names (ir_tokens ir)
-    @ List.concat_map (fun (f : foreach_transform) -> wildcard_names f.elem_tokens) foreaches
+    @ List.concat_map
+        (fun (f : foreach_transform) -> wildcard_names f.elem_tokens)
+        foreaches
   in
   List.iter
     (fun (s : section) ->
@@ -641,8 +761,7 @@ let compile_to_ir ~ctx ~language (p : parsed_pattern) :
 let lookup_single name bindings =
   List.find_map
     (function
-      | M.Single { name = n; cursor } when n = name -> Some cursor
-      | _ -> None)
+      | M.Single { name = n; cursor } when n = name -> Some cursor | _ -> None)
     bindings
 
 (* Tokenize a field pattern in the context of a specific source span: splice
@@ -667,7 +786,8 @@ let field_contextual_tokens ~ctx ~language ~source ~match_text ~singles
     let wrapped = before ^ match_text ^ after in
     let toks =
       Tokenize.tokenize_span ~ctx ~language ~single_metavars:singles
-        ~sequence_metavars:sequences ~lo ~hi:(lo + String.length match_text)
+        ~sequence_metavars:sequences ~lo
+        ~hi:(lo + String.length match_text)
         wrapped
     in
     if toks = [] then None else Some toks
@@ -681,8 +801,7 @@ let field_contextual_tokens ~ctx ~language ~source ~match_text ~singles
 let pattern_needs_context tokens =
   List.exists
     (function
-      | Stmatch.Concrete { text; node_type } -> node_type <> text
-      | _ -> false)
+      | Stmatch.Concrete { text; node_type } -> node_type <> text | _ -> false)
     tokens
 
 (* Per-candidate token provider for field-mode source-context tokenization,
@@ -702,9 +821,7 @@ let field_tokens_for ~ctx ~language ~source ~match_text ~singles ~sequences
     Hashtbl.create 8
   in
   fun candidate ->
-    match
-      M.match_field_at ~ignore_node_type:true standalone candidate
-    with
+    match M.match_field_at ~ignore_node_type:true standalone candidate with
     | None -> [] (* not a plausible candidate; skip, no reparse *)
     | Some _ -> (
         let nt = Tree_sitter_cursor.node_type candidate in
@@ -821,14 +938,16 @@ let pattern_warnings pattern_text =
         let what, dropped =
           match s.mode with
           | Partial -> ("container", "extra elements it doesn't list")
-          | _ -> ("declaration", "ignored fields (decorators, return types, modifiers)")
+          | _ ->
+              ( "declaration",
+                "ignored fields (decorators, return types, modifiers)" )
         in
         Some
           (Printf.sprintf
              "warning: this %s-mode section replaces the whole matched %s, so \
               %s will be dropped. To change part of it while keeping the rest, \
-              use this section as a guard and edit elements in a `foreach`/`on` \
-              section."
+              use this section as a guard and edit elements in a \
+              `foreach`/`on` section."
              (mode_name s.mode) what dropped)
       else None)
     p.sections
@@ -853,8 +972,8 @@ let debug_tokens ~ctx ~language ~pattern_text =
         | Foreach n -> Printf.sprintf ", foreach %s" n
       in
       Buffer.add_string buf
-        (Printf.sprintf "Section %d (match: %s%s):\n" (i + 1)
-           (mode_name s.mode) scope_note);
+        (Printf.sprintf "Section %d (match: %s%s):\n" (i + 1) (mode_name s.mode)
+           scope_note);
       let toks =
         Tokenize.tokenize ~ctx ~language ~single_metavars:s.single_metavars
           ~sequence_metavars:s.sequence_metavars (match_side s.body)
@@ -922,7 +1041,8 @@ let instantiate_template rt seq_renderings bindings source =
       List.find_opt
         (fun name ->
           let ln = String.length name in
-          ln > 0 && !i + ln <= n
+          ln > 0
+          && !i + ln <= n
           && String.sub rt.text !i ln = name
           (* Whole-token only: a metavar name must not be a substring of a
              larger identifier in the template (e.g. [a] inside [fallback]).
@@ -967,19 +1087,131 @@ let leaf_replace = function
       replace
   | _ -> None
 
-(* The edits a composite contributes: one per leaf that carries a replace
-   template, at that leaf's matched span. [seq_renderings] supplies the
-   rendered text for any spliced sequence metavars the template references. *)
+let leaf_hunks = function
+  | StrictSeq { hunks; _ }
+  | PartialContainer { hunks; _ }
+  | FieldContainer { hunks; _ } ->
+      hunks
+  | _ -> []
+
+(* The surgical edits one leaf match contributes: one localized edit per hunk,
+   leaving context (and partial/field's tolerated extras, and [...]-captured
+   source) untouched. Requires the per-token [spans] the match recorded; the
+   caller only takes this path when [m.spans] is populated.
+
+   - A hunk with concrete deleted token spans: replace [first.start, last.end)
+     with its [+] text (empty [+] = deletion).
+   - A hunk whose [-] tokens have no concrete span (e.g. a removed [Siblings]
+     whose span lives in the binding): delete from the preceding context
+     token's end to the following context token's start.
+   - A [+]-only hunk (pure insertion): insert at the preceding context token's
+     end, falling back to the following context token's start. *)
+(* When a deletion removes a whole line — the bytes from the previous newline
+   to [lo] are only indentation, and [hi] sits at end-of-line — absorb that
+   leading indentation and the trailing newline, so the line vanishes cleanly
+   instead of leaving a blank, mis-indented stub. Mid-line deletions (something
+   survives on the line either side) keep the tight span. Applied only to
+   deletions; a replacement fills the slot in place. *)
+let line_delete_cleanup source lo hi =
+  let len = String.length source in
+  let is_hspace c = c = ' ' || c = '\t' in
+  let j = ref lo in
+  while !j > 0 && is_hspace source.[!j - 1] do
+    decr j
+  done;
+  let leading_blank = !j = 0 || source.[!j - 1] = '\n' in
+  let k = ref hi in
+  if !k < len && source.[!k] = '\r' then incr k;
+  let trailing_nl = !k < len && source.[!k] = '\n' in
+  if leading_blank && trailing_nl then (!j, !k + 1) else (lo, hi)
+
+let surgical_edits hunks (m : M.match_result) seq_renderings source =
+  let spans = m.spans in
+  let span_of i =
+    if i >= 0 && i < Array.length spans then spans.(i) else (-1, -1)
+  in
+  let valid (s, _) = s >= 0 in
+  List.filter_map
+    (fun h ->
+      let repl =
+        match h.add with
+        | Some rt -> instantiate_template rt seq_renderings m.bindings source
+        | None -> ""
+      in
+      let del_spans =
+        List.filter_map
+          (fun i ->
+            let sp = span_of i in
+            if valid sp then Some sp else None)
+          h.del_idxs
+      in
+      match del_spans with
+      | _ :: _ ->
+          let lo = List.fold_left (fun a (s, _) -> min a s) max_int del_spans in
+          let hi = List.fold_left (fun a (_, e) -> max a e) min_int del_spans in
+          let lo, hi =
+            if repl = "" then line_delete_cleanup source lo hi else (lo, hi)
+          in
+          Some { start_byte = lo; end_byte = hi; replacement = repl }
+      | [] when h.del_idxs <> [] ->
+          (* removed tokens, but none carried a concrete span — delete the
+             gap between the surrounding context tokens. *)
+          let lo =
+            match h.prev_tok with
+            | Some i when valid (span_of i) -> snd (span_of i)
+            | _ -> m.start_byte
+          in
+          let hi =
+            match h.next_tok with
+            | Some i when valid (span_of i) -> fst (span_of i)
+            | _ -> m.end_byte
+          in
+          let lo, hi =
+            if repl = "" then line_delete_cleanup source lo hi else (lo, hi)
+          in
+          if hi >= lo then
+            Some { start_byte = lo; end_byte = hi; replacement = repl }
+          else None
+      | [] -> (
+          (* pure insertion: anchor at preceding context end, else following
+             context start. Nothing to insert -> no edit. *)
+          match h.add with
+          | None -> None
+          | Some _ ->
+              let pos =
+                match h.prev_tok with
+                | Some i when valid (span_of i) -> snd (span_of i)
+                | _ -> (
+                    match h.next_tok with
+                    | Some i when valid (span_of i) -> fst (span_of i)
+                    | _ -> m.start_byte)
+              in
+              Some { start_byte = pos; end_byte = pos; replacement = repl }))
+    hunks
+
+(* The edits a composite contributes. For a match that recorded per-token
+   [spans] (the strict transform path), edits are {b surgical}: each hunk's
+   [-]/[+] region is edited and everything else — context, partial/field's
+   tolerated extras, [...]-captured source — is left byte-for-byte. For a match
+   without spans (partial/field, which don't yet record them), fall back to the
+   former {b whole-span} replacement: the leaf's full replace template
+   overwrites the entire matched span. [seq_renderings] supplies rendered text
+   for any spliced sequence metavars. *)
 let edits_of_composite ir (composite : composite_match) seq_renderings source =
   List.map2
     (fun leaf (m : M.match_result) ->
-      match leaf_replace leaf with
-      | None -> []
-      | Some rt ->
-          let replacement =
-            instantiate_template rt seq_renderings m.bindings source
-          in
-          [ { start_byte = m.start_byte; end_byte = m.end_byte; replacement } ])
+      if Array.length m.spans > 0 then
+        surgical_edits (leaf_hunks leaf) m seq_renderings source
+      else
+        match leaf_replace leaf with
+        | None -> []
+        | Some rt ->
+            let replacement =
+              instantiate_template rt seq_renderings m.bindings source
+            in
+            [
+              { start_byte = m.start_byte; end_byte = m.end_byte; replacement };
+            ])
     (ir_leaves ir) composite.sections
   |> List.concat
 
@@ -1112,13 +1344,13 @@ let render_foreach ft bindings source sep =
       cursors
       |> List.filter Tree_sitter_cursor.is_named
       |> List.filter_map (fun elem ->
-             let scoped = Tree_sitter_cursor.narrow elem in
-             match M.match_at ft.elem_tokens scoped with
-             | None -> None
-             | Some (_, elem_bindings) ->
-                 Option.map
-                   (fun rt -> instantiate_template rt [] elem_bindings source)
-                   ft.elem_replace)
+          let scoped = Tree_sitter_cursor.narrow elem in
+          match M.match_at ft.elem_tokens scoped with
+          | None -> None
+          | Some (_, elem_bindings) ->
+              Option.map
+                (fun rt -> instantiate_template rt [] elem_bindings source)
+                ft.elem_replace)
       |> String.concat sep
 
 (* Render a referenced sequence that has no foreach (identity splice): the
@@ -1132,8 +1364,8 @@ let render_identity seq bindings source sep =
       cursors
       |> List.filter Tree_sitter_cursor.is_named
       |> List.map (fun c ->
-             let s, e = Tree_sitter_cursor.byte_range c in
-             String.sub source s (e - s))
+          let s, e = Tree_sitter_cursor.byte_range c in
+          String.sub source s (e - s))
       |> String.concat sep
 
 (* The metavar names (from [names]) that occur as placeholders in [text],
@@ -1148,7 +1380,8 @@ let referenced_names names text =
       List.find_opt
         (fun name ->
           let ln = String.length name in
-          ln > 0 && !i + ln <= n
+          ln > 0
+          && !i + ln <= n
           && String.sub text !i ln = name
           (* Whole-token only — same boundary rule as {!instantiate_template},
              so a sequence metavar isn't spuriously "referenced" because its
