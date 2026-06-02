@@ -577,6 +577,13 @@ tolerated extras / ignored fields, so the matcher warns (`pattern_warnings`).
 To edit a sub-part, mark only that part (context lines, and partial's
 unlisted elements, are preserved), or use `foreach`/`on`.
 
+**Write the `+` as bare content.** A `+` line is spliced in place over what the
+`-` matched, so it should carry only the new content — not the structural
+indentation or the element separator the container already supplies. Against
+`{ color: red, size: 10 }`, write `+ colour: $v` (not `+   colour: $v,`); the
+surrounding indentation and commas are kept by the splice, and restating them
+would double them.
+
 ### Sequence rendering: `join` and `foreach`
 
 When a `sequence` metavar is referenced in a `+` template, its elements are

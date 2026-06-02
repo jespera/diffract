@@ -253,10 +253,16 @@ absorbs its indentation and trailing newline. *Partial/field* deletions are
 element-oriented (`element_cleanup`): they absorb an adjacent list separator
 (`,`/`;`) so it doesn't dangle (`{ , size }`), or close a whitespace gap, then
 fall back to line cleanup. The split matters because in strict code a `;` is a
-statement terminator (handled by line cleanup), not a list separator. A
-*replacement* is in-place: the `-` span is the bare token run, so the `+`
-content should omit structural indentation — the source's indentation stays put
-and prefixes the new text.
+statement terminator (handled by line cleanup), not a list separator.
+
+A *replacement* is spliced in place over the `-` span, so the **`+` content is
+the bare element/region**: it should omit the structural indentation and the
+element separator the container already supplies. The source's indentation and
+separators around the edit stay put; the `+` just provides the new content.
+Writing `+   colour: $v,` (with leading indent and a trailing comma) against
+`{ color: red, ... }` would double both; write `+ colour: $v`. This is the same
+rule in every mode — context (indentation, separators, delimiters) is managed
+by the splice, not restated in `+`.
 
 **What this fixes.** All three §1 surprises are gone:
 

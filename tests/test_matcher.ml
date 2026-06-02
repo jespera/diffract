@@ -453,6 +453,29 @@ let test_transform_surgical_partial_jsx () =
   Alcotest.(check string)
     "bar removed, baz kept" "const e = <Foo baz={y} />;" out
 
+(* Partial-mode surgical in-place edit: rewrite one property keeping its
+   siblings and the container separators. The `+` is the bare element (no
+   structural indentation, no trailing separator — the container manages
+   those), so it splices in cleanly. *)
+let test_transform_surgical_partial_inplace () =
+  let pattern =
+    "@@\n\
+     match: partial\n\
+     metavar $v: single\n\
+     @@\n\
+    \ {\n\
+     -   color: $v,\n\
+     + colour: $v\n\
+    \ }"
+  in
+  let out =
+    transform ~language:"typescript" ~pattern
+      ~source:"const s = { color: red, size: 10 };"
+  in
+  Alcotest.(check string)
+    "color renamed in place, size + commas intact"
+    "const s = { colour: red, size: 10 };" out
+
 (* Field-mode surgical rewrite preserves the optional fields the pattern omits
    for matching (here a Kotlin annotation + visibility modifier), instead of
    dropping them as the whole-span replace did. *)
@@ -2113,6 +2136,8 @@ let tests =
       `Quick test_transform_surgical_partial_property;
     test_case "transform: surgical partial JSX attribute removal" `Quick
       test_transform_surgical_partial_jsx;
+    test_case "transform: surgical partial in-place property edit" `Quick
+      test_transform_surgical_partial_inplace;
     test_case "transform: surgical field rewrite keeps ignored modifiers" `Quick
       test_transform_surgical_field_modifiers;
     test_case "transform: adjacent matches" `Quick
