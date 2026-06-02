@@ -110,6 +110,47 @@ Consequences:
   change") is *relaxed*: you mark what changes, context preserves the rest —
   which is the more ergonomic Coccinelle rule.
 
+## 4a. IR impact
+
+The IR's **matching/composition structure is unaffected**; only its
+**transform representation** changes.
+
+Unchanged: `StrictSeq` / `PartialContainer` / `FieldContainer` (mode + match
+tokens), `Within` (`on`-scoping), `All` (multi-section composition). These say
+*where and how to match* — surgical editing doesn't touch any of it.
+
+Changes: the per-leaf transform payload. Today a leaf carries `tokens` (match
+side, with context and `-` lines already **flattened together**, no roles) and
+`replace : replace_template option` where `replace_template = { text; singles;
+sequences }` — a **single whole-span replacement string**. Both bake in
+whole-span replacement:
+
+- **Match tokens need a per-token role** (context vs removed). Edit-building
+  must know which Phase-1 spans belong to `-` regions (delete) vs context
+  (keep); `match_side` currently concatenates them and loses the role.
+- **`replace_template` is the wrong shape.** A flattened "context + `+`" string
+  forces rebuilding the whole span and can't say "delete here, insert there,
+  keep the rest." It must be replaced by a structure that keeps the
+  `-`/`+`/context layout distinct, including **where** each `+` anchors relative
+  to the matched tokens.
+
+Recommended shape: the leaf carries an ordered segment list —
+`Context tok | Removed tok | Added text` — from which the match tokens
+(`Context` + `Removed`) are derived for matching and the localized edits are
+derived for transforming. This replaces `tokens` + `replace_template`.
+`edits_of_composite` then walks the segments + Phase-1 spans: delete `Removed`
+runs (with separator cleanup), insert `Added` at its anchor, leave `Context`
+untouched. Whole-construct rewrites are the special case where every token is
+`Removed`/`Added`, so the localized edit covers the whole span — i.e. today's
+behaviour, unchanged. `foreach` (`elem_tokens` + `elem_replace`, already doing
+surgical removal via `removal_span`) should become another consumer of the same
+segment/span edit-builder rather than a parallel path.
+
+The change is contained: the transform-carrying fields of the leaf
+constructors, the body classifier (`match_side`/`replace_side` →  a segment
+parser), and `edits_of_composite`/`foreach_edits`. The matching engine and
+`Within`/`All` evaluation do not move.
+
 ## 5. Implementation sketch
 
 The central new requirement: the matcher must expose, for the matched region,
