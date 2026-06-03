@@ -1,2 +1,2 @@
 <?php
-$users = array($alice, $bob);
+$users = array(1, 2);
