@@ -4,8 +4,8 @@ match: strict
 metavar _H0: single
 metavar _H1: single
 @@
-- array($_H0, $_H1)
-+ [$_H0, $_H1]
+- array(_H0, _H1)
++ [_H0, _H1]
 # sites R1
 config.php
 roles.php
