@@ -592,7 +592,7 @@ let no_orphan_after_holes (ep : edit_pat) : bool =
     (the property name in a member access) renders as just its text
     and re-parses as a bare [identifier] at expression position. Such
     a pattern can never fire: the matcher only unifies nodes whose
-    types match. Verifying directly via [Match.find_matches] catches
+    types match. Verifying directly via [Matcher.find] catches
     these mismatches without having to model the matcher's
     type-strict behaviour with a static heuristic.
 
@@ -609,7 +609,7 @@ let cluster_applies ~ctx (c : cluster) : bool =
         let pattern_text = render_pattern_body c.pattern in
         try
           let matches =
-            Match.find_matches ~ctx ~language:lang ~pattern_text
+            Matcher.find ~ctx ~language:lang ~pattern_text
               ~source_text:inst.before_full_source
           in
           List.length matches > 0
@@ -910,7 +910,7 @@ let removal_only_applies ~ctx ~src_lookup (c : one_sided_cluster) : bool =
             let pattern_text = render_removal_only_body c.os_cluster_pattern in
             try
               let matches =
-                Match.find_matches ~ctx ~language:lang ~pattern_text
+                Matcher.find ~ctx ~language:lang ~pattern_text
                   ~source_text:src
               in
               if Sys.getenv_opt "CS_TRACE" <> None then
