@@ -1,11 +1,11 @@
 # rule R1  support=3  language=typescript
 @@
 match: strict
-metavar $H0: single
-metavar $H1: single
+metavar _H0: single
+metavar _H1: single
 @@
-- _.map($H0, $H1)
-+ $H0.map($H1)
+- _.map(_H0, _H1)
++ _H0.map(_H1)
 # sites R1
 items.ts
 orders.ts

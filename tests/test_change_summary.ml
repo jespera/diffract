@@ -12,36 +12,65 @@ let cases_dir = "change_summary_cases"
 
 (* ── Alpha-canonicalization ───────────────────────────────────────── *)
 
-(** Replace every [$name] occurrence in [text] with [$_N] where N is the
-    first-seen index of [name] in the text. Other characters pass through. *)
+let is_ident_char c =
+  (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+  || (c >= '0' && c <= '9') || c = '_'
+
+(** Names declared by [metavar <name>: ...] lines in a rule body. The
+    universal-tokenizer matcher is sigil-free: a metavar is recognised by
+    its declared name, not a [$] prefix, so we identify metavars from the
+    declarations rather than by scanning for a sigil. *)
+let declared_metavars (text : string) : (string, unit) Hashtbl.t =
+  let tbl = Hashtbl.create 8 in
+  List.iter
+    (fun line ->
+      let line = String.trim line in
+      match String.split_on_char ' ' line with
+      | "metavar" :: name :: _ ->
+          (* [name] is e.g. "_H0:" or "_H0" — drop a trailing colon. *)
+          let name =
+            match String.index_opt name ':' with
+            | Some k -> String.sub name 0 k
+            | None -> name
+          in
+          if name <> "" then Hashtbl.replace tbl name ()
+      | _ -> ())
+    (String.split_on_char '\n' text);
+  tbl
+
+(** Rename every whole-identifier occurrence of a declared metavar to
+    [_M<N>], where N is the first-seen index in [text], so the generated
+    metavar names do not cause test churn. A literal [$] adjacent to a
+    metavar (PHP's variable delimiter, e.g. [$_H0]) is preserved — only the
+    identifier part is renamed. Non-metavar identifiers pass through. *)
 let alpha_canonicalize (text : string) : string =
+  let declared = declared_metavars text in
   let buf = Buffer.create (String.length text) in
   let mapping = Hashtbl.create 8 in
   let next = ref 0 in
   let n = String.length text in
   let i = ref 0 in
-  let is_ident_char c =
-    (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
-    || (c >= '0' && c <= '9') || c = '_'
-  in
   while !i < n do
     let c = text.[!i] in
-    if c = '$' && !i + 1 < n && is_ident_char text.[!i + 1] then begin
-      let j = ref (!i + 1) in
+    if is_ident_char c && (!i = 0 || not (is_ident_char text.[!i - 1])) then begin
+      (* Start of a maximal identifier token. *)
+      let j = ref !i in
       while !j < n && is_ident_char text.[!j] do
         incr j
       done;
-      let name = String.sub text (!i + 1) (!j - !i - 1) in
-      let idx =
-        match Hashtbl.find_opt mapping name with
-        | Some k -> k
-        | None ->
-            let k = !next in
-            incr next;
-            Hashtbl.add mapping name k;
-            k
-      in
-      Buffer.add_string buf (Printf.sprintf "$_%d" idx);
+      let tok = String.sub text !i (!j - !i) in
+      (if Hashtbl.mem declared tok then
+         let idx =
+           match Hashtbl.find_opt mapping tok with
+           | Some k -> k
+           | None ->
+               let k = !next in
+               incr next;
+               Hashtbl.add mapping tok k;
+               k
+         in
+         Buffer.add_string buf (Printf.sprintf "_M%d" idx)
+       else Buffer.add_string buf tok);
       i := !j
     end
     else begin

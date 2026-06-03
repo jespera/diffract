@@ -198,8 +198,20 @@ let rec of_src source (n : Tree.src Tree.t) : pat_node =
 
 (* ── Rendering ───────────────────────────────────────────────────── *)
 
+(* Metavar name for hole [h]. Sigil-free: the universal-tokenizer matcher
+   treats a leaf as a metavar iff its text equals a declared name (no [$]
+   sigil). A [$] prefix only tokenizes as part of an identifier in
+   TypeScript/TSX; in Kotlin [$] is string-template syntax and in PHP it is
+   the variable delimiter, so a [$]-prefixed name fails to lex as one leaf
+   there. The leading [_] keeps the generated name from colliding with an
+   ordinary source identifier while staying a valid identifier in every
+   supported grammar. Any literal [$] in a rendered pattern (e.g. PHP's
+   [$_H0]) comes from the source variable's own delimiter, preserved as a
+   concrete leaf, not from this name. *)
+let hole_name h = Printf.sprintf "_H%d" h
+
 let rec render_pat_node = function
-  | Hole h -> Printf.sprintf "$H%d" h
+  | Hole h -> hole_name h
   | Leaf { value; _ } -> value
   | PNode { children = []; node_type; _ } -> node_type
   | PNode { children; template; _ } ->
@@ -230,7 +242,8 @@ let render_pattern_body (ep : edit_pat) : string =
   Buffer.add_string buf "@@\n";
   Buffer.add_string buf "match: strict\n";
   List.iter
-    (fun h -> Buffer.add_string buf (Printf.sprintf "metavar $H%d: single\n" h))
+    (fun h ->
+      Buffer.add_string buf (Printf.sprintf "metavar %s: single\n" (hole_name h)))
     holes;
   Buffer.add_string buf "@@\n";
   let before_text = render_pat_node ep.before in
@@ -252,7 +265,8 @@ let render_removal_only_body (p : pat_node) : string =
   Buffer.add_string buf "@@\n";
   Buffer.add_string buf "match: strict\n";
   List.iter
-    (fun h -> Buffer.add_string buf (Printf.sprintf "metavar $H%d: single\n" h))
+    (fun h ->
+      Buffer.add_string buf (Printf.sprintf "metavar %s: single\n" (hole_name h)))
     holes;
   Buffer.add_string buf "@@\n";
   let text = render_pat_node p in

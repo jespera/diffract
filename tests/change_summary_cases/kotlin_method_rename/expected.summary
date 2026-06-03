@@ -1,10 +1,10 @@
 # rule R1  support=3  language=kotlin
 @@
 match: strict
-metavar $H0: single
+metavar _H0: single
 @@
-- Log.d("tag", $H0)
-+ logger.debug($H0)
+- Log.d("tag", _H0)
++ logger.debug(_H0)
 # sites R1
 Activity1.kt
 Activity2.kt

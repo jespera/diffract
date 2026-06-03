@@ -1,17 +1,17 @@
 # rule R1  support=3  language=typescript
 @@
 match: strict
-metavar $H0: single
+metavar _H0: single
 @@
-- $H0.read
-+ $H0.get
+- _H0.read
++ _H0.get
 
 @@
 match: strict
-metavar $H0: single
+metavar _H0: single
 @@
-- $H0.write
-+ $H0.set
+- _H0.write
++ _H0.set
 # sites R1
 auth.ts
 rates.ts
