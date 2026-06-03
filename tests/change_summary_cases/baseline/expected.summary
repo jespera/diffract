@@ -1,11 +1,11 @@
 # rule R1  support=3  language=typescript
 @@
 match: strict
-metavar $H0: single
-metavar $H1: single
+metavar _H0: single
+metavar _H1: single
 @@
-- foo($H0, $H1)
-+ bar($H0)
+- foo(_H0, _H1)
++ bar(_H0)
 # sites R1
 file1.ts
 file2.ts

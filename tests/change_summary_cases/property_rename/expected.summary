@@ -1,10 +1,10 @@
 # rule R1  support=3  language=typescript
 @@
 match: strict
-metavar $H0: single
+metavar _H0: single
 @@
-- $H0.apiUrl
-+ $H0.baseUrl
+- _H0.apiUrl
++ _H0.baseUrl
 # sites R1
 a.ts
 b.ts
