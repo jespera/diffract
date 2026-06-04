@@ -26,7 +26,24 @@ type rule = {
       (** distinct files where the rule fires, sorted lexicographically *)
 }
 
-type summary = { rules : rule list }
+type residual = {
+  res_file : string;  (** relative path of the file the gap lives in *)
+  res_rules : string list;
+      (** ids of the rules applied before the gap was measured, in
+          application order; [[]] means no emitted rule claims the file —
+          a pure one-off change (or a file-level add/delete) *)
+  res_diff : string;
+      (** unified diff (zero context) from the post-rule intermediate to
+          the real after-source; for added/deleted files the absent side
+          is [/dev/null] *)
+}
+(** The change at a site that the rules do not explain (design §4.4,
+    M1.9). For every Modified file, applying its claiming rules and
+    diffing against the after-source either yields nothing (fully
+    explained) or this gap. Rules + residuals together account for the
+    whole changeset — the Covering desideratum of §2.3. *)
+
+type summary = { rules : rule list; residuals : residual list }
 
 type side = Before_side | After_side
 
@@ -65,9 +82,9 @@ val summarize :
   ctx:Context.t ->
   changeset ->
   summary
-(** [summarize ~ctx cs] runs the clustering pipeline and returns the summary.
-    In M1 scope: only Modified files contribute change pairs; Added/Deleted
-    files are carried in the changeset but not clustered yet.
+(** [summarize ~ctx cs] runs the clustering pipeline and returns the summary:
+    rules plus residuals (M1.9). Only Modified files contribute change pairs;
+    Added/Deleted files appear as unattributed [/dev/null] residuals (M1.7).
     [progress], if provided, is called once per [Modified] file just before
     parsing. [stage] identifies which pass is running ([{"two-sided";
     "one-sided"}]); [idx] is 1-based and [total] is the count of [Modified]

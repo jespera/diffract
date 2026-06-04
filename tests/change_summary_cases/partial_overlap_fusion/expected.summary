@@ -14,3 +14,10 @@ match: strict
 a.ts
 b.ts
 c.ts
+
+# residual
+--- a/d.ts
++++ b/d.ts
+@@ ... @@
+-  return cache.read(key);
++  return cache.get(key);

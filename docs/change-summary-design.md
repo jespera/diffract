@@ -782,8 +782,9 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   aligned holes; a dedicated fixture for that case will land alongside
   M1.8b.
 
-- **M1.7 — File-level operations.** Thread added/deleted files through the
-  changeset type and into the summary. Test: §5.6.
+- **M1.7 — File-level operations (done).** Added/Deleted files emit as
+  unattributed residual sections with `/dev/null` on the absent side
+  (§5.6, §9); landed together with M1.9a. Test: §5.6.
 
 - **M1.8a — Orphan-hole rejection (done).** Coherence gate rejects any
   cluster whose `+`-side has a metavariable not present on the `-` side
@@ -828,12 +829,26 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   once siblings matching handles grammar-restricted positions (pinned as
   a known-bug test on the matcher side).
 
-- **M1.9 — Residual extraction (single tier).** Surface the residuals
-  the M1.8c gate already computes: emit each non-empty `decomposable`
-  gap as a `residual` section in unified-diff form with optional
-  `rule=Rn` attribution, and relax the emission policy so
-  `decomposable` sites count toward a rule's support (the format can
-  now state the decomposition honestly). Single-tier only: no
+- **M1.9a — Residual emission / completeness (done).** Per Modified
+  file: apply the file's claiming rules (in id order) and diff the
+  intermediate against the real after-source with zero context; the
+  gap, if any, emits as a `residual` section attributed `rule=R1,R2`
+  (application order). The residual is computed against what the rules
+  *actually* produce, so rules ∘ residual reproduce the site's change
+  by construction. Files no rule claims emit unattributed residuals.
+  Layout-only gaps are skipped (the gate's whitespace tolerance).
+  Rules + residuals now account for the whole changeset — the Covering
+  desideratum of §2.3 holds.
+
+- **M1.9b — Decomposable-site relaxation.** Relax the M1 exact-only
+  emission policy so safe-but-partial (`decomposable`) sites count
+  toward a rule's support, carrying their `rule=`-attributed residual
+  (the §5.2 case: `f($X,$Y) → g($X)` at `f(x+1,a) → g(x)` with
+  residual `x+1 → x`). Requires distinguishing `decomposable` from
+  `unsafe` for edits *within* a changed region: each of the rule's
+  minimal edits must appear in the site diff's edit script (a relabel
+  toward the after-content vs. a relabel that detours), which the
+  current span/effect checks cannot express. Single-tier only: no
   `after=Rn` chains, no recursive re-clustering of residuals yet.
   Test: §5.2.
 
@@ -1060,12 +1075,13 @@ remaining after both fired carries the chain: `# residual rule=R1,R2`.
 Only linear chains are supported; no branching DAG of tiers in v1. Order
 within a chain is application order.
 
-### 9.4 M1 subset
+### 9.4 Current subset
 
-M1 emits only `rule` sections (no residuals, no `after=`). A site that
-doesn't match any emitted rule simply doesn't appear. The format above is
-forward-compatible: existing expected files stay valid when M1.9 and M2
-introduce residuals and tiered rules respectively.
+With M1.9a, summaries emit `rule` sections followed by `residual`
+sections (no `after=` tiers yet — those arrive with M2). Every change in
+the changeset appears exactly once: in a rule's effect at a claimed
+site, or in a residual. The format is forward-compatible: existing
+expected files stay valid when M2 introduces tiered rules.
 
 ### 9.5 Folder layout for Tier 1
 

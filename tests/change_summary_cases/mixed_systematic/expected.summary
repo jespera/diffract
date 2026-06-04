@@ -16,3 +16,10 @@ metavar _H0: single
 auth.ts
 rates.ts
 session.ts
+
+# residual  rule=R1
+--- a/rates.ts
++++ b/rates.ts
+@@ ... @@
+-    throw new Error("rate must be non-negative");
++    throw new Error("negative rate not allowed");

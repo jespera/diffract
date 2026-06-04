@@ -24,7 +24,30 @@ type rule = {
   sites : string list;  (** distinct file paths where the rule fires, sorted *)
 }
 
-type summary = { rules : rule list }
+type residual = {
+  res_file : string;
+  res_rules : string list;
+  res_diff : string;
+}
+
+type summary = { rules : rule list; residuals : residual list }
+
+(** Collapse whitespace runs to single spaces and trim. Layout-only
+    differences are presentational, not a statement about the change —
+    the same tolerance the safety gate's tree-level re-diff gives. *)
+let ws_collapse s =
+  let b = Buffer.create (String.length s) in
+  let pend = ref false in
+  String.iter
+    (fun c ->
+      if c = ' ' || c = '\t' || c = '\n' || c = '\r' then pend := true
+      else begin
+        if !pend && Buffer.length b > 0 then Buffer.add_char b ' ';
+        pend := false;
+        Buffer.add_char b c
+      end)
+    s;
+  Buffer.contents b
 
 (* ── Internal pattern representation ─────────────────────────────── *)
 
@@ -1931,20 +1954,6 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
        diff-sliding ambiguity — while the effects are identical. The
        whitespace-collapsed fallback mirrors the safety gate's tree-level
        tolerance: layout is presentational. *)
-    let ws_collapse s =
-      let b = Buffer.create (String.length s) in
-      let pend = ref false in
-      String.iter
-        (fun c ->
-          if c = ' ' || c = '\t' || c = '\n' || c = '\r' then pend := true
-          else begin
-            if !pend && Buffer.length b > 0 then Buffer.add_char b ' ';
-            pend := false;
-            Buffer.add_char b c
-          end)
-        s;
-      Buffer.contents b
-    in
     let edit_matches (si : site_info) ea eb =
       ea = eb
       ||
@@ -2030,7 +2039,94 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
     |> List.sort (fun a b -> compare b.support a.support)
     |> List.mapi (fun i r -> { r with id = Printf.sprintf "R%d" (i + 1) })
   in
-  { rules = combined }
+  (* M1.9 residual extraction: for each Modified file, apply its claiming
+     rules (in id order) and diff the intermediate against the real
+     after-source. The gap, if any, is the residual — computed against
+     what the rules *actually* produce, so rules + residual reproduce the
+     site's change by construction. Files no rule claims yield
+     unattributed residuals (pure one-off changes); Added/Deleted files
+     appear as [/dev/null] residuals (M1.7). Layout-only gaps are
+     skipped — the same tolerance the safety gate's tree-level re-diff
+     gives. *)
+  let residuals =
+    let rules_at f =
+      List.filter (fun (r : rule) -> List.mem f r.sites) combined
+    in
+    let file_op_diff ~added path content =
+      let buf = Buffer.create (String.length content + 64) in
+      if added then begin
+        Buffer.add_string buf "--- /dev/null\n";
+        Buffer.add_string buf (Printf.sprintf "+++ b/%s\n" path)
+      end
+      else begin
+        Buffer.add_string buf (Printf.sprintf "--- a/%s\n" path);
+        Buffer.add_string buf "+++ /dev/null\n"
+      end;
+      Buffer.add_string buf "@@ ... @@\n";
+      let lines =
+        match List.rev (String.split_on_char '\n' content) with
+        | "" :: rest -> List.rev rest
+        | l -> List.rev l
+      in
+      List.iter
+        (fun line ->
+          Buffer.add_char buf (if added then '+' else '-');
+          Buffer.add_string buf line;
+          Buffer.add_char buf '\n')
+        lines;
+      Buffer.contents buf
+    in
+    List.filter_map
+      (fun fc ->
+        match fc with
+        | Modified { path; _ } -> (
+            match Hashtbl.find_opt site_db path with
+            | None -> None
+            | Some si ->
+                let claiming = rules_at path in
+                let inter =
+                  List.fold_left
+                    (fun src (r : rule) ->
+                      try
+                        Matcher.transform ~ctx ~language:r.language
+                          ~pattern_text:r.pattern_text ~source_text:src
+                      with _ -> src)
+                    si.si_before claiming
+                in
+                if
+                  inter = si.si_after
+                  || ws_collapse inter = ws_collapse si.si_after
+                then None
+                else
+                  let d =
+                    Text_diff.generate_diff ~context:0 ~file_path:path
+                      ~original:inter ~transformed:si.si_after ()
+                  in
+                  if d = "" then None
+                  else
+                    Some
+                      {
+                        res_file = path;
+                        res_rules = List.map (fun (r : rule) -> r.id) claiming;
+                        res_diff = d;
+                      })
+        | Added { path; after_source; _ } ->
+            Some
+              {
+                res_file = path;
+                res_rules = [];
+                res_diff = file_op_diff ~added:true path after_source;
+              }
+        | Deleted { path; before_source; _ } ->
+            Some
+              {
+                res_file = path;
+                res_rules = [];
+                res_diff = file_op_diff ~added:false path before_source;
+              })
+      cs.files
+  in
+  { rules = combined; residuals }
 
 let format_summary (s : summary) : string =
   let buf = Buffer.create 256 in
@@ -2048,6 +2144,16 @@ let format_summary (s : summary) : string =
           r.sites
       end)
     s.rules;
+  List.iteri
+    (fun i (res : residual) ->
+      if i > 0 || s.rules <> [] then Buffer.add_char buf '\n';
+      (match res.res_rules with
+      | [] -> Buffer.add_string buf "# residual\n"
+      | ids ->
+          Buffer.add_string buf
+            (Printf.sprintf "# residual  rule=%s\n" (String.concat "," ids)));
+      Buffer.add_string buf res.res_diff)
+    s.residuals;
   Buffer.contents buf
 
 (* ── Filesystem loader ──────────────────────────────────────────── *)
