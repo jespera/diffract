@@ -63,9 +63,37 @@ be practical rather than optimal:
 
 - **Covering**. Every change pair extracted from the changeset is accounted
   for, either by a rule occurrence or in `residuals`.
-- **Safe by decomposition**. For every `(site, rule)` association, the pair
-  `(rule, residual_at_site)` reproduces the site's after-source *exactly*.
-  Safety is structural, not probabilistic. See §4.4.
+- **Safe**. For a site pair `(t, t')` and a rule with `t'' = apply(rule, t)`,
+  the rule is *safe at the site* iff, for a tree edit-distance metric `d`,
+
+  ```
+  d(t, t'') + d(t'', t') = d(t, t')
+  ```
+
+  — applying the rule stays on a geodesic from `t` to `t'`: it makes no
+  change that would have to be undone to reach the after-source.
+  Equivalently, the rule's edits are a subset of a minimal edit script
+  from `t` to `t'`. Every emitted `(site, rule)` association is safe;
+  sites that fail the check are shed from the rule (they fall to
+  residuals once those are emitted, M1.9). The summary must never
+  include a transformation that wrongly states what changed — a rule
+  that, scoped to a claimed site, edits something the changeset did not
+  change (or writes different content than the changeset wrote) is
+  excluded from that site no matter how high its support elsewhere.
+
+  Safety is the *constraint*; generality remains the *objective*. The
+  concrete per-site diff is maximally safe but minimally general, so
+  safety never rewards collapsing back to a standard diff — among safe
+  rules, the most abstract, highest-support ones are still preferred.
+
+  Safety composes: if `R1` is safe wrt `(t, t')` with intermediate `t₁`
+  and `R2` is safe wrt `(t₁, t')`, the chain is additive end-to-end
+  (`d(t,t₁) + d(t₁,t₂) + d(t₂,t') = d(t,t')`). A tiered summary (§4.4,
+  M2) is therefore a factorization of the geodesic, honest at every
+  tier. The older "safe by decomposition" phrasing — `(rule,
+  residual_at_site)` reproduces the site's after-source exactly — is
+  the decomposed form of the same property. The operational check is
+  the per-site safety gate (§3.1).
 - **Concrete**. Every emitted rule contains at least one named AST node that
   is not a metavariable. Pure `$X ⤳ $Y` rules are useless and excluded.
 - **Coherent**. For each rule the fraction of holes in the pattern is below a
@@ -136,7 +164,7 @@ level of ancestor wins for each site. Key properties:
 - **No depth gating.** Every `Modified` ancestor on the change chain
   is emitted unconditionally. Earlier iterations gated by
   change-density (emit only ancestors whose named-children change
-  ratio exceeded a threshold), but with the applicability and
+  ratio exceeded a threshold), but with the safety and
   covering filters below, gating loses well-scoped lift candidates
   whose density looks low (a single property rename inside a longer
   member-access chain) for no real benefit — the unhelpful candidates
@@ -172,19 +200,65 @@ level of ancestor wins for each site. Key properties:
   scaffolding like `$.$($)→$.$($)` is rejected here before it can
   compete for coverage. The gate also rejects clusters whose `+`-side
   has a metavariable not present on the `-` side (M1.8a).
-- **Behavioural applicability.** Render the cluster's match-side
-  pattern as `.pat` text and run `Match.find_matches` against the
-  instance's full pre-change source. A cluster whose rule matches
-  zero positions in the source it was extracted from cannot
-  meaningfully fire and is dropped. This catches the common case
-  where a renderer drops grammatical context — e.g. a
-  `property_identifier` (member access target, JSX attribute name)
-  rendered standalone re-parses as `identifier` at expression
-  position, and the matcher's type-strict unification refuses to
-  bind. The check is behavioural rather than a static heuristic so
-  no model of the matcher's typing rules is required: re-parsing the
-  rendered text and querying `Match.find_matches` directly is the
-  source of truth.
+- **Per-site safety gate.** The operational form of the safety
+  desideratum (§2.3), checked behaviourally per `(cluster, site)`
+  association. Render the cluster's pattern as `.pat` text and run
+  the matcher against the site's full pre-change source; the
+  application's edits — *every* match, not just the originating
+  instance — must each satisfy two legs against the site's
+  `Tree_diff`:
+
+  1. *Placement*: the edit's span lies within a region the diff marks
+     as changed. An edit landing in an unchanged region is, by
+     construction, a change that must be undone to reach the
+     after-source — unsafe.
+  2. *Content*: the edit reproduces what the changeset actually wrote
+     there. For a removal, the region must be `Removed` in the diff;
+     for a rewrite, the instantiated replacement must equal the
+     region's after-side content.
+
+  A site at which any edit fails is *shed* from the cluster (the rule
+  simply doesn't claim that site; with M1.9 the site's changes fall to
+  residuals); a cluster whose safe sites drop below `min_support`
+  dissolves, and the dendrogram cut falls back to its children —
+  typically the concrete-majority subtree.
+
+  The motivating failure is the over-merged removal-only rule: files
+  that each remove one import, but not all the *same* import,
+  anti-unify to `- import _H0` — a rule that, applied to any of its
+  claimed sites, would remove every import in the file, almost all of
+  them in unchanged regions. Placement rejects it per-site, and the
+  cut falls back to the concrete rule for the majority import. The
+  content leg symmetrically rejects a rule that rewrites a changed
+  region to something other than what the changeset wrote (claiming
+  `f → h` where the change was `f → g`). Structural proxies
+  (hole-fraction thresholds) cannot express either reliably —
+  grammatical scaffolding pads node counts, e.g. `- import _H0`
+  scores 1 hole / 3 nodes and slips under a 0.35 threshold.
+
+  The gate is *implemented as residual computation* (§4.4): applying
+  the rule at a site and comparing against the after-source classifies
+  the association as `exact` (residual empty — the rule fully explains
+  every region it touches), `decomposable` (residual is pure shrinkage
+  of the original diff: each rule edit appears in the diff's script,
+  untouched regions remain), or `unsafe` (the residual would have to
+  correct the rule's own edits). What may be *emitted* is staged by
+  milestone: M1 emits `exact` sites only, because the M1 format cannot
+  attach residuals and an unexplained gap would mis-state the change;
+  M1.9 admits `decomposable` sites with `rule=` residual attribution;
+  M2 clusters those residuals into `after=` tiers. The gate never
+  relaxes — only the output format's ability to state the
+  decomposition honestly grows.
+
+  Because `Tree_diff` is GumTree-style rather than provably minimal,
+  the check can be conservative: where the diff's script is
+  non-minimal a genuinely safe rule may be rejected. The failure
+  direction is deliberate — the tool may under-summarize, but never
+  mis-state. The gate subsumes the earlier zero-match applicability
+  check (a rendering that re-parses at the wrong grammatical position
+  matches nowhere, so it has no safe sites) — e.g. a
+  `property_identifier` rendered standalone re-parsing as a bare
+  `identifier`.
 - **Leaf-on-delimiter conversion.** During `of_src`, a named node is
   treated as a leaf (its full text kept verbatim, no recursion) when
   its byte range contains non-whitespace bytes that no child covers
@@ -208,7 +282,7 @@ is a single localized edit embedded in a larger scope:
   line in a 35-import block) currently emits no standalone change pair
   at all — only its parent does. Even when leaves do emit, the rendered
   text often re-parses at a different grammatical position and is
-  rejected by the applicability gate.
+  rejected by the safety gate.
 - **Parent too wide.** The parent's other siblings appear as
   `$H0..$Hn` placeholders. Across files those siblings differ, so
   anti-unification keeps them parameterized rather than collapsing the
@@ -367,15 +441,28 @@ change that was applied at that site on top of the common rule.
 3. Otherwise, the residual is `Tree_diff.diff(intermediate_i, t_i')`. Attach
    it to the site.
 
+**Shared with the safety gate.** This is the same computation the per-site
+safety gate (§3.1) performs — the gate *is* residual extraction with a
+classification on the result: `exact` (empty residual), `decomposable`
+(residual is pure shrinkage of the original site diff), `unsafe` (the
+residual would have to undo the rule's own edits — the rule left the
+geodesic, §2.3). M1.9 does not add a new analysis; it surfaces the
+residuals the gate already computes, in unified-diff form with `rule=`
+attribution.
+
 **Recursive clustering on residuals.** Residuals are themselves change pairs.
 Running the clustering pipeline on the accumulated residuals produces
 secondary rules — common small changes that appear across a subset of the
 sites. This process terminates when every remaining residual is a singleton.
 
 This is exactly spdiff's sequential-patch composition `gp_1; gp_2`
-constructively computed instead of searched. It turns "safety" from a
-yes/no filter into a decomposition property: every site's change equals
-(common rule) ∘ (residual), both explicit in the summary.
+constructively computed instead of searched. Because safety composes
+(§2.3), the resulting tiers are a factorization of each site's geodesic:
+the summary can state "this overall change happened everywhere; within
+the cluster, these further decompositions are also present" — with every
+tier individually safe, never mis-stating the change. Every site's change
+equals (common rule) ∘ (secondary rules) ∘ (residual), all explicit in
+the summary.
 
 **Why this is valuable, not a workaround.** A reviewer of a large refactor
 has two questions: "Is the mechanical part correct?" (answered by inspecting
@@ -683,11 +770,29 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   *reshaping of* the before's subtree (the §5.2 example). Test: §5.2
   (first part: cluster doesn't dissolve).
 
-- **M1.9 — Residual extraction (single tier).** Apply each rule to each site
-  via `Match.transform`, diff the result against the site's after-source,
-  emit the gap as a `residual` section in unified-diff form with optional
-  `rule=Rn` attribution. Single-tier only: no `after=Rn` chains, no recursive
-  re-clustering of residuals yet. Test: §5.2.
+- **M1.8c — Per-site safety gate.** Replace the zero-match behavioural
+  applicability check with the per-site safety classification (§3.1):
+  every edit the rule would make at a claimed site must land in a
+  changed region of the site's diff and reproduce that region's
+  after-content. Sites are shed individually; clusters below
+  `min_support` dissolve and the cut falls back. Implemented as
+  residual computation (§4.4) classifying each `(cluster, site)` as
+  `exact` / `decomposable` / `unsafe`; M1 emission policy is `exact`
+  only. Kills over-merged removal-only rules (`- import _H0`) whose
+  extra matches land in unchanged regions, and surfaces the
+  concrete-majority rule beneath them. Tests: import-removal fixture
+  (concrete majority survives, fully-holed variant must not appear);
+  wrong-content fixture (over-general rewrite must not claim a site
+  whose region changed differently).
+
+- **M1.9 — Residual extraction (single tier).** Surface the residuals
+  the M1.8c gate already computes: emit each non-empty `decomposable`
+  gap as a `residual` section in unified-diff form with optional
+  `rule=Rn` attribution, and relax the emission policy so
+  `decomposable` sites count toward a rule's support (the format can
+  now state the decomposition honestly). Single-tier only: no
+  `after=Rn` chains, no recursive re-clustering of residuals yet.
+  Test: §5.2.
 
 - **M2 — Recursive residual clustering + tiered rules.** Run the clustering
   pipeline on accumulated residuals to find secondary patterns; emit such
@@ -695,9 +800,12 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   (`rule=R1,R2`). Test: §5.2 extended with a third site producing a
   secondary rule.
 
-- **M2.5 — Decomposition-based safety.** Property test: for every rule and
-  every site, applying the rule (and then the attached residual, if any)
-  reconstructs the after-source exactly.
+- **M2.5 — Decomposition safety as a property test.** The M1.8c gate
+  enforces safety at emission time; this milestone re-states it as an
+  end-to-end Tier 2 property test over the tool's actual output: for
+  every rule and every site, applying the rule (and then the attached
+  residual and `after=` tiers, if any) reconstructs the after-source
+  exactly.
 
 - **M3 — Role-aware metavar naming.** Use tree-sitter field names to name
   metavariables (`$function`, `$arguments`) when unambiguous.
