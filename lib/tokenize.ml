@@ -15,16 +15,57 @@ let is_spread_at text i =
         || (c >= '0' && c <= '9')
   else false
 
-(* Replace each ellipsis "..." with a unique placeholder identifier
-   ([__ellipsis_N__]) so the body parses; standalone identifiers parse in
-   the positions ellipsis can appear (argument, statement, ...). Returns
-   the rewritten body and a mapping from placeholder text to the synthetic
-   ellipsis name ([..._N]). Spread/rest operators are left as literal
-   "...". *)
+(* True if the "..." starting at [i] is alone on its line: nothing but
+   spaces/tabs between the preceding newline (or start of text) and [i],
+   and nothing but spaces/tabs/CR between [i+3] and the next newline (or
+   end of text). *)
+let is_own_line_at text i =
+  let len = String.length text in
+  let rec back j =
+    if j < 0 then true
+    else
+      match text.[j] with
+      | ' ' | '\t' -> back (j - 1)
+      | '\n' -> true
+      | _ -> false
+  in
+  let rec fwd j =
+    if j >= len then true
+    else
+      match text.[j] with
+      | ' ' | '\t' | '\r' -> fwd (j + 1)
+      | '\n' -> true
+      | _ -> false
+  in
+  back (i - 1) && fwd (i + 3)
+
+(* Rewrite each ellipsis "..." so the body parses, using one of two
+   strategies:
+
+   - An ellipsis *alone on its line* is blanked out (three spaces —
+     byte-count preserving, so all leaf offsets and line indices stay
+     stable) and its position is recorded in [positional]. The body then
+     parses without any artificial token at that spot, which matters in
+     grammar-restricted positions: an identifier placeholder is illegal
+     between Kotlin imports (only the package header may precede them),
+     and degrades the parse so the neighbouring leaves get the wrong
+     node types. The walker later injects the [Siblings] wildcard at the
+     recorded byte offset.
+
+   - An *inline* ellipsis (e.g. [eval(... x,]) is replaced by a unique
+     placeholder identifier ([__ellipsis_N__]), which must occupy a slot
+     in its list position for the body to parse ([f(a, , b)] would not).
+     The placeholder leaf is mapped back to a [Siblings] wildcard during
+     classification via [mapping].
+
+   Spread/rest operators ([...args], [...$rest]) are left as literal
+   "...". Returns [(rewritten_body, mapping, positional)] with
+   [positional] sorted by byte offset (ascending). *)
 let preprocess_ellipsis text =
   let len = String.length text in
   let out = Buffer.create len in
   let mapping = ref [] in
+  let positional = ref [] in
   let counter = ref 0 in
   let i = ref 0 in
   while !i < len do
@@ -41,10 +82,16 @@ let preprocess_ellipsis text =
       else begin
         let n = !counter in
         incr counter;
-        let placeholder = Printf.sprintf "__ellipsis_%d__" n in
         let name = Printf.sprintf "..._%d" n in
-        mapping := (placeholder, name) :: !mapping;
-        Buffer.add_string out placeholder;
+        if is_own_line_at text !i then begin
+          positional := (Buffer.length out, name) :: !positional;
+          Buffer.add_string out "   "
+        end
+        else begin
+          let placeholder = Printf.sprintf "__ellipsis_%d__" n in
+          mapping := (placeholder, name) :: !mapping;
+          Buffer.add_string out placeholder
+        end;
         i := !i + 3
       end
     else begin
@@ -52,7 +99,7 @@ let preprocess_ellipsis text =
       incr i
     end
   done;
-  (Buffer.contents out, !mapping)
+  (Buffer.contents out, !mapping, List.rev !positional)
 
 (* Classify one leaf into a pattern token. Metavar detection is sigil-free:
    a leaf is a metavar iff its text exactly equals a declared metavar name
@@ -76,9 +123,25 @@ let classify_leaf ~single_metavars ~sequence_metavars ~ellipsis_map source
    are descended into (tree-sitter's quirk of flagging unparseable
    top-level content as extra) so bare-keyword/punctuation fragments like
    ["} else {"] still contribute their leaves. *)
-let walk_leaves ~single_metavars ~sequence_metavars ~ellipsis_map ~keep source
-    root =
+let walk_leaves ~single_metavars ~sequence_metavars ~ellipsis_map
+    ?(positional = []) ~keep source root =
   let tokens = ref [] in
+  (* Own-line ellipses, to be spliced in at their byte offsets (they have
+     no leaf in the parse — their line was blanked). [positional] is
+     sorted ascending; emit every pending one whose offset precedes the
+     next kept leaf. *)
+  let pending = ref positional in
+  let flush_before b =
+    let rec go () =
+      match !pending with
+      | (off, name) :: rest when off <= b ->
+          tokens := Stmatch.Siblings { name = Some name } :: !tokens;
+          pending := rest;
+          go ()
+      | _ -> ()
+    in
+    go ()
+  in
   let rec walk (node : Tree.pat Tree.t) =
     if node.is_extra && not (Tree.is_error node) then ()
     else
@@ -91,15 +154,18 @@ let walk_leaves ~single_metavars ~sequence_metavars ~ellipsis_map ~keep source
              with an inserted, zero-width [;]). Such a node has empty text and
              would otherwise emit a phantom [Concrete ""] token that no real
              source leaf can match, silently breaking the pattern. *)
-          if keep node && node.start_byte <> node.end_byte then
+          if keep node && node.start_byte <> node.end_byte then begin
+            flush_before node.start_byte;
             tokens :=
               classify_leaf ~single_metavars ~sequence_metavars ~ellipsis_map
                 source node
               :: !tokens
+          end
       | children ->
           List.iter (fun (c : Tree.pat Tree.child) -> walk c.node) children
   in
   walk root;
+  flush_before max_int;
   List.rev !tokens
 
 (* Like [walk_leaves] but pairs each token with the 0-based line index of its
@@ -108,51 +174,68 @@ let walk_leaves ~single_metavars ~sequence_metavars ~ellipsis_map ~keep source
    pre-preprocessing body — which lets callers map a token to the pattern line
    it came from (and thus its `-`/context role). *)
 let walk_leaves_with_lines ~single_metavars ~sequence_metavars ~ellipsis_map
-    ~keep source root =
+    ?(positional = []) ~keep source root =
   let line_of off =
     let n = ref 0 in
-    for i = 0 to off - 1 do
+    for i = 0 to min off (String.length source) - 1 do
       if source.[i] = '\n' then incr n
     done;
     !n
   in
   let tokens = ref [] in
+  let pending = ref positional in
+  let flush_before b =
+    let rec go () =
+      match !pending with
+      | (off, name) :: rest when off <= b ->
+          tokens :=
+            (Stmatch.Siblings { name = Some name }, line_of off) :: !tokens;
+          pending := rest;
+          go ()
+      | _ -> ()
+    in
+    go ()
+  in
   let rec walk (node : Tree.pat Tree.t) =
     if node.is_extra && not (Tree.is_error node) then ()
     else
       match node.children with
       | [] ->
-          if keep node && node.start_byte <> node.end_byte then
+          if keep node && node.start_byte <> node.end_byte then begin
+            flush_before node.start_byte;
             let tok =
               classify_leaf ~single_metavars ~sequence_metavars ~ellipsis_map
                 source node
             in
             tokens := (tok, line_of node.start_byte) :: !tokens
+          end
       | children ->
           List.iter (fun (c : Tree.pat Tree.child) -> walk c.node) children
   in
   walk root;
+  flush_before max_int;
   List.rev !tokens
 
 let tokenize_with_lines ~ctx ~language ~single_metavars ~sequence_metavars body
     : (Stmatch.pattern_token * int) list =
-  let body, ellipsis_map = preprocess_ellipsis body in
+  let body, ellipsis_map, positional = preprocess_ellipsis body in
   let tree = Tree.parse_as_pattern ~ctx ~language body in
   walk_leaves_with_lines ~single_metavars ~sequence_metavars ~ellipsis_map
+    ~positional
     ~keep:(fun _ -> true)
     tree.Tree.source tree.Tree.root
 
 let tokenize ~ctx ~language ~single_metavars ~sequence_metavars body :
     Stmatch.pattern_token list =
-  (* Rewrite ellipsis to placeholders before parsing. *)
-  let body, ellipsis_map = preprocess_ellipsis body in
+  (* Rewrite ellipsis (placeholders or blanked lines) before parsing. *)
+  let body, ellipsis_map, positional = preprocess_ellipsis body in
   (* Parse the pattern body with the source language's tree-sitter parser.
      We use the parse only as a lexer: the hierarchical structure is
      discarded; we keep the leaves in document order. ERROR nodes in the
      pattern parse are harmless because we never consult node hierarchy on
      the pattern side. *)
   let tree = Tree.parse_as_pattern ~ctx ~language body in
-  walk_leaves ~single_metavars ~sequence_metavars ~ellipsis_map
+  walk_leaves ~single_metavars ~sequence_metavars ~ellipsis_map ~positional
     ~keep:(fun _ -> true)
     tree.Tree.source tree.Tree.root
 
