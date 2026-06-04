@@ -60,6 +60,12 @@ type instance = {
   language : string;
   site_start : int;
   site_end : int;
+  ipat : edit_pat;
+      (** The instance's own fully-concrete pattern (no holes) — what the
+          site's change pair anti-unifies *from*. Kept so a cluster can be
+          re-specialized over its surviving instances after covering and
+          safety shedding: a hole the survivors no longer vary on
+          collapses back to the literal. *)
 }
 
 type cluster = { pattern : edit_pat; instances : instance list }
@@ -349,6 +355,26 @@ let anti_unify_edits (e1 : edit_pat) (e2 : edit_pat) : edit_pat =
 let anti_unify_pat (p1 : pat_node) (p2 : pat_node) : pat_node =
   let go = mk_anti_unify (make_hole_for ()) in
   go p1 p2
+
+(** Re-specialize a cluster to its surviving instances: re-anti-unify
+    their concrete patterns from scratch. Anti-unification only holes a
+    position whose values differ among the inputs, so every hole in a
+    freshly-formed cluster is witnessed by at least two distinct
+    instantiations — but covering and safety shedding remove instances
+    *after* formation, and a rule can otherwise be emitted with a hole
+    its own remaining sites never vary on (more general than its
+    evidence). Folding [anti_unify_edits] over the survivors' [ipat]s
+    restores the witnessed-holes invariant: positions the survivors
+    agree on collapse back to literals. The fold is safe without hole
+    shifting because the inputs are fully concrete. *)
+let respecialize (c : cluster) : cluster =
+  match c.instances with
+  | [] -> c
+  | i :: rest ->
+      let pattern =
+        List.fold_left (fun acc j -> anti_unify_edits acc j.ipat) i.ipat rest
+      in
+      { c with pattern }
 
 let rec max_hole_node = function
   | Hole h -> h
@@ -1259,6 +1285,12 @@ let collect_initial_clusters ?on_file ~ctx (cs : changeset) : cluster list =
               (fun (cp : Tree_diff.change_pair) ->
                 let bt = Tree.text cp.before_source cp.before_node in
                 let at = Tree.text cp.after_source cp.after_node in
+                let ep =
+                  {
+                    before = of_src cp.before_source cp.before_node;
+                    after = of_src cp.after_source cp.after_node;
+                  }
+                in
                 let inst =
                   {
                     before_text = bt;
@@ -1269,12 +1301,7 @@ let collect_initial_clusters ?on_file ~ctx (cs : changeset) : cluster list =
                     language;
                     site_start = cp.before_node.start_byte;
                     site_end = cp.before_node.end_byte;
-                  }
-                in
-                let ep =
-                  {
-                    before = of_src cp.before_source cp.before_node;
-                    after = of_src cp.after_source cp.after_node;
+                    ipat = ep;
                   }
                 in
                 initial :=
@@ -1465,10 +1492,16 @@ let fusion_node_of_swap (ep : edit_pat) (insts : one_sided_instance list) :
     |> List.sort_uniq String.compare
   in
   let language = match insts with i :: _ -> i.os_language | [] -> "" in
+  (* A swap fires once per removed-side instance (each removal pairs
+     with an addition), so that — not the file count — is its support,
+     mirroring how two-sided support counts instances. *)
+  let fires =
+    List.length (List.filter (fun i -> i.os_side = Before_side) insts)
+  in
   {
     fn_pattern = ep;
     fn_files = files;
-    fn_support = List.length files;
+    fn_support = fires;
     fn_language = language;
   }
 
@@ -1640,6 +1673,7 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
           let safe = safe_instances c.pattern c.instances in
           if List.length safe >= 2 then
             cover_sites [ { c with instances = safe } ]
+            |> List.map respecialize
           else []
         end
         else []
@@ -1666,7 +1700,7 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
               text)
           clusters
       end;
-      let covered = cover_sites clusters in
+      let covered = cover_sites clusters |> List.map respecialize in
       List.sort
         (fun a b ->
           compare (List.length b.instances) (List.length a.instances))
@@ -1679,7 +1713,8 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
   let pairs = pair_one_sided_clusters os_clusters in
   let swap_pairs = List.filter_map (fun (r, a) -> fuse_swap r a) pairs in
   (* Safety-gate fused swaps like any other two-sided rule: shed unsafe
-     sites, drop the swap when fewer than two survive. *)
+     sites, drop the swap when fewer than two fires (removed-side
+     instances) survive. *)
   let swap_pairs =
     List.filter_map
       (fun (ep, insts) ->
@@ -1690,7 +1725,10 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
               pattern_safe_at ~language:i.os_language ~pattern_text i.os_file)
             insts
         in
-        if List.length safe >= 2 then Some (ep, safe) else None)
+        let fires =
+          List.length (List.filter (fun i -> i.os_side = Before_side) safe)
+        in
+        if fires >= 2 then Some (ep, safe) else None)
       swap_pairs
   in
   let nodes =
@@ -1793,8 +1831,34 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
           end)
       os_clusters
   in
+  (* Fold records with identical (pattern text, language) into one rule:
+     the same concrete rule can emerge from separately-clustered contexts
+     (e.g. a removal cluster's concrete-regroup fallback and another
+     cluster over different surroundings). Instances are disjoint by
+     construction, so supports add and site lists union. *)
+  let dedupe records =
+    let tbl : (string * string, rule) Hashtbl.t = Hashtbl.create 16 in
+    let order = ref [] in
+    List.iter
+      (fun (r : rule) ->
+        let key = (r.pattern_text, r.language) in
+        match Hashtbl.find_opt tbl key with
+        | None ->
+            Hashtbl.add tbl key r;
+            order := key :: !order
+        | Some prev ->
+            Hashtbl.replace tbl key
+              {
+                prev with
+                support = prev.support + r.support;
+                sites =
+                  List.sort_uniq String.compare (prev.sites @ r.sites);
+              })
+      records;
+    List.rev_map (Hashtbl.find tbl) !order
+  in
   let combined =
-    two_sided_records @ removal_only_records
+    dedupe (two_sided_records @ removal_only_records)
     |> List.sort (fun a b -> compare b.support a.support)
     |> List.mapi (fun i r -> { r with id = Printf.sprintf "R%d" (i + 1) })
   in
