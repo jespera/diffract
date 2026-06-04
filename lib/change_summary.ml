@@ -776,6 +776,30 @@ let site_safe ~ctx ~language ~pattern_text (si : site_info) : bool =
        end
   with _ -> false
 
+(** The minimal form of an edit: trim the common prefix and suffix
+    between the replaced source span and its replacement. A block-level
+    rewrite that reproduces 62 of 63 children verbatim canonicalises to
+    the one-line deletion it actually performs, making rules from
+    different emission levels comparable for subsumption (§4.5).
+    Returns [(start, end, replacement)] in source coordinates; a pure
+    no-op edit canonicalises to a zero-width span with an empty
+    replacement. *)
+let minimal_edit (source : string) (ed : Matcher.edit) : int * int * string =
+  let s = ed.start_byte and e = ed.end_byte in
+  let r = ed.replacement in
+  let rlen = String.length r in
+  let p = ref 0 in
+  while !p < e - s && !p < rlen && source.[s + !p] = r.[!p] do
+    incr p
+  done;
+  let q = ref 0 in
+  while
+    !q < e - s - !p && !q < rlen - !p && source.[e - 1 - !q] = r.[rlen - 1 - !q]
+  do
+    incr q
+  done;
+  (s + !p, e - !q, String.sub r !p (rlen - !p - !q))
+
 let cut_dendrogram ?(threshold = 0.35)
     ?(safe_instances = fun (_ : edit_pat) insts -> insts) min_size root =
   let is_coherent ep =
@@ -1857,8 +1881,152 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
       records;
     List.rev_map (Hashtbl.find tbl) !order
   in
+  (* §4.5 subsumption reduction: drop a rule whose minimal edits at all
+     its sites are reproduced by another emitted rule (which must also be
+     safe at those sites), folding its site list into the subsuming rule.
+     This catches the redundancy site covering structurally cannot: a
+     parent-level block rewrite and the fine-grained rule it scaffolds
+     state the same change through different cluster instances, but
+     identical behaviour — and behaviour is what's compared here. *)
+  let subsume_reduce (records : rule list) : rule list =
+    (* Minimal edits of a rule at one file, memoized. [None] = the rule
+       does not apply there (no edits, transform failure, or unknown
+       file); [Some []] never escapes — an all-no-op edit set is treated
+       as inapplicable too. *)
+    let me_cache : (string * string, (int * int * string) list option)
+        Hashtbl.t =
+      Hashtbl.create 64
+    in
+    let minimal_edits_at ~language ~pattern_text file =
+      let key = (pattern_text, file) in
+      match Hashtbl.find_opt me_cache key with
+      | Some v -> v
+      | None ->
+          let v =
+            match Hashtbl.find_opt site_db file with
+            | None -> None
+            | Some si -> (
+                try
+                  let edits =
+                    Matcher.transform_edits ~ctx ~language ~pattern_text
+                      ~source_text:si.si_before
+                  in
+                  let minimal =
+                    edits
+                    |> List.map (minimal_edit si.si_before)
+                    |> List.filter (fun (s, e, r) -> s <> e || r <> "")
+                    |> List.sort_uniq compare
+                  in
+                  if minimal = [] then None else Some minimal
+                with _ -> None)
+          in
+          Hashtbl.add me_cache key v;
+          v
+    in
+    (* Two minimal edits are equivalent iff splicing them into the source
+       yields the same text. Tuple equality alone is too brittle: a
+       deletion in repetitive text (one import line out of a sorted
+       block) canonicalises to different (span, replacement) tuples
+       depending on which emission level it came from — the classic
+       diff-sliding ambiguity — while the effects are identical. The
+       whitespace-collapsed fallback mirrors the safety gate's tree-level
+       tolerance: layout is presentational. *)
+    let ws_collapse s =
+      let b = Buffer.create (String.length s) in
+      let pend = ref false in
+      String.iter
+        (fun c ->
+          if c = ' ' || c = '\t' || c = '\n' || c = '\r' then pend := true
+          else begin
+            if !pend && Buffer.length b > 0 then Buffer.add_char b ' ';
+            pend := false;
+            Buffer.add_char b c
+          end)
+        s;
+      Buffer.contents b
+    in
+    let edit_matches (si : site_info) ea eb =
+      ea = eb
+      ||
+      let splice (s, e, r) =
+        String.sub si.si_before 0 s ^ r
+        ^ String.sub si.si_before e (String.length si.si_before - e)
+      in
+      let fa = splice ea and fb = splice eb in
+      fa = fb || ws_collapse fa = ws_collapse fb
+    in
+    let subsumed_by (a : rule) (b : rule) =
+      a.language = b.language
+      && List.for_all
+           (fun f ->
+             match
+               ( Hashtbl.find_opt site_db f,
+                 minimal_edits_at ~language:a.language
+                   ~pattern_text:a.pattern_text f,
+                 minimal_edits_at ~language:b.language
+                   ~pattern_text:b.pattern_text f )
+             with
+             | Some si, Some ea, Some eb ->
+                 List.for_all
+                   (fun e -> List.exists (edit_matches si e) eb)
+                   ea
+                 (* B must be safe where it newly fires: its sites carry
+                    the gate's verdict; a site of A outside them needs a
+                    fresh check. *)
+                 && (List.mem f b.sites
+                    || pattern_safe_at ~language:b.language
+                         ~pattern_text:b.pattern_text f)
+             | _ -> false)
+           a.sites
+    in
+    (* Higher-priority rules absorb lower ones: support (desc), then
+       shorter pattern text (the tighter statement), then text. A single
+       pass over the priority order avoids absorption cycles. *)
+    let ranked =
+      List.sort
+        (fun (a : rule) (b : rule) ->
+          compare
+            (-a.support, String.length a.pattern_text, a.pattern_text)
+            (-b.support, String.length b.pattern_text, b.pattern_text))
+        records
+    in
+    let survivors = ref [] in
+    List.iter
+      (fun (r : rule) ->
+        match List.find_opt (fun s -> subsumed_by r s) !survivors with
+        | Some s ->
+            if Sys.getenv_opt "CS_TRACE" <> None then
+              Printf.eprintf "  subsumed: %S (support %d) ⊑ %S\n%!"
+                (String.sub r.pattern_text 0
+                   (min 60 (String.length r.pattern_text)))
+                r.support
+                (String.sub s.pattern_text 0
+                   (min 60 (String.length s.pattern_text)));
+            let folded =
+              {
+                s with
+                sites = List.sort_uniq String.compare (s.sites @ r.sites);
+                (* Add support only when the file sets are disjoint: an
+                   overlapping absorption is the same underlying change
+                   claimed through two pipelines, and summing would
+                   double-count it. Support may understate after an
+                   overlapping fold, never overstate. *)
+                support =
+                  (if List.exists (fun f -> List.mem f s.sites) r.sites then
+                     s.support
+                   else s.support + r.support);
+              }
+            in
+            survivors :=
+              List.map
+                (fun x -> if x.pattern_text = s.pattern_text then folded else x)
+                !survivors
+        | None -> survivors := !survivors @ [ r ])
+      ranked;
+    !survivors
+  in
   let combined =
-    dedupe (two_sided_records @ removal_only_records)
+    subsume_reduce (dedupe (two_sided_records @ removal_only_records))
     |> List.sort (fun a b -> compare b.support a.support)
     |> List.mapi (fun i r -> { r with id = Printf.sprintf "R%d" (i + 1) })
   in
