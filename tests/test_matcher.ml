@@ -1748,33 +1748,36 @@ let test_siblings_enumeration_drives_multi_section () =
     "x is bound to the string-literal arg in every composite" true
     (List.for_all (fun t -> t = "\"sealed\"") xs)
 
-(* KNOWN BUG — ellipsis context lines fail to match in Kotlin's import
-   position. The pattern
+(* Ellipsis context lines in a grammar-restricted position. The pattern
 
      ...
-     - import b.B
+   - import b.B
      ...
 
-   should anchor a single import removal inside an import list (the
+   anchors a single import removal inside an import list (the
    change-summary §3.2 "anchored removal in a flat sequence" shape).
-   The tokenizer produces the right token stream
-   ([Siblings ..._0; import b.B leaves; Siblings ..._1]) but the body
-   re-parses with the [..._k] placeholders as identifier statements,
-   which Kotlin's grammar does not permit around imports (only the
-   package header may precede them), so the parse degrades and no match
-   is found. The same pattern shape matches fine in TypeScript, both at
-   top level and inside a function body.
-
-   This test pins the CURRENT (broken) behaviour: 0 matches. When the
-   placeholder strategy handles grammar-restricted positions, flip the
-   expectation to >= 1 and check the surgical removal. *)
-let test_siblings_kotlin_import_position_known_bug () =
+   An own-line ellipsis is blanked out before parsing rather than
+   replaced with an identifier placeholder: an identifier statement is
+   illegal between Kotlin imports (only the package header may precede
+   them) and degrades the parse so the [import] keyword re-parses as a
+   [simple_identifier], failing the type-sensitive leaf comparison.
+   With blanking, the body parses cleanly and the [Siblings] wildcard
+   is spliced into the token stream at the recorded offset. Inline
+   ellipses ([eval(... x,]) keep the placeholder strategy, which they
+   need to occupy their list slot. *)
+let test_siblings_kotlin_import_position () =
   let pattern = "@@\nmatch: strict\n@@\n  ...\n- import b.B\n  ..." in
   let src = "import a.A\nimport b.B\nimport c.C\nclass X\n" in
   let results = find ~language:"kotlin" ~pattern ~source:src in
-  Alcotest.(check int)
-    "KNOWN BUG: siblings find no match in Kotlin import position" 0
-    (List.length results)
+  Alcotest.(check bool)
+    "siblings match in Kotlin import position" true
+    (List.length results > 0);
+  (* The transform removes exactly the anchored import, preserving the
+     ellipsis-captured neighbours. *)
+  Alcotest.(check string)
+    "surgical removal of the anchored import"
+    "import a.A\nimport c.C\nclass X\n"
+    (transform ~language:"kotlin" ~pattern ~source:src)
 
 (* Parse-time error: on $VAR references an undeclared name. *)
 let test_multi_section_on_var_undeclared () =
@@ -2340,6 +2343,6 @@ let tests =
       test_siblings_enumerates_arg_positions;
     test_case "enumeration: drives multi-section on $x" `Quick
       test_siblings_enumeration_drives_multi_section;
-    test_case "KNOWN BUG: siblings in Kotlin import position" `Quick
-      test_siblings_kotlin_import_position_known_bug;
+    test_case "siblings: own-line ellipsis in Kotlin import position" `Quick
+      test_siblings_kotlin_import_position;
   ]
