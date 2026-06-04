@@ -420,9 +420,9 @@ let merge_score ep =
 (** Cheap signature for a pattern's root pair, used to short-circuit
     [build_dendrogram]'s inner loop. Anti-unifying two patterns whose
     [before] (or [after]) roots differ in kind or node_type produces a
-    hole-rooted pattern that the downstream coherence filter
-    ([cluster_applies]) will reject. Comparing this signature is a
-    string equality vs. a full tree anti-unification. *)
+    hole-rooted pattern that the downstream coherence and safety gates
+    will reject. Comparing this signature is a string equality vs. a
+    full tree anti-unification. *)
 let root_sig (ep : edit_pat) =
   let tag = function
     | Hole _ -> ("H", "")
@@ -598,38 +598,160 @@ let no_orphan_after_holes (ep : edit_pat) : bool =
   let after_holes = collect_holes [] ep.after in
   List.for_all (fun h -> List.mem h before_holes) after_holes
 
-(** Behavioural applicability check: the rule, when its match side is
-    parsed as a [.pat] pattern and applied to the source bytes the
-    cluster was extracted from, must find at least one match. The
-    renderer can drop syntactic context that the grammar uses to
-    decide a node's type — most commonly, a [property_identifier]
-    (the property name in a member access) renders as just its text
-    and re-parses as a bare [identifier] at expression position. Such
-    a pattern can never fire: the matcher only unifies nodes whose
-    types match. Verifying directly via [Matcher.find] catches
-    these mismatches without having to model the matcher's
-    type-strict behaviour with a static heuristic.
+(* ── Per-site safety gate (design §2.3, §3.1) ────────────────────── *)
 
-    Reject the cluster so the covering pass falls back to a
-    sibling-level cluster (typically the surrounding member or call
-    expression) that retains the disambiguating context. *)
-let cluster_applies ~ctx (c : cluster) : bool =
-  match c.instances with
-  | [] -> false
-  | inst :: _ ->
-      let lang = inst.language in
-      if lang = "" then true
-      else
-        let pattern_text = render_pattern_body c.pattern in
-        try
-          let matches =
-            Matcher.find ~ctx ~language:lang ~pattern_text
-              ~source_text:inst.before_full_source
-          in
-          List.length matches > 0
-        with _ -> false
+type site_info = {
+  si_before : string;  (** full pre-change source of the file *)
+  si_after : string;  (** full post-change source of the file *)
+  si_regions : (int * int * string) list;
+      (** the file's changed regions in before-coordinates, sorted by
+          start, disjoint: [(start, end, after_content)]. A zero-width
+          region [(p, p, txt)] is an insertion at byte [p]. *)
+}
 
-let cut_dendrogram ?(threshold = 0.35) min_size root =
+(** Finest-grain changed regions of a diff, each carrying the
+    after-side content that replaced it. The walk recurses through
+    [Modified] chains so a region is the smallest changed node, not its
+    enclosing scaffold; [Added] children become zero-width insertions at
+    the before-position between their siblings. *)
+let changed_regions (d : Tree_diff.diff) : (int * int * string) list =
+  let acc = ref [] in
+  let add s e txt = acc := (s, e, txt) :: !acc in
+  let after_text (n : Tree.src Tree.t) = Tree.text d.after_source n in
+  let rec go (b : Tree.src Tree.t) (a : Tree.src Tree.t)
+      (ch : Tree_diff.node_change) =
+    match ch with
+    | Tree_diff.Unchanged -> ()
+    | Tree_diff.Replaced -> add b.start_byte b.end_byte (after_text a)
+    | Tree_diff.Modified { child_changes } ->
+        let cursor = ref b.start_byte in
+        List.iter
+          (fun (cc : Tree_diff.child_change) ->
+            match cc with
+            | Tree_diff.Same { node } -> cursor := node.end_byte
+            | Tree_diff.Changed { before; after; change } ->
+                go before after change;
+                cursor := before.end_byte
+            | Tree_diff.Removed { node } ->
+                add node.start_byte node.end_byte "";
+                cursor := node.end_byte
+            | Tree_diff.Added { node } -> add !cursor !cursor (after_text node))
+          child_changes
+  in
+  go d.before_root d.after_root d.root_change;
+  List.sort compare !acc
+
+(** [path → site_info] for every [Modified] file in the changeset. The
+    safety gate evaluates rules against these. *)
+let build_site_db ~ctx (cs : changeset) : (string, site_info) Hashtbl.t =
+  let tbl = Hashtbl.create 16 in
+  List.iter
+    (fun fc ->
+      match fc with
+      | Modified { path; language; before_source; after_source } -> (
+          try
+            let bt = Tree.parse ~ctx ~language before_source in
+            let at = Tree.parse ~ctx ~language after_source in
+            let d = Tree_diff.diff ~before:bt ~after:at in
+            Hashtbl.replace tbl path
+              {
+                si_before = before_source;
+                si_after = after_source;
+                si_regions = changed_regions d;
+              }
+          with _ -> ())
+      | Added _ | Deleted _ -> ())
+    cs.files;
+  tbl
+
+(* [s, e) and [rs, re) overlap. Zero-width intervals (a pure-removal
+   landing zone, an insertion region) overlap when they touch the other
+   interval, including at its boundary — a removal at the exact point
+   where content must be re-added is a real conflict. Two non-zero-width
+   intervals that merely share a boundary do not overlap. *)
+let spans_overlap s e rs re =
+  max s rs < min e re
+  || (s = e && rs <= s && s <= re)
+  || (rs = re && s <= rs && rs <= e)
+
+(** Per-site safety gate: the operational form of the safety property
+    (design §2.3) — with [t'' = apply(rule, t)],
+    [d(t,t'') + d(t'',t') = d(t,t')]. Two legs (§3.1):
+
+    {b Placement}: every edit the rule would make must intersect a
+    changed region of the site's diff. An edit confined to unchanged
+    territory is, by construction, a change that must be undone to reach
+    the after-source — the over-merged [- import _H0] case, whose
+    application would remove every import in the file.
+
+    {b Content}: apply the rule ([t''] = the transformed source) and
+    re-diff against the real after-source. No remaining change may
+    overlap the rule's landing zones: a zone that still differs from
+    [t'] means the rule wrote something other than what the changeset
+    wrote there (claiming [f → h] where the change was [f → g]).
+    Comparing via a re-diff rather than reconstructing expected text
+    from the region list keeps separator tokens and layout — which the
+    node-level regions do not cover — out of the comparison.
+
+    A site where the rule produces no edits fails too — the rendered
+    rule cannot fire there at all (the old zero-match applicability
+    failure, e.g. a [property_identifier] rendered standalone re-parsing
+    as a bare [identifier]).
+
+    M1 emission policy: this is the [exact] classification only — the
+    rule fully explains every region it touches; regions it does not
+    touch are other rules' or residuals' business. A site where the rule
+    makes safe-but-partial progress {e within} a region (the residual
+    case, §4.4) is shed until M1.9 can attach residuals to state the gap
+    honestly. *)
+let site_safe ~ctx ~language ~pattern_text (si : site_info) : bool =
+  try
+    let edits =
+      Matcher.transform_edits ~ctx ~language ~pattern_text
+        ~source_text:si.si_before
+    in
+    edits <> []
+    && List.for_all
+         (fun (ed : Matcher.edit) ->
+           List.exists
+             (fun (rs, re, _) -> spans_overlap ed.start_byte ed.end_byte rs re)
+             si.si_regions)
+         edits
+    && begin
+         (* Landing zones in t''-coordinates: each edit's span shifted by
+            the cumulative length delta of the edits before it
+            ([transform_edits] returns them sorted by start). *)
+         let zones =
+           let delta = ref 0 in
+           List.map
+             (fun (ed : Matcher.edit) ->
+               let zs = ed.start_byte + !delta in
+               let ze = zs + String.length ed.replacement in
+               delta :=
+                 !delta
+                 + String.length ed.replacement
+                 - (ed.end_byte - ed.start_byte);
+               (zs, ze))
+             edits
+         in
+         let t'' =
+           Matcher.transform ~ctx ~language ~pattern_text
+             ~source_text:si.si_before
+         in
+         let bt = Tree.parse ~ctx ~language t'' in
+         let at = Tree.parse ~ctx ~language si.si_after in
+         let d = Tree_diff.diff ~before:bt ~after:at in
+         List.for_all
+           (fun (rs, re, _) ->
+             List.for_all
+               (fun (zs, ze) -> not (spans_overlap zs ze rs re))
+               zones)
+           (changed_regions d)
+       end
+  with _ -> false
+
+let cut_dendrogram ?(threshold = 0.35)
+    ?(safe_instances = fun (_ : edit_pat) insts -> insts) min_size root =
   let is_coherent ep =
     let s = edit_size ep in
     (* The match side must always carry concrete content (a named
@@ -648,20 +770,33 @@ let cut_dendrogram ?(threshold = 0.35) min_size root =
   in
   let clusters = ref [] in
   let singletons = ref [] in
+  (* Emit the node's pattern over its safe instances, shedding unsafe
+     ones (design §3.1). Returns false when fewer than [min_size]
+     instances survive the safety gate, so the caller can fall back to
+     the node's children — typically a more concrete subtree whose
+     pattern is safe at its sites. *)
+  let try_emit ep insts =
+    let safe = safe_instances ep insts in
+    if List.length safe >= min_size then begin
+      clusters := { pattern = ep; instances = safe } :: !clusters;
+      List.iter
+        (fun i -> if not (List.memq i safe) then singletons := i :: !singletons)
+        insts;
+      true
+    end
+    else false
+  in
   let rec go node =
     let insts = dnode_instances node in
     let n = List.length insts in
     if n < min_size then singletons := insts @ !singletons
     else
       match node with
-      | DLeaf (_, ep) when is_coherent ep ->
-          clusters := { pattern = ep; instances = insts } :: !clusters
-      | DLeaf _ -> singletons := insts @ !singletons
+      | DLeaf (_, ep) ->
+          if not (is_coherent ep && try_emit ep insts) then
+            singletons := insts @ !singletons
       | DMerge m ->
-          if is_coherent m.pattern then
-            clusters :=
-              { pattern = m.pattern; instances = insts } :: !clusters
-          else begin
+          if not (is_coherent m.pattern && try_emit m.pattern insts) then begin
             go m.left;
             go m.right
           end
@@ -907,35 +1042,62 @@ let cluster_one_sided (candidates : one_sided_candidate list) :
   cluster_side Before_side (by_side Before_side)
   @ cluster_side After_side (by_side After_side)
 
-(** Behavioural applicability check for a removal-only pattern. Renders
-    the cluster's pat_node as a [-]-only spatch body and verifies it
-    matches at least once in the first instance's pre-change source.
-    [src_lookup] resolves a site's file path back to its source. *)
-let removal_only_applies ~ctx ~src_lookup (c : one_sided_cluster) : bool =
-  match c.os_cluster_instances with
-  | [] -> false
-  | inst :: _ ->
-      let lang = inst.os_language in
-      if lang = "" then true
-      else
-        match src_lookup inst.os_file with
-        | None -> false
-        | Some src -> (
-            let pattern_text = render_removal_only_body c.os_cluster_pattern in
-            try
-              let matches =
-                Matcher.find ~ctx ~language:lang ~pattern_text
-                  ~source_text:src
-              in
-              if Sys.getenv_opt "CS_TRACE" <> None then
-                Printf.eprintf "    find_matches: %d match(es)\n%!"
-                  (List.length matches);
-              List.length matches > 0
-            with e ->
-              if Sys.getenv_opt "CS_TRACE" <> None then
-                Printf.eprintf "    find_matches: exception: %s\n%!"
-                  (Printexc.to_string e);
-              false)
+(** A removal-only [.pat] body for a concrete removed text (no holes):
+    every line of [text] prefixed with [- ]. Used by the safety gate's
+    concrete-regroup fallback, where a group of instances shares the
+    removed text verbatim and no [pat_node] is at hand. *)
+let removal_body_of_text (text : string) : string =
+  let buf = Buffer.create (String.length text + 32) in
+  Buffer.add_string buf "@@\nmatch: strict\n@@\n";
+  List.iter
+    (fun line -> Buffer.add_string buf (Printf.sprintf "- %s\n" line))
+    (String.split_on_char '\n' text);
+  Buffer.contents buf
+
+(** Safe instances of a removal-only cluster, with a concrete-regroup
+    fallback (design §3.1). First the cluster's own (possibly holed)
+    pattern is safety-checked per site; if fewer than [min_support]
+    sites survive — the over-merge case, e.g. [- import _H0] whose
+    application would remove every import in the file — the instances
+    are regrouped by their literal removed text and each group ≥
+    [min_support] is gated with its own concrete pattern. The fallback
+    recovers the concrete-majority rule that the merged hole erased
+    (intermediate generalisations between the hole and the concrete
+    texts are not currently recovered). Returns
+    [(pattern_text, instances)] groups to emit. *)
+let safe_removal_groups ~ctx ~site_db ?(min_support = 2)
+    (c : one_sided_cluster) : (string * one_sided_instance list) list =
+  let safe_with pattern_text (i : one_sided_instance) =
+    i.os_language <> ""
+    &&
+    match Hashtbl.find_opt site_db i.os_file with
+    | None -> false
+    | Some si -> site_safe ~ctx ~language:i.os_language ~pattern_text si
+  in
+  let pattern_text = render_removal_only_body c.os_cluster_pattern in
+  let safe = List.filter (safe_with pattern_text) c.os_cluster_instances in
+  if List.length safe >= min_support then [ (pattern_text, safe) ]
+  else begin
+    (* Concrete-regroup fallback: group by removed text. *)
+    let groups : (string, one_sided_instance list) Hashtbl.t =
+      Hashtbl.create 8
+    in
+    List.iter
+      (fun (i : one_sided_instance) ->
+        let prev = try Hashtbl.find groups i.os_text with Not_found -> [] in
+        Hashtbl.replace groups i.os_text (i :: prev))
+      c.os_cluster_instances;
+    Hashtbl.fold
+      (fun text insts acc ->
+        if List.length insts < min_support then acc
+        else
+          let body = removal_body_of_text text in
+          let safe = List.filter (safe_with body) insts in
+          if List.length safe >= min_support then (body, List.rev safe) :: acc
+          else acc)
+      groups []
+    |> List.sort (fun (a, _) (b, _) -> compare a b)
+  end
 
 (* ── Change-pair extraction ──────────────────────────────────────── *)
 
@@ -1409,6 +1571,33 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
     | None -> None
     | Some p -> Some (fun ~idx ~total ~path -> p ~stage ~idx ~total ~path)
   in
+  let site_db = build_site_db ~ctx cs in
+  (* Safety of a two-sided pattern at one instance's site, memoized on
+     (pattern body, file) — the dendrogram cut and the swap-fusion gate
+     re-check the same pairs. *)
+  let safety_cache : (string * string, bool) Hashtbl.t = Hashtbl.create 64 in
+  let pattern_safe_at ~language ~pattern_text file =
+    language <> ""
+    &&
+    let key = (pattern_text, file) in
+    match Hashtbl.find_opt safety_cache key with
+    | Some b -> b
+    | None ->
+        let b =
+          match Hashtbl.find_opt site_db file with
+          | None -> false
+          | Some si -> site_safe ~ctx ~language ~pattern_text si
+        in
+        Hashtbl.add safety_cache key b;
+        b
+  in
+  let safe_instances ep (insts : instance list) =
+    let pattern_text = render_pattern_body ep in
+    List.filter
+      (fun (i : instance) ->
+        pattern_safe_at ~language:i.language ~pattern_text i.file)
+      insts
+  in
   let raw =
     collect_initial_clusters ?on_file:(on_file_for "two-sided") ~ctx cs
   in
@@ -1440,44 +1629,43 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
     | [] -> []
     | [ c ] ->
         (* Single pre-grouped cluster — no dendrogram needed. Check
-           coherence and min_size directly. *)
+           coherence, safety, and min_size directly. *)
         if
           List.length c.instances >= 2
           && has_concrete c.pattern.before
           && has_concrete c.pattern.after
           && has_concrete_edit c.pattern
           && hole_frac c.pattern < 0.35
-          && cluster_applies ~ctx c
-        then cover_sites [ c ]
+        then begin
+          let safe = safe_instances c.pattern c.instances in
+          if List.length safe >= 2 then
+            cover_sites [ { c with instances = safe } ]
+          else []
+        end
         else []
     | _ ->
       let root = build_dendrogram initial in
       if Sys.getenv_opt "CS_TRACE" <> None then
         Printf.eprintf "dendrogram built\n%!";
-      let clusters, _singletons = cut_dendrogram 2 root in
-      if Sys.getenv_opt "CS_TRACE" <> None then
-        Printf.eprintf "clusters: %d\n%!" (List.length clusters);
-      let clusters =
-        List.filter
-          (fun c ->
-            let ok = cluster_applies ~ctx c in
-            if Sys.getenv_opt "CS_TRACE" <> None then begin
-              let intended =
-                match c.pattern.before with
-                | Hole _ -> "<hole>"
-                | Leaf { node_type; _ } -> node_type
-                | PNode { node_type; _ } -> node_type
-              in
-              let text = render_pat_node c.pattern.before in
-              Printf.eprintf "  applicability: intended=%s text=%S -> %b\n%!"
-                intended text ok
-            end;
-            ok)
-          clusters
-      in
-      if Sys.getenv_opt "CS_TRACE" <> None then
-        Printf.eprintf "clusters after applicability: %d\n%!"
+      let clusters, _singletons = cut_dendrogram ~safe_instances 2 root in
+      if Sys.getenv_opt "CS_TRACE" <> None then begin
+        Printf.eprintf "clusters after safety cut: %d\n%!"
           (List.length clusters);
+        List.iter
+          (fun c ->
+            let intended =
+              match c.pattern.before with
+              | Hole _ -> "<hole>"
+              | Leaf { node_type; _ } -> node_type
+              | PNode { node_type; _ } -> node_type
+            in
+            let text = render_pat_node c.pattern.before in
+            Printf.eprintf "  safe cluster: intended=%s insts=%d text=%S\n%!"
+              intended
+              (List.length c.instances)
+              text)
+          clusters
+      end;
       let covered = cover_sites clusters in
       List.sort
         (fun a b ->
@@ -1490,6 +1678,21 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
   let os_clusters = cluster_one_sided candidates in
   let pairs = pair_one_sided_clusters os_clusters in
   let swap_pairs = List.filter_map (fun (r, a) -> fuse_swap r a) pairs in
+  (* Safety-gate fused swaps like any other two-sided rule: shed unsafe
+     sites, drop the swap when fewer than two survive. *)
+  let swap_pairs =
+    List.filter_map
+      (fun (ep, insts) ->
+        let pattern_text = render_pattern_body ep in
+        let safe =
+          List.filter
+            (fun (i : one_sided_instance) ->
+              pattern_safe_at ~language:i.os_language ~pattern_text i.os_file)
+            insts
+        in
+        if List.length safe >= 2 then Some (ep, safe) else None)
+      swap_pairs
+  in
   let nodes =
     List.map fusion_node_of_two_sided two_sided_clusters
     @ List.map (fun (ep, insts) -> fusion_node_of_swap ep insts) swap_pairs
@@ -1540,27 +1743,17 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
           ranges
   in
   let used_removeds = List.map fst pairs in
-  let src_lookup =
-    let tbl : (string, string) Hashtbl.t = Hashtbl.create 16 in
-    List.iter
-      (function
-        | Modified { path; before_source; _ } ->
-            Hashtbl.replace tbl path before_source
-        | Added _ | Deleted _ -> ())
-      cs.files;
-    fun path -> Hashtbl.find_opt tbl path
-  in
   let trace = Sys.getenv_opt "CS_TRACE" <> None in
   let removal_only_records =
-    List.filter_map
+    List.concat_map
       (fun c ->
-        if c.os_cluster_side <> Before_side then None
-        else if List.memq c used_removeds then None
+        if c.os_cluster_side <> Before_side then []
+        else if List.memq c used_removeds then []
         else
           (* Drop clusters whose every instance's byte range is contained
              in some two-sided rule's site range — those removals are
              already explained by the larger rewrite (e.g. [- "tag"]
-             inside [- Log.d("tag", $H0) + logger.debug($H0)]). *)
+             inside [- Log.d("tag", _H0) + logger.debug(_H0)]). *)
           let all_covered =
             List.for_all covered_by_two_sided c.os_cluster_instances
           in
@@ -1569,36 +1762,35 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
               Printf.eprintf
                 "  removal-only candidate: %d insts, dropped (covered by two-sided)\n%!"
                 (List.length c.os_cluster_instances);
-            None
+            []
           end
-          else
-          let applies = removal_only_applies ~ctx ~src_lookup c in
-          if trace then
-            Printf.eprintf
-              "  removal-only candidate: %d insts, applies=%b, body=%S\n%!"
-              (List.length c.os_cluster_instances) applies
-              (render_removal_only_body c.os_cluster_pattern);
-          if not applies then None
-          else
-          let sites =
-            c.os_cluster_instances
-            |> List.map (fun (i : one_sided_instance) -> i.os_file)
-            |> List.sort_uniq String.compare
-          in
-          let language =
-            match c.os_cluster_instances with
-            | i :: _ -> i.os_language
-            | [] -> "unknown"
-          in
-          let support = List.length c.os_cluster_instances in
-          Some
-            {
-              id = "";
-              pattern_text = render_removal_only_body c.os_cluster_pattern;
-              support;
-              language = (if language = "" then "unknown" else language);
-              sites;
-            })
+          else begin
+            let groups = safe_removal_groups ~ctx ~site_db c in
+            if trace then
+              Printf.eprintf
+                "  removal-only candidate: %d insts, body=%S -> %d safe group(s)\n%!"
+                (List.length c.os_cluster_instances)
+                (render_removal_only_body c.os_cluster_pattern)
+                (List.length groups);
+            List.map
+              (fun (pattern_text, (insts : one_sided_instance list)) ->
+                let sites =
+                  insts
+                  |> List.map (fun (i : one_sided_instance) -> i.os_file)
+                  |> List.sort_uniq String.compare
+                in
+                let language =
+                  match insts with i :: _ -> i.os_language | [] -> "unknown"
+                in
+                {
+                  id = "";
+                  pattern_text;
+                  support = List.length insts;
+                  language = (if language = "" then "unknown" else language);
+                  sites;
+                })
+              groups
+          end)
       os_clusters
   in
   let combined =
