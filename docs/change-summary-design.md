@@ -471,6 +471,38 @@ residuals). Traditional diffs conflate these. Residual extraction separates
 them, and when residuals cluster, surfaces hidden secondary patterns — for
 instance a small bug fix riding along with an API migration.
 
+### 4.5 Subsumption reduction under the partial order (planned)
+
+The safety property induces a partial order on transforms: `A ⊑ B` (A is
+*part of* B) wrt a site set when, at every site of A, applying B covers
+A's effect — the straightforward extension of §2.3's safety to partially
+applied terms. The summariser can use this to *reduce* its output: a rule
+whose effect at every claimed site is reproduced by another emitted rule
+is subsumed, and its sites fold into the subsuming rule.
+
+This catches redundancy that site covering (§3.1) structurally cannot:
+covering dedupes at the *instance* level (each cluster's claimed byte
+ranges), but two pipelines can state the same change about the same code
+through different cluster instances — a parent-level block rewrite whose
+net effect is exactly one child's deletion, alongside the deletion rule
+itself. Subsumption compares what the emitted rules *do* when applied,
+which is the honest comparison.
+
+**Operational check.** For each emitted rule × site, take the rule's
+edits (already computed by the safety gate) and canonicalise each to its
+*minimal* form by trimming the common prefix/suffix between the replaced
+span and its replacement — this makes a block-level rewrite that
+reproduces 62 of 63 children comparable to the one-line deletion it
+actually performs. Then `A ⊑ B` iff at every site of A, A's minimal
+edits are a subset of B's (span and content), and reduction drops A,
+folding its sites and support into B (positions are disjoint, so support
+adds honestly). Pairwise over emitted rules restricted to shared sites.
+
+The same partial order is the natural backbone for hierarchy exposure
+(M4): reduction *deletes* subsumed rules from the flat summary, but the
+poset is what a drill-down view would *expose* — a general rule and,
+within it, the site-specific specialisations it subsumes.
+
 ## 5. Synthetic examples
 
 These examples serve both as illustration and as seeds for end-to-end tests.
@@ -784,6 +816,17 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   (concrete majority survives, fully-holed variant must not appear);
   wrong-content fixture (over-general rewrite must not claim a site
   whose region changed differently).
+
+- **M1.8d — Subsumption reduction (§4.5).** Post-emission pass: drop
+  every rule whose minimal edits at all its sites are reproduced by
+  another emitted rule, folding sites/support into the subsuming rule.
+  On the real-changeset soak this removes the parent-level block
+  rewrites (import-block and parameter-list rules) whose net effect is
+  stated exactly by the fine-grained deletion/rewrite rules. Also under
+  this heading: contextual emission (§3.2) for deltas whose fine-grained
+  rule never existed — partial-mode for container scopes; ellipsis-strict
+  once siblings matching handles grammar-restricted positions (pinned as
+  a known-bug test on the matcher side).
 
 - **M1.9 — Residual extraction (single tier).** Surface the residuals
   the M1.8c gate already computes: emit each non-empty `decomposable`
