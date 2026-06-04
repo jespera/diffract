@@ -19,3 +19,11 @@ match: strict
 a.kt
 b.kt
 c.kt
+
+# residual  rule=R1,R2
+--- a/c.kt
++++ b/c.kt
+@@ ... @@
+-import com.example.app.appUserIdJsonCodec
+@@ ... @@
+-        userCodec = appUserIdJsonCodec,
