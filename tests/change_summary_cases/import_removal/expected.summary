@@ -1,9 +1,10 @@
 # rule R1  support=3  language=typescript
 @@
 match: strict
+metavar _H0: single
 @@
-- legacyHandler
-+ modernHandler
+- legacyHandler(_H0)
++ modernHandler(_H0)
 # sites R1
 a.ts
 b.ts

@@ -1,0 +1,21 @@
+# rule R1  support=6  language=kotlin
+@@
+match: strict
+metavar _H0: single
+@@
+- _H0<AppUserId>
++ _H0
+# sites R1
+a.kt
+b.kt
+c.kt
+
+# rule R2  support=3  language=kotlin
+@@
+match: strict
+@@
+- import com.example.app.AppUserId
+# sites R2
+a.kt
+b.kt
+c.kt
