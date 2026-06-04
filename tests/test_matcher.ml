@@ -1779,6 +1779,62 @@ let test_siblings_kotlin_import_position () =
     "import a.A\nimport c.C\nclass X\n"
     (transform ~language:"kotlin" ~pattern ~source:src)
 
+(* Same bug class, second instance: a Kotlin class body permits only
+   member declarations, so the identifier placeholder degraded the parse
+   there too. Own-line blanking fixes it identically. *)
+let test_siblings_kotlin_class_body_position () =
+  let pattern =
+    "@@\n\
+     match: strict\n\
+     @@\n\
+     class C {\n\
+    \    ...\n\
+     -     fun b() {}\n\
+    \    ...\n\
+     }"
+  in
+  let src = "class C {\n    fun a() {}\n    fun b() {}\n    fun c() {}\n}\n" in
+  Alcotest.(check string)
+    "surgical removal of the anchored member"
+    "class C {\n    fun a() {}\n    fun c() {}\n}\n"
+    (transform ~language:"kotlin" ~pattern ~source:src)
+
+(* Same bug class, third instance: a Scala match expression permits only
+   case clauses in its body. *)
+let test_siblings_scala_match_position () =
+  let pattern =
+    "@@\n\
+     match: strict\n\
+     @@\n\
+     x match {\n\
+    \  ...\n\
+     -     case 2 => b\n\
+    \  ...\n\
+     }"
+  in
+  let src =
+    "object O {\n\
+    \  def f(x: Int) = x match {\n\
+    \    case 1 => a\n\
+    \    case 2 => b\n\
+    \    case 3 => c\n\
+    \  }\n\
+     }\n"
+  in
+  let results = find ~language:"scala" ~pattern ~source:src in
+  Alcotest.(check bool)
+    "siblings match in Scala case-clause position" true
+    (List.length results > 0);
+  Alcotest.(check string)
+    "surgical removal of the anchored case clause"
+    "object O {\n\
+    \  def f(x: Int) = x match {\n\
+    \    case 1 => a\n\
+    \    case 3 => c\n\
+    \  }\n\
+     }\n"
+    (transform ~language:"scala" ~pattern ~source:src)
+
 (* Parse-time error: on $VAR references an undeclared name. *)
 let test_multi_section_on_var_undeclared () =
   let pattern =
@@ -2345,4 +2401,8 @@ let tests =
       test_siblings_enumeration_drives_multi_section;
     test_case "siblings: own-line ellipsis in Kotlin import position" `Quick
       test_siblings_kotlin_import_position;
+    test_case "siblings: own-line ellipsis in Kotlin class body" `Quick
+      test_siblings_kotlin_class_body_position;
+    test_case "siblings: own-line ellipsis in Scala match" `Quick
+      test_siblings_scala_match_position;
   ]
