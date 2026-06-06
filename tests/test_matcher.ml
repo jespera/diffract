@@ -248,6 +248,34 @@ let test_replace_side_removal () =
 let transform ~language ~pattern ~source =
   Matcher.transform ~ctx ~language ~pattern_text:pattern ~source_text:source
 
+(* transform_edits exposes the spans+replacements transform would apply,
+   without applying them: splicing the edits manually must reproduce the
+   transform's own output. *)
+let test_transform_edits_spans () =
+  let pattern =
+    "@@\nmatch: strict\nmetavar $x: single\n@@\n- foo($x)\n+ bar($x)"
+  in
+  let source = "foo(1); keep(); foo(2);" in
+  let edits =
+    Matcher.transform_edits ~ctx ~language:"typescript" ~pattern_text:pattern
+      ~source_text:source
+  in
+  Alcotest.(check int) "two edits" 2 (List.length edits);
+  let spliced =
+    (* apply descending so earlier offsets stay valid *)
+    List.fold_left
+      (fun src (ed : Matcher.edit) ->
+        String.sub src 0 ed.start_byte
+        ^ ed.replacement
+        ^ String.sub src ed.end_byte (String.length src - ed.end_byte))
+      source
+      (List.sort (fun (a : Matcher.edit) b -> compare b.start_byte a.start_byte) edits)
+  in
+  Alcotest.(check string)
+    "splicing the edits equals transform's output"
+    (transform ~language:"typescript" ~pattern ~source)
+    spliced
+
 (* Simple rename: every foo($x) becomes bar($x), binding substituted. *)
 let test_transform_rename () =
   let pattern =
@@ -2241,6 +2269,8 @@ let tests =
       test_replace_side_match_only;
     test_case "replace-side removal (- only)" `Quick test_replace_side_removal;
     test_case "transform: rename" `Quick test_transform_rename;
+    test_case "transform_edits: spans splice to transform output" `Quick
+      test_transform_edits_spans;
     test_case "transform: trailing newline in pattern not leaked" `Quick
       test_transform_trailing_newline_in_pattern;
     test_case "transform: PHP statement-shaped call (missing-node fix)" `Quick

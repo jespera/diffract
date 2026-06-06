@@ -1519,7 +1519,10 @@ let referenced_names names text =
   done;
   !found
 
-let transform ~ctx ~language ~pattern_text ~source_text =
+(* Everything [transform] does up to (but not including) applying the
+   edits: parse, match, and compute the edit list. Shared by {!transform}
+   and {!transform_edits}. *)
+let compute_edits ~ctx ~language ~pattern_text ~source_text =
   let tree = Tree.parse ~ctx ~language source_text in
   let p = parse_pattern pattern_text in
   let ir, foreaches = compile_to_ir ~ctx ~language p in
@@ -1583,4 +1586,12 @@ let transform ~ctx ~language ~pattern_text ~source_text =
         outer @ inplace)
       composites
   in
-  apply_edits source_text edits
+  edits
+
+let transform ~ctx ~language ~pattern_text ~source_text =
+  apply_edits source_text
+    (compute_edits ~ctx ~language ~pattern_text ~source_text)
+
+let transform_edits ~ctx ~language ~pattern_text ~source_text =
+  List.sort_uniq compare
+    (compute_edits ~ctx ~language ~pattern_text ~source_text)
