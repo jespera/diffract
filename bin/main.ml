@@ -88,7 +88,7 @@ let transform_file ~ctx ~language ~pattern_text ~in_place file_path =
   else begin
     let diff =
       Diffract.Text_diff.generate_diff ~file_path ~original:source_text
-        ~transformed
+        ~transformed ()
     in
     if in_place then
       Out_channel.with_open_text file_path (fun oc ->

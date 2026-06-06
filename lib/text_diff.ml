@@ -7,7 +7,7 @@
 
 type diff_op = DKeep of string | DRemove of string | DAdd of string
 
-let generate_diff ~file_path ~original ~transformed =
+let generate_diff ?(context = 3) ~file_path ~original ~transformed () =
   if original = transformed then ""
   else
     let orig_lines = String.split_on_char '\n' original in
@@ -43,7 +43,7 @@ let generate_diff ~file_path ~original ~transformed =
         incr j)
     done;
     let ops = List.rev !ops in
-    let context_lines = 3 in
+    let context_lines = context in
     let ops_arr = Array.of_list ops in
     let n_ops = Array.length ops_arr in
     let rec find_hunks start_op =
