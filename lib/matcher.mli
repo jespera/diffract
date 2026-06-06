@@ -210,3 +210,20 @@ val transform :
     edit applied to each element of a sequence), and element removal (a
     [foreach] element with an empty replacement is deleted, and one adjacent
     separator is consumed so the list stays well-formed). *)
+
+type edit = { start_byte : int; end_byte : int; replacement : string }
+(** One edit {!transform} would apply: replace [source_text]'s bytes
+    [\[start_byte, end_byte)] with [replacement]. *)
+
+val transform_edits :
+  ctx:Context.t ->
+  language:string ->
+  pattern_text:string ->
+  source_text:string ->
+  edit list
+(** The edits {!transform} would apply, without applying them — the same
+    matching and template instantiation, surfaced as spans. Sorted by
+    [start_byte], deduplicated. Used by callers that need to *inspect* a
+    transform's effect against other information about the source (e.g.
+    the change-summary safety gate comparing edits against a diff's
+    changed regions) rather than the rewritten text. *)
