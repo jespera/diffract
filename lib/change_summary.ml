@@ -618,9 +618,6 @@ let rec same_shape_mod_holes p1 p2 =
            n1.children n2.children
   | _ -> false
 
-let is_symmetric (ep : edit_pat) : bool =
-  same_shape_mod_holes ep.before ep.after
-
 (** True if the edit pattern carries at least one concrete edit signal —
     either (a) the multiset of named-leaf values differs between [-] and
     [+] sides (a concrete rename), or (b) the shape differs modulo holes
@@ -888,30 +885,6 @@ let site_eval ~ctx ~language ~pattern_text (si : site_info) : site_evaluation
 let site_safe ~ctx ~language ~pattern_text (si : site_info) : bool =
   (site_eval ~ctx ~language ~pattern_text si).ev_exact
 
-(** The minimal form of an edit: trim the common prefix and suffix
-    between the replaced source span and its replacement. A block-level
-    rewrite that reproduces 62 of 63 children verbatim canonicalises to
-    the one-line deletion it actually performs, making rules from
-    different emission levels comparable for subsumption (§4.5).
-    Returns [(start, end, replacement)] in source coordinates; a pure
-    no-op edit canonicalises to a zero-width span with an empty
-    replacement. *)
-let minimal_edit (source : string) (ed : Matcher.edit) : int * int * string =
-  let s = ed.start_byte and e = ed.end_byte in
-  let r = ed.replacement in
-  let rlen = String.length r in
-  let p = ref 0 in
-  while !p < e - s && !p < rlen && source.[s + !p] = r.[!p] do
-    incr p
-  done;
-  let q = ref 0 in
-  while
-    !q < e - s - !p && !q < rlen - !p && source.[e - 1 - !q] = r.[rlen - 1 - !q]
-  do
-    incr q
-  done;
-  (s + !p, e - !q, String.sub r !p (rlen - !p - !q))
-
 let cut_dendrogram ?(threshold = 0.35)
     ?(safe_instances = fun (_ : edit_pat) insts -> insts) min_size root =
   let is_coherent ep =
@@ -965,111 +938,6 @@ let cut_dendrogram ?(threshold = 0.35)
   in
   go root;
   (!clusters, !singletons)
-
-(* ── Site covering ──────────────────────────────────────────────── *)
-
-(** Count of non-[Hole] nodes in an edit pattern. Used as a tiebreak when
-    multiple clusters cover the same sites: prefer the pattern that carries
-    more concrete context. *)
-let rec concrete_count = function
-  | Hole _ -> 0
-  | Leaf _ -> 1
-  | PNode { children; _ } ->
-      1 + List.fold_left (fun a c -> a + concrete_count c.child) 0 children
-
-let edit_concrete_count ep = concrete_count ep.before + concrete_count ep.after
-
-(** Count the multiset symmetric difference between the leaf values on
-    each side of the edit pattern. Each leaf-value rename contributes
-    2 (one removal, one addition); a structural-only edit (arg drop)
-    contributes 0 from this metric. Used to prefer clusters that
-    capture more concrete renames at a site — e.g. a member-expression
-    rule [legacyStore.fetch -> store.get] (count 4) is preferred over
-    a leaf rule [legacyStore -> store] (count 2) at the same site,
-    since the larger rule reproduces every concrete change there
-    while the leaf silently leaves the sibling [.fetch] rename
-    uncovered. *)
-let leaf_value_diff_count (ep : edit_pat) : int =
-  let b = List.sort compare (collect_leaf_values [] ep.before) in
-  let a = List.sort compare (collect_leaf_values [] ep.after) in
-  let rec diff l1 l2 acc =
-    match (l1, l2) with
-    | [], rest | rest, [] -> acc + List.length rest
-    | h1 :: t1, h2 :: t2 ->
-        if h1 = h2 then diff t1 t2 acc
-        else if h1 < h2 then diff t1 l2 (acc + 1)
-        else diff l1 t2 (acc + 1)
-  in
-  diff b a 0
-
-(** Greedy site-covering pass. Rank clusters by support (desc), then
-    asymmetric-shape-first (a pattern whose [-] and [+] sides differ
-    structurally — e.g. dropped argument — beats a pure rename; this
-    carries strictly more information), then concrete node count (asc,
-    smaller is better), then hole fraction (asc), then pattern text (asc)
-    as a total order. Walk in that order; for each cluster, drop instances
-    whose byte range {e overlaps} a previously-claimed range within the
-    same file. Emit clusters whose surviving support is still at least
-    [min_support].
-
-    The asymmetric-first preference captures the intuition from the design
-    doc §4.1: a rule that describes a structural reshaping (arg drop,
-    import swap with different argument counts) is strictly more
-    informative than the same-shape rename it encloses, so it wins even
-    though it's larger. Among patterns with matching symmetry, smaller is
-    better — a leaf rename is preferred over its enclosing call-level
-    cluster when both have the same support and no structural difference
-    at the call level. This reflects the fact that the leaf pattern is
-    equally applicable but more reusable.
-
-    {e Overlap}, not containment. A higher-level ancestor's byte range
-    contains its descendant's range, not the other way around. If leaves
-    claim first, subsequent ancestor instances overlap the leaf claims
-    and get dropped. Conversely if the call-level rule wins first, it
-    claims a larger range that swallows any leaf instances. Two
-    disjoint-range leaves at the same call site (both the receiver and
-    method of a method call rename independently) do not overlap each
-    other, so both leaves survive — this preserves emitting two
-    independent rules for [api_swap]-style changes. *)
-let cover_sites ?(min_support = 2) (clusters : cluster list) : cluster list =
-  let rank (c : cluster) =
-    let support = List.length c.instances in
-    let sym = if is_symmetric c.pattern then 1 else 0 in
-    (* Negate so higher count wins when sorted ascending. *)
-    let edits = -(leaf_value_diff_count c.pattern) in
-    let concrete = edit_concrete_count c.pattern in
-    let hf = hole_frac c.pattern in
-    let ptext = render_pattern_body c.pattern in
-    (-support, sym, edits, concrete, hf, ptext)
-  in
-  let sorted = List.sort (fun a b -> compare (rank a) (rank b)) clusters in
-  let claimed : (string, (int * int) list) Hashtbl.t = Hashtbl.create 16 in
-  let is_claimed file s e =
-    match Hashtbl.find_opt claimed file with
-    | None -> false
-    | Some ranges -> List.exists (fun (cs, ce) -> cs < e && s < ce) ranges
-  in
-  let claim file s e =
-    let cur = try Hashtbl.find claimed file with Not_found -> [] in
-    Hashtbl.replace claimed file ((s, e) :: cur)
-  in
-  let out = ref [] in
-  List.iter
-    (fun c ->
-      let surviving =
-        List.filter
-          (fun inst ->
-            not (is_claimed inst.file inst.site_start inst.site_end))
-          c.instances
-      in
-      if List.length surviving >= min_support then begin
-        List.iter
-          (fun inst -> claim inst.file inst.site_start inst.site_end)
-          surviving;
-        out := { c with instances = surviving } :: !out
-      end)
-    sorted;
-  List.rev !out
 
 (* ── One-sided dendrogram (M1.6a) ──────────────────────────────── *)
 
@@ -1734,6 +1602,16 @@ let pre_group_identical (clusters : cluster list) : cluster list =
     (fun p insts acc -> { pattern = p; instances = !insts } :: acc)
     tbl []
 
+(* A candidate pattern with its evaluated semantics (§3.3): the true
+   extension (files where it fires safely, with each site's evaluation)
+   and the behavioural support (total fires over the extension). *)
+type scored_candidate = {
+  sc_pattern : string;
+  sc_language : string;
+  sc_support : int;
+  sc_extension : (string * site_evaluation) list;
+}
+
 let summarize ?progress ~ctx (cs : changeset) : summary =
   let on_file_for stage =
     match progress with
@@ -1741,24 +1619,32 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
     | Some p -> Some (fun ~idx ~total ~path -> p ~stage ~idx ~total ~path)
   in
   let site_db = build_site_db ~ctx cs in
-  (* Safety of a two-sided pattern at one instance's site, memoized on
-     (pattern body, file) — the dendrogram cut and the swap-fusion gate
-     re-check the same pairs. *)
-  let safety_cache : (string * string, bool) Hashtbl.t = Hashtbl.create 64 in
+  (* Evaluation of a candidate pattern at one site, memoized on
+     (pattern body, file). PROPOSE's internal gates (the dendrogram cut,
+     swap fusion, removal regrouping) and EVALUATE share this cache, so
+     proposer-side checks pre-warm the evaluator. *)
+  let eval_cache : (string * string, site_evaluation) Hashtbl.t =
+    Hashtbl.create 256
+  in
+  let eval_at ~language ~pattern_text file =
+    if language = "" then no_fire
+    else
+      let key = (pattern_text, file) in
+      match Hashtbl.find_opt eval_cache key with
+      | Some e -> e
+      | None ->
+          let e =
+            match Hashtbl.find_opt site_db file with
+            | None -> no_fire
+            | Some si ->
+                if si.si_language <> language then no_fire
+                else site_eval ~ctx ~language ~pattern_text si
+          in
+          Hashtbl.add eval_cache key e;
+          e
+  in
   let pattern_safe_at ~language ~pattern_text file =
-    language <> ""
-    &&
-    let key = (pattern_text, file) in
-    match Hashtbl.find_opt safety_cache key with
-    | Some b -> b
-    | None ->
-        let b =
-          match Hashtbl.find_opt site_db file with
-          | None -> false
-          | Some si -> site_safe ~ctx ~language ~pattern_text si
-        in
-        Hashtbl.add safety_cache key b;
-        b
+    (eval_at ~language ~pattern_text file).ev_exact
   in
   let safe_instances ep (insts : instance list) =
     let pattern_text = render_pattern_body ep in
@@ -1808,8 +1694,7 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
         then begin
           let safe = safe_instances c.pattern c.instances in
           if List.length safe >= 2 then
-            cover_sites [ { c with instances = safe } ]
-            |> List.map respecialize
+            [ respecialize { c with instances = safe } ]
           else []
         end
         else []
@@ -1836,11 +1721,7 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
               text)
           clusters
       end;
-      let covered = cover_sites clusters |> List.map respecialize in
-      List.sort
-        (fun a b ->
-          compare (List.length b.instances) (List.length a.instances))
-        covered
+      List.map respecialize clusters
   in
   let candidates =
     collect_one_sided_candidates ?on_file:(on_file_for "one-sided") ~ctx cs
@@ -1867,264 +1748,211 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
         if fires >= 2 then Some (ep, safe) else None)
       swap_pairs
   in
+  (* Fusion-input arbitration: without the old covering contest, the
+     multi-level emission hands us several clusters stating the same
+     change at nested granularities (statement / declarator / member)
+     with identical file sets — Jaccard would fuse them into one
+     self-overlapping conjunctive whose sections collide at application
+     time. Keep one representative per change-family, chosen by
+     *evaluated* resolved regions over the cluster's own files —
+     proposer shaping on true semantics, not provenance. Preference:
+     more resolved regions, then shorter pattern text. *)
+  let fusion_inputs =
+    let cluster_language (c : cluster) =
+      match c.instances with i :: _ -> i.language | [] -> ""
+    in
+    let resolved_of (c : cluster) =
+      let pattern_text = render_pattern_body c.pattern in
+      let language = cluster_language c in
+      c.instances
+      |> List.map (fun (i : instance) -> i.file)
+      |> List.sort_uniq String.compare
+      |> List.concat_map (fun f ->
+          let e = eval_at ~language ~pattern_text f in
+          List.map (fun i -> (f, i)) e.ev_resolved)
+    in
+    let scored =
+      List.map (fun c -> (c, resolved_of c)) two_sided_clusters
+      |> List.sort (fun (a, ra) (b, rb) ->
+          compare
+            (-List.length ra, String.length (render_pattern_body a.pattern))
+            (-List.length rb, String.length (render_pattern_body b.pattern)))
+    in
+    let claimed : (string * int, unit) Hashtbl.t = Hashtbl.create 32 in
+    List.filter_map
+      (fun (c, resolved) ->
+        let fresh =
+          List.filter (fun k -> not (Hashtbl.mem claimed k)) resolved
+        in
+        if fresh = [] then None
+        else begin
+          List.iter (fun k -> Hashtbl.replace claimed k ()) resolved;
+          Some c
+        end)
+      scored
+  in
   let nodes =
-    List.map fusion_node_of_two_sided two_sided_clusters
+    List.map fusion_node_of_two_sided fusion_inputs
     @ List.map (fun (ep, insts) -> fusion_node_of_swap ep insts) swap_pairs
   in
   let groups = group_by_jaccard nodes in
   let group_outputs = List.concat_map materialise_group groups in
-  let two_sided_records =
-    List.map
-      (fun (sections, sites, language, support) ->
-        let pattern_text =
-          String.concat "\n" (List.map render_pattern_body sections)
+  (* ── PROPOSE boundary (§3.3) ─────────────────────────────────────
+     Everything above — extraction, clustering, cuts, fusion — only
+     *proposes* candidate patterns from here on. Instance bookkeeping
+     (which sites a cluster was born from) stays behind this line; a
+     rule's sites, support, and coverage are derived by evaluation
+     below, from the candidate's behaviour alone. *)
+  let cand_tbl : (string * string, unit) Hashtbl.t = Hashtbl.create 32 in
+  let cand_order = ref [] in
+  let add_candidate ~language pattern_text =
+    if language <> "" then begin
+      let key = (pattern_text, language) in
+      if not (Hashtbl.mem cand_tbl key) then begin
+        Hashtbl.add cand_tbl key ();
+        cand_order := key :: !cand_order
+      end
+    end
+  in
+  (* Conjunctive fusions (a singleton group materialises as the node's
+     own pattern). *)
+  List.iter
+    (fun (sections, _sites, language, _support) ->
+      add_candidate ~language
+        (String.concat "\n" (List.map render_pattern_body sections)))
+    group_outputs;
+  (* Every fusion-input cluster and fused swap individually, too: a
+     fused form and its components are distinct candidates, and
+     selection arbitrates between them on coverage. *)
+  List.iter
+    (fun (c : cluster) ->
+      let language =
+        match c.instances with i :: _ -> i.language | [] -> ""
+      in
+      add_candidate ~language (render_pattern_body c.pattern))
+    fusion_inputs;
+  List.iter
+    (fun (ep, (insts : one_sided_instance list)) ->
+      let language =
+        match insts with i :: _ -> i.os_language | [] -> ""
+      in
+      add_candidate ~language (render_pattern_body ep))
+    swap_pairs;
+  (* Removal-only clusters that did not pair with an Added cluster in
+     M1.6 fusion: their (possibly concretely regrouped) [-]-only bodies.
+     Addition-only clusters are not proposed — a [+]-only block has no
+     anchor to apply; their changes fall to residuals. *)
+  let used_removeds = List.map fst pairs in
+  List.iter
+    (fun c ->
+      if c.os_cluster_side = Before_side && not (List.memq c used_removeds)
+      then
+        List.iter
+          (fun (pattern_text, (insts : one_sided_instance list)) ->
+            let language =
+              match insts with i :: _ -> i.os_language | [] -> ""
+            in
+            add_candidate ~language pattern_text)
+          (safe_removal_groups ~ctx ~site_db c))
+    os_clusters;
+  let cands = List.rev !cand_order in
+  if Sys.getenv_opt "CS_TRACE" <> None then
+    Printf.eprintf "candidates proposed: %d\n%!" (List.length cands);
+  (* ── EVALUATE (§3.3): each candidate's true extension ──────────── *)
+  let all_files =
+    Hashtbl.fold (fun k _ acc -> k :: acc) site_db []
+    |> List.sort String.compare
+  in
+  let evaluated =
+    List.filter_map
+      (fun (pattern_text, language) ->
+        let extension =
+          List.filter_map
+            (fun f ->
+              let e = eval_at ~language ~pattern_text f in
+              if e.ev_exact && e.ev_fires > 0 then Some (f, e) else None)
+            all_files
         in
+        let support =
+          List.fold_left (fun a (_, e) -> a + e.ev_fires) 0 extension
+        in
+        if support < 2 then None
+        else
+          Some
+            {
+              sc_pattern = pattern_text;
+              sc_language = language;
+              sc_support = support;
+              sc_extension = extension;
+            })
+      cands
+  in
+  if Sys.getenv_opt "CS_TRACE" <> None then
+    Printf.eprintf "candidates with viable extensions: %d\n%!"
+      (List.length evaluated);
+  (* ── SELECT (§3.3): greedy set-cover over changed regions ────────
+     A candidate's marginal value is the number of still-uncovered
+     (file, region) pairs it resolves; it is eligible while that
+     marginal is at least min_support. Reported support stays the
+     global fire count over the full extension. Ties break to higher
+     support, then shorter pattern text (the tighter statement), then
+     text for determinism. Subsumption is inherent: a candidate
+     resolving only covered regions is never selected. *)
+  let covered : (string * int, unit) Hashtbl.t = Hashtbl.create 64 in
+  let marginal sc =
+    List.fold_left
+      (fun a (f, e) ->
+        a
+        + List.length
+            (List.filter
+               (fun i -> not (Hashtbl.mem covered (f, i)))
+               e.ev_resolved))
+      0 sc.sc_extension
+  in
+  let remaining = ref evaluated in
+  let selected = ref [] in
+  let picking = ref true in
+  while !picking do
+    let best =
+      List.fold_left
+        (fun acc sc ->
+          let m = marginal sc in
+          if m < 2 then acc
+          else
+            let key =
+              (m, sc.sc_support, -String.length sc.sc_pattern, sc.sc_pattern)
+            in
+            match acc with
+            | Some (bkey, _) when bkey >= key -> acc
+            | _ -> Some (key, sc))
+        None !remaining
+    in
+    match best with
+    | None -> picking := false
+    | Some (_, sc) ->
+        selected := sc :: !selected;
+        remaining := List.filter (fun x -> x != sc) !remaining;
+        List.iter
+          (fun (f, e) ->
+            List.iter
+              (fun i -> Hashtbl.replace covered (f, i) ())
+              e.ev_resolved)
+          sc.sc_extension;
+        if Sys.getenv_opt "CS_TRACE" <> None then
+          Printf.eprintf "  selected: support=%d %S\n%!" sc.sc_support
+            (String.sub sc.sc_pattern 0
+               (min 60 (String.length sc.sc_pattern)))
+  done;
+  let combined =
+    List.rev !selected
+    |> List.map (fun sc ->
         {
           id = "";
-          pattern_text;
-          support;
-          language = (if language = "" then "unknown" else language);
-          sites;
+          pattern_text = sc.sc_pattern;
+          support = sc.sc_support;
+          language = sc.sc_language;
+          sites = List.map fst sc.sc_extension;
         })
-      group_outputs
-  in
-  (* Removal-only emission: Before_side os_clusters that did not pair
-     with any After_side cluster in M1.6 are surfaced as standalone
-     [-]-only rules. Addition-only clusters are *not* emitted as
-     standalone rules — a [+]-only block has no anchor for the spatch
-     engine and is left to fall through into M1.9 residuals. *)
-  let two_sided_coverage : (string, (int * int) list) Hashtbl.t =
-    let tbl = Hashtbl.create 16 in
-    List.iter
-      (fun c ->
-        List.iter
-          (fun (i : instance) ->
-            let prev =
-              try Hashtbl.find tbl i.file with Not_found -> []
-            in
-            Hashtbl.replace tbl i.file
-              ((i.site_start, i.site_end) :: prev))
-          c.instances)
-      two_sided_clusters;
-    tbl
-  in
-  let covered_by_two_sided (i : one_sided_instance) =
-    match Hashtbl.find_opt two_sided_coverage i.os_file with
-    | None -> false
-    | Some ranges ->
-        List.exists
-          (fun (s, e) -> s <= i.os_start_byte && i.os_end_byte <= e)
-          ranges
-  in
-  let used_removeds = List.map fst pairs in
-  let trace = Sys.getenv_opt "CS_TRACE" <> None in
-  let removal_only_records =
-    List.concat_map
-      (fun c ->
-        if c.os_cluster_side <> Before_side then []
-        else if List.memq c used_removeds then []
-        else
-          (* Drop clusters whose every instance's byte range is contained
-             in some two-sided rule's site range — those removals are
-             already explained by the larger rewrite (e.g. [- "tag"]
-             inside [- Log.d("tag", _H0) + logger.debug(_H0)]). *)
-          let all_covered =
-            List.for_all covered_by_two_sided c.os_cluster_instances
-          in
-          if all_covered then begin
-            if trace then
-              Printf.eprintf
-                "  removal-only candidate: %d insts, dropped (covered by two-sided)\n%!"
-                (List.length c.os_cluster_instances);
-            []
-          end
-          else begin
-            let groups = safe_removal_groups ~ctx ~site_db c in
-            if trace then
-              Printf.eprintf
-                "  removal-only candidate: %d insts, body=%S -> %d safe group(s)\n%!"
-                (List.length c.os_cluster_instances)
-                (render_removal_only_body c.os_cluster_pattern)
-                (List.length groups);
-            List.map
-              (fun (pattern_text, (insts : one_sided_instance list)) ->
-                let sites =
-                  insts
-                  |> List.map (fun (i : one_sided_instance) -> i.os_file)
-                  |> List.sort_uniq String.compare
-                in
-                let language =
-                  match insts with i :: _ -> i.os_language | [] -> "unknown"
-                in
-                {
-                  id = "";
-                  pattern_text;
-                  support = List.length insts;
-                  language = (if language = "" then "unknown" else language);
-                  sites;
-                })
-              groups
-          end)
-      os_clusters
-  in
-  (* Fold records with identical (pattern text, language) into one rule:
-     the same concrete rule can emerge from separately-clustered contexts
-     (e.g. a removal cluster's concrete-regroup fallback and another
-     cluster over different surroundings). Instances are disjoint by
-     construction, so supports add and site lists union. *)
-  let dedupe records =
-    let tbl : (string * string, rule) Hashtbl.t = Hashtbl.create 16 in
-    let order = ref [] in
-    List.iter
-      (fun (r : rule) ->
-        let key = (r.pattern_text, r.language) in
-        match Hashtbl.find_opt tbl key with
-        | None ->
-            Hashtbl.add tbl key r;
-            order := key :: !order
-        | Some prev ->
-            Hashtbl.replace tbl key
-              {
-                prev with
-                support = prev.support + r.support;
-                sites =
-                  List.sort_uniq String.compare (prev.sites @ r.sites);
-              })
-      records;
-    List.rev_map (Hashtbl.find tbl) !order
-  in
-  (* §4.5 subsumption reduction: drop a rule whose minimal edits at all
-     its sites are reproduced by another emitted rule (which must also be
-     safe at those sites), folding its site list into the subsuming rule.
-     This catches the redundancy site covering structurally cannot: a
-     parent-level block rewrite and the fine-grained rule it scaffolds
-     state the same change through different cluster instances, but
-     identical behaviour — and behaviour is what's compared here. *)
-  let subsume_reduce (records : rule list) : rule list =
-    (* Minimal edits of a rule at one file, memoized. [None] = the rule
-       does not apply there (no edits, transform failure, or unknown
-       file); [Some []] never escapes — an all-no-op edit set is treated
-       as inapplicable too. *)
-    let me_cache : (string * string, (int * int * string) list option)
-        Hashtbl.t =
-      Hashtbl.create 64
-    in
-    let minimal_edits_at ~language ~pattern_text file =
-      let key = (pattern_text, file) in
-      match Hashtbl.find_opt me_cache key with
-      | Some v -> v
-      | None ->
-          let v =
-            match Hashtbl.find_opt site_db file with
-            | None -> None
-            | Some si -> (
-                try
-                  let edits =
-                    Matcher.transform_edits ~ctx ~language ~pattern_text
-                      ~source_text:si.si_before
-                  in
-                  let minimal =
-                    edits
-                    |> List.map (minimal_edit si.si_before)
-                    |> List.filter (fun (s, e, r) -> s <> e || r <> "")
-                    |> List.sort_uniq compare
-                  in
-                  if minimal = [] then None else Some minimal
-                with _ -> None)
-          in
-          Hashtbl.add me_cache key v;
-          v
-    in
-    (* Two minimal edits are equivalent iff splicing them into the source
-       yields the same text. Tuple equality alone is too brittle: a
-       deletion in repetitive text (one import line out of a sorted
-       block) canonicalises to different (span, replacement) tuples
-       depending on which emission level it came from — the classic
-       diff-sliding ambiguity — while the effects are identical. The
-       whitespace-collapsed fallback mirrors the safety gate's tree-level
-       tolerance: layout is presentational. *)
-    let edit_matches (si : site_info) ea eb =
-      ea = eb
-      ||
-      let splice (s, e, r) =
-        String.sub si.si_before 0 s ^ r
-        ^ String.sub si.si_before e (String.length si.si_before - e)
-      in
-      let fa = splice ea and fb = splice eb in
-      fa = fb || ws_collapse fa = ws_collapse fb
-    in
-    let subsumed_by (a : rule) (b : rule) =
-      a.language = b.language
-      && List.for_all
-           (fun f ->
-             match
-               ( Hashtbl.find_opt site_db f,
-                 minimal_edits_at ~language:a.language
-                   ~pattern_text:a.pattern_text f,
-                 minimal_edits_at ~language:b.language
-                   ~pattern_text:b.pattern_text f )
-             with
-             | Some si, Some ea, Some eb ->
-                 List.for_all
-                   (fun e -> List.exists (edit_matches si e) eb)
-                   ea
-                 (* B must be safe where it newly fires: its sites carry
-                    the gate's verdict; a site of A outside them needs a
-                    fresh check. *)
-                 && (List.mem f b.sites
-                    || pattern_safe_at ~language:b.language
-                         ~pattern_text:b.pattern_text f)
-             | _ -> false)
-           a.sites
-    in
-    (* Higher-priority rules absorb lower ones: support (desc), then
-       shorter pattern text (the tighter statement), then text. A single
-       pass over the priority order avoids absorption cycles. *)
-    let ranked =
-      List.sort
-        (fun (a : rule) (b : rule) ->
-          compare
-            (-a.support, String.length a.pattern_text, a.pattern_text)
-            (-b.support, String.length b.pattern_text, b.pattern_text))
-        records
-    in
-    let survivors = ref [] in
-    List.iter
-      (fun (r : rule) ->
-        match List.find_opt (fun s -> subsumed_by r s) !survivors with
-        | Some s ->
-            if Sys.getenv_opt "CS_TRACE" <> None then
-              Printf.eprintf "  subsumed: %S (support %d) ⊑ %S\n%!"
-                (String.sub r.pattern_text 0
-                   (min 60 (String.length r.pattern_text)))
-                r.support
-                (String.sub s.pattern_text 0
-                   (min 60 (String.length s.pattern_text)));
-            let folded =
-              {
-                s with
-                sites = List.sort_uniq String.compare (s.sites @ r.sites);
-                (* Add support only when the file sets are disjoint: an
-                   overlapping absorption is the same underlying change
-                   claimed through two pipelines, and summing would
-                   double-count it. Support may understate after an
-                   overlapping fold, never overstate. *)
-                support =
-                  (if List.exists (fun f -> List.mem f s.sites) r.sites then
-                     s.support
-                   else s.support + r.support);
-              }
-            in
-            survivors :=
-              List.map
-                (fun x -> if x.pattern_text = s.pattern_text then folded else x)
-                !survivors
-        | None -> survivors := !survivors @ [ r ])
-      ranked;
-    !survivors
-  in
-  let combined =
-    subsume_reduce (dedupe (two_sided_records @ removal_only_records))
     |> List.sort (fun a b -> compare b.support a.support)
     |> List.mapi (fun i r -> { r with id = Printf.sprintf "R%d" (i + 1) })
   in

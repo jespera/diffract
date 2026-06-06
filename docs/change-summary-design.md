@@ -111,11 +111,11 @@ and conjunctive rule fusion.
 
 ## 3. Architecture: propose, evaluate, select
 
-> Status: this section describes the *target* architecture (M1.10),
-> adopted after the M1.8–M1.9 experience showed the original
-> emission-from-cluster-provenance design accumulating correction
-> passes. §3.3 records the lesson and the definitions; §3.1 describes
-> the proposer's extraction, which is unchanged.
+> Status: implemented (M1.10). Adopted after the M1.8–M1.9 experience
+> showed the original emission-from-cluster-provenance design
+> accumulating correction passes. §3.3 records the lesson and the
+> definitions; §3.1 describes the proposer's extraction, which is
+> unchanged.
 
 ```
 changeset
@@ -986,7 +986,7 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   `after=Rn` chains, no recursive re-clustering of residuals yet.
   Test: §5.2.
 
-- **M1.10 — Evaluation-based semantics (§3.3).** Invert the back half
+- **M1.10 — Evaluation-based semantics (§3.3) (done).** Invert the back half
   of the pipeline: clustering becomes a candidate generator whose
   instance bookkeeping stays internal; every emitted rule's sites,
   support, and coverage derive from evaluating the candidate against
