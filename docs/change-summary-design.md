@@ -109,42 +109,52 @@ principled merge order, and we supplement it with three additions that handle
 cases pure anti-unification cannot: cross-side alignment, residual extraction,
 and conjunctive rule fusion.
 
-## 3. Architecture: the pipeline
+## 3. Architecture: propose, evaluate, select
+
+> Status: this section describes the *target* architecture (M1.10),
+> adopted after the M1.8–M1.9 experience showed the original
+> emission-from-cluster-provenance design accumulating correction
+> passes. §3.3 records the lesson and the definitions; §3.1 describes
+> the proposer's extraction, which is unchanged.
 
 ```
 changeset
    │
-   ├──▶ file operations  ──────────────────────────────────────┐
-   │                                                            │
-   └──▶ per-file Tree_diff ──▶ change-pair extraction ──┐       │
-                               (Changed + Added/Removed) │      │
-                                                         ▼      │
-                               singleton clusters (one per pair)│
-                                                         │      │
-                                                         ▼      │
-                 anti-unification clustering (Getafix) ──┤      │
-                 with greedy hole-fraction-min merges    │      │
-                                                         ▼      │
-                               dendrogram of rules ──────┤      │
-                                                         │      │
-                                                         ▼      │
-                 cross-side hole alignment via GumTree ──┤      │
-                               (§4.3)                    │      │
-                                                         ▼      │
-                 residual extraction + recursive ────────┤      │
-                 clustering on residuals (§4.4)          │      │
-                                                         ▼      │
-                 cross-cluster co-occurrence merging ────┤      │
-                 into conjunctive rules (§4.2)           │      │
-                                                         ▼      │
-                                                      rules     │
-                                                         │      │
-                                                         ▼      ▼
-                                                       change summary
+   ├──▶ file operations ──────────────────────────────────────────────┐
+   │                                                                   │
+   └──▶ per-file Tree_diff ──▶ change-pair extraction (§3.1)           │
+                                          │                            │
+        ┌─────────────────────────────────┘                            │
+        │            PROPOSE  (candidate generation)                   │
+        ▼                                                              │
+   anti-unification clustering (Getafix dendrogram, §4.1)              │
+   cross-side hole alignment (§4.3) · coherence cuts                   │
+   re-specialization · concrete regrouping · swap fusion (§4.2)        │
+        │                                                              │
+        ▼                                                              │
+   candidate patterns  ← provenance (instances, merge history)         │
+        │                 stays internal to this phase                 │
+        │            EVALUATE  (semantics, §3.3)                       │
+        ▼                                                              │
+   per candidate × Modified file: edits + per-site safety              │
+   classification (§3.1 gate) → the candidate's true extension,        │
+   fires, and minimal-edit effects                                     │
+        │                                                              │
+        │            SELECT  (§3.3)                                    │
+        ▼                                                              │
+   greedy set-cover over the changeset's changed regions using         │
+   true extensions; subsumption inherent (a candidate adding no        │
+   uncovered region is never selected)                                 │
+        │                                                              │
+        ▼                                                              ▼
+   rules ──▶ residuals = regions no selected rule covers (§4.4) ──▶ summary
 ```
 
-Each stage is a pure function from the previous stage's output. This matters
-for testing: each stage can be exercised in isolation with fixed inputs.
+Each phase is a pure function from the previous phase's output. The
+boundary that matters is after PROPOSE: candidate patterns cross it,
+their provenance does not. Everything user-visible — a rule's sites,
+support, coverage, residual attribution — is derived by EVALUATE and
+SELECT from the candidate's behaviour alone.
 
 ### 3.1 Multi-level change-pair extraction with site covering
 
@@ -169,7 +179,10 @@ level of ancestor wins for each site. Key properties:
   whose density looks low (a single property rename inside a longer
   member-access chain) for no real benefit — the unhelpful candidates
   get filtered later anyway.
-- **Covering by byte-range overlap.** Clusters are ranked by support
+- **Covering by byte-range overlap** *(superseded by §3.3 selection in
+  M1.10 — the rank order below carries over as the set-cover
+  preference; the instance-byte-range contest does not).* Clusters are
+  ranked by support
   (desc), then by asymmetric-shape-first (patterns with arg-count or
   structural diffs between `-` and `+` carry strictly more
   information than same-shape renames), then by concrete-edit-count
@@ -318,6 +331,90 @@ ellipsed) and the "removal-only standalone rule" case (empty context).
 It gives a uniform mechanism for emitting change pairs at the right
 granularity without per-grammar tuning of which ancestor levels to
 prefer.
+
+### 3.3 Evaluation-based semantics
+
+**The lesson (M1.8–M1.9).** The original design derived a rule's
+user-visible properties — its sites, support, byte-range claims —
+from the *cluster instances that produced it*: which change pairs
+survived emission levels, dendrogram merges, coherence cuts, and the
+covering contest. That lineage describes how the rule was *found*, not
+what the rule *means*, and the two systematically diverge. Each
+divergence was patched as it surfaced: the safety gate sheds sites the
+cluster wrongly claimed; re-specialization repairs patterns whose
+evidence shrank after covering; dedupe merges rules separate clusters
+created; subsumption (§4.5) drops rules whose behaviour another rule
+contains; and M1.9a's residuals exposed the remaining gap — changes
+present in a file that an emitted rule demonstrably explains, leaking
+into residuals because the rule's cluster never enrolled that file.
+Chasing that last gap with yet another reconciliation pass
+("site completion") would never terminate: every change to the
+proposer re-opens it. The fault is architectural — provenance was
+allowed to define semantics.
+
+**The principle.** A rule's meaning is its *extension*: the set of
+sites where it fires safely. This is the same semantics the safety
+property (§2.3) is defined over, and the same one spdiff gives a
+generic patch (its support *is* the set of term pairs where it is
+safe). Clustering proposes; evaluation defines:
+
+- **Propose.** Extraction (§3.1), anti-unification (§4.1), cross-side
+  alignment (§4.3), coherence cuts, re-specialization, concrete
+  regrouping, and swap fusion (§4.2) produce *candidate patterns*.
+  Their instance bookkeeping is internal scaffolding for proposing
+  good candidates; nothing downstream reads it. A weak proposer costs
+  recall (a systematic change may go un-proposed and fall to
+  residuals); it can no longer cost honesty.
+
+- **Evaluate.** For each candidate pattern and each Modified file:
+  compute the candidate's edits (`Matcher.transform_edits`) and run
+  the per-site safety classification (§3.1). The candidate's
+  **extension** is the set of files where it fires safely; its
+  **support** is its fire count over the extension; its
+  **minimal-edit effects** (§4.5) at each site record which changed
+  regions it resolves. The gate is thereby promoted from a filter on
+  cluster output to the definition of rule semantics. Per-site
+  classification keeps the M1 emission policy unchanged (exact-only;
+  `decomposable` arrives with M1.9b as an evaluator extension).
+
+- **Select.** Choose the emitted rule set as a greedy weighted
+  set-cover of the changeset's **changed regions** (the site-DB
+  regions of §3.1), using true extensions: a candidate's value is the
+  set of still-uncovered regions its effects resolve; rank by the
+  existing covering order (support desc, asymmetric-shape first,
+  concrete-edit count, concreteness, hole fraction, text); stop when
+  no candidate adds coverage at `min_support` or above. Subsumption is
+  inherent rather than a separate pass: a candidate whose resolved
+  regions are already covered adds nothing and is never selected.
+  Greedy, not optimal — consistent with §2.3's "practical rather than
+  optimal" stance.
+
+- **Residuals (§4.4).** Unchanged in mechanism, but leakage-free by
+  construction: a rule claims a file iff evaluation put the file in
+  its extension, so a residual contains only changes *no* selected
+  rule resolves.
+
+**What this obsoletes.** Covering-by-instance-byte-ranges (replaced by
+region set-cover), the standalone subsumption pass of §4.5 (its
+minimal-edit/effect machinery moves into EVALUATE/SELECT; the partial
+order remains the organizing relation), emission-side dedupe
+(candidates dedupe at proposal; equal-effect candidates resolve at
+selection), and all instance-set threading through emission.
+Re-specialization survives inside PROPOSE as candidate improvement.
+
+**Support semantics.** Support becomes the behavioural fire count over
+the extension. Where a cluster's instance count understated a rule's
+true reach (the M1.9a leakage cases), supports rise; they can no
+longer overstate. Fixture expectations change accordingly — a
+conscious, one-time review at implementation.
+
+**Cost model.** EVALUATE is `|candidates| × |Modified files|` gate
+checks, short-circuited by a cheap no-match test and memoized per
+(pattern, file) as today; it is embarrassingly parallel. The dominant
+cost remains the PROPOSE dendrogram — and the inversion deliberately
+lowers the stakes there: a cheaper, sloppier proposer (sampling,
+aggressive pre-grouping) only affects which candidates exist, never
+the correctness of what is emitted about them.
 
 ## 4. Key design decisions
 
@@ -471,7 +568,15 @@ residuals). Traditional diffs conflate these. Residual extraction separates
 them, and when residuals cluster, surfaces hidden secondary patterns — for
 instance a small bug fix riding along with an API migration.
 
-### 4.5 Subsumption reduction under the partial order (planned)
+### 4.5 Subsumption reduction under the partial order
+
+> Status: implemented (M1.8d) as a standalone post-emission pass. With
+> the §3.3 inversion (M1.10) the pass dissolves into selection — a
+> candidate whose resolved regions are already covered is never
+> selected — while the minimal-edit canonicalisation and effect
+> comparison defined here move into the evaluator. The partial order
+> itself remains the organizing relation (and the backbone for M4
+> hierarchy exposure).
 
 The safety property induces a partial order on transforms: `A ⊑ B` (A is
 *part of* B) wrt a site set when, at every site of A, applying B covers
@@ -851,6 +956,19 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   current span/effect checks cannot express. Single-tier only: no
   `after=Rn` chains, no recursive re-clustering of residuals yet.
   Test: §5.2.
+
+- **M1.10 — Evaluation-based semantics (§3.3).** Invert the back half
+  of the pipeline: clustering becomes a candidate generator whose
+  instance bookkeeping stays internal; every emitted rule's sites,
+  support, and coverage derive from evaluating the candidate against
+  all Modified files (the §3.1 gate as evaluator); emission becomes a
+  greedy set-cover over changed regions. Deletes the instance-range
+  covering contest, the standalone subsumption pass, and emission-side
+  dedupe. Support becomes the behavioural fire count (fixture
+  expectations reviewed once). Acceptance: the M1.9a leakage class is
+  impossible — no residual may contain a change that a selected rule
+  resolves at that file (a property test over the soak corpus, not a
+  golden file).
 
 - **M2 — Recursive residual clustering + tiered rules.** Run the clustering
   pipeline on accumulated residuals to find secondary patterns; emit such
