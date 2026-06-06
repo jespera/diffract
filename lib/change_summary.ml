@@ -652,6 +652,7 @@ let no_orphan_after_holes (ep : edit_pat) : bool =
 type site_info = {
   si_before : string;  (** full pre-change source of the file *)
   si_after : string;  (** full post-change source of the file *)
+  si_language : string;  (** grammar the file parses with *)
   si_regions : (int * int * string) list;
       (** the file's changed regions in before-coordinates, sorted by
           start, disjoint: [(start, end, after_content)]. A zero-width
@@ -706,6 +707,7 @@ let build_site_db ~ctx (cs : changeset) : (string, site_info) Hashtbl.t =
               {
                 si_before = before_source;
                 si_after = after_source;
+                si_language = language;
                 si_regions = changed_regions d;
               }
           with _ -> ())
@@ -751,53 +753,140 @@ let spans_overlap s e rs re =
     rule fully explains every region it touches; regions it does not
     touch are other rules' or residuals' business. A site where the rule
     makes safe-but-partial progress {e within} a region (the residual
-    case, §4.4) is shed until M1.9 can attach residuals to state the gap
-    honestly. *)
-let site_safe ~ctx ~language ~pattern_text (si : site_info) : bool =
+    case, §4.4) is shed until M1.9b can attach residuals to state the
+    gap honestly. *)
+type site_evaluation = {
+  ev_exact : bool;
+      (** the gate verdict: the candidate fires and every edit is safe *)
+  ev_fires : int;  (** number of edits the candidate makes at the site *)
+  ev_resolved : int list;
+      (** indices into [si_regions] of the changed regions the candidate
+          fully resolves: regions an edit touches whose t''-image carries
+          no remaining change after application. The selector's coverage
+          unit (§3.3). Empty unless [ev_exact]. *)
+}
+
+let no_fire = { ev_exact = false; ev_fires = 0; ev_resolved = [] }
+
+(** Evaluate one candidate pattern at one site — the §3.1 gate, keeping
+    the information it computes instead of reducing to a boolean. *)
+let site_eval ~ctx ~language ~pattern_text (si : site_info) : site_evaluation
+    =
   try
     let edits =
       Matcher.transform_edits ~ctx ~language ~pattern_text
         ~source_text:si.si_before
     in
-    edits <> []
-    && List.for_all
-         (fun (ed : Matcher.edit) ->
-           List.exists
-             (fun (rs, re, _) -> spans_overlap ed.start_byte ed.end_byte rs re)
-             si.si_regions)
-         edits
-    && begin
-         (* Landing zones in t''-coordinates: each edit's span shifted by
-            the cumulative length delta of the edits before it
-            ([transform_edits] returns them sorted by start). *)
-         let zones =
-           let delta = ref 0 in
-           List.map
-             (fun (ed : Matcher.edit) ->
-               let zs = ed.start_byte + !delta in
-               let ze = zs + String.length ed.replacement in
-               delta :=
-                 !delta
-                 + String.length ed.replacement
-                 - (ed.end_byte - ed.start_byte);
-               (zs, ze))
-             edits
-         in
-         let t'' =
-           Matcher.transform ~ctx ~language ~pattern_text
-             ~source_text:si.si_before
-         in
-         let bt = Tree.parse ~ctx ~language t'' in
-         let at = Tree.parse ~ctx ~language si.si_after in
-         let d = Tree_diff.diff ~before:bt ~after:at in
-         List.for_all
-           (fun (rs, re, _) ->
-             List.for_all
-               (fun (zs, ze) -> not (spans_overlap zs ze rs re))
-               zones)
-           (changed_regions d)
-       end
-  with _ -> false
+    if edits = [] then no_fire
+    else
+      let placement_ok =
+        List.for_all
+          (fun (ed : Matcher.edit) ->
+            List.exists
+              (fun (rs, re, _) ->
+                spans_overlap ed.start_byte ed.end_byte rs re)
+              si.si_regions)
+          edits
+      in
+      if not placement_ok then no_fire
+      else begin
+        (* Landing zones in t''-coordinates: each edit's span shifted by
+           the cumulative length delta of the edits before it
+           ([transform_edits] returns them sorted by start). *)
+        let zones =
+          let delta = ref 0 in
+          List.map
+            (fun (ed : Matcher.edit) ->
+              let zs = ed.start_byte + !delta in
+              let ze = zs + String.length ed.replacement in
+              delta :=
+                !delta
+                + String.length ed.replacement
+                - (ed.end_byte - ed.start_byte);
+              (zs, ze))
+            edits
+        in
+        (* Map a before-coordinate point to t''-coordinates: add the
+           length deltas of the edits entirely before it; a point inside
+           an edit span clamps into the edit's zone. Approximate inside
+           edits — used only for coverage marking, where inaccuracy can
+           cost a region its "resolved" mark (it falls to the residual,
+           which stays honest) but cannot mis-state anything. *)
+        let shift_pt p =
+          let delta = ref 0 in
+          let result = ref None in
+          List.iter
+            (fun (ed : Matcher.edit) ->
+              match !result with
+              | Some _ -> ()
+              | None ->
+                  if p >= ed.end_byte then
+                    delta :=
+                      !delta
+                      + String.length ed.replacement
+                      - (ed.end_byte - ed.start_byte)
+                  else if p > ed.start_byte then
+                    (* inside the edit span: clamp into its zone *)
+                    result :=
+                      Some
+                        (ed.start_byte + !delta
+                        + min (p - ed.start_byte)
+                            (String.length ed.replacement)))
+            edits;
+          match !result with Some q -> q | None -> p + !delta
+        in
+        let t'' =
+          Matcher.transform ~ctx ~language ~pattern_text
+            ~source_text:si.si_before
+        in
+        let bt = Tree.parse ~ctx ~language t'' in
+        let at = Tree.parse ~ctx ~language si.si_after in
+        let d = Tree_diff.diff ~before:bt ~after:at in
+        let remaining = changed_regions d in
+        let exact =
+          List.for_all
+            (fun (rs, re, _) ->
+              List.for_all
+                (fun (zs, ze) -> not (spans_overlap zs ze rs re))
+                zones)
+            remaining
+        in
+        if not exact then no_fire
+        else
+          let resolved =
+            (* a region is resolved iff some edit touches it and its
+               t''-image carries no remaining change *)
+            let idx = ref (-1) in
+            List.filter_map
+              (fun (rs, re, _) ->
+                incr idx;
+                let touched =
+                  List.exists
+                    (fun (ed : Matcher.edit) ->
+                      spans_overlap ed.start_byte ed.end_byte rs re)
+                    edits
+                in
+                if not touched then None
+                else
+                  let rs' = shift_pt rs and re' = shift_pt re in
+                  if
+                    List.for_all
+                      (fun (qs, qe, _) -> not (spans_overlap rs' re' qs qe))
+                      remaining
+                  then Some !idx
+                  else None)
+              si.si_regions
+          in
+          {
+            ev_exact = true;
+            ev_fires = List.length edits;
+            ev_resolved = resolved;
+          }
+      end
+  with _ -> no_fire
+
+let site_safe ~ctx ~language ~pattern_text (si : site_info) : bool =
+  (site_eval ~ctx ~language ~pattern_text si).ev_exact
 
 (** The minimal form of an edit: trim the common prefix and suffix
     between the replaced source span and its replacement. A block-level
