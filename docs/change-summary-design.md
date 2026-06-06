@@ -416,6 +416,35 @@ lowers the stakes there: a cheaper, sloppier proposer (sampling,
 aggressive pre-grouping) only affects which candidates exist, never
 the correctness of what is emitted about them.
 
+**Overlapping extensions and common factors.** The `(rule_i, C_i)`
+decomposition is *not* a partition — extensions overlap, and the
+subpatch order (§4.5) structures the overlap: a weaker patch is safe
+wherever a stronger one is, so extension is antitone in patch strength
+and candidates relate to site sets as a concept lattice, not a flat
+cover. The consequence that matters: given two major clusters `C_1,
+C_2` with primary rules `R_1, R_2`, decomposing further *inside* each
+may surface a change common to both — a factor `gp_c` with
+`gp_c ⪯ R_1` on `C_1` and `gp_c ⪯ R_2` on `C_2`, whose extension spans
+`C_1 ∪ C_2` even though neither primary's does. The flat summary's
+set-cover deliberately hides `gp_c` (once `R_1` and `R_2` are selected
+it resolves no uncovered region), which is the right call for
+compactness but loses the factoring. Two consequences for later
+milestones:
+
+- M2's recursive clustering must run over the residuals of *all*
+  rules globally, not per rule, so a shared secondary change emerging
+  inside both clusters becomes one rule — which makes `after=`
+  attribution per-*site*, not per-rule (`after=R_1` at `C_1` sites,
+  `after=R_2` at `C_2` sites); §9.3's format needs that refinement.
+- Selection policy is a genuine degree of freedom: the same changeset
+  admits multiple safe factorizations — monolithic (fewer, larger
+  rules) versus factored (a common-factor rule plus per-cluster
+  completions) — and the safety property guarantees both are honest.
+  The flat summary picks one by the compactness rank; M4's hierarchy
+  exposure should present the lattice itself, with the common factor
+  as the shared ancestor of `R_1` and `R_2`, rather than baking in
+  one cut of it.
+
 ## 4. Key design decisions
 
 ### 4.1 Hierarchical clustering (Getafix)
@@ -971,10 +1000,14 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   golden file).
 
 - **M2 — Recursive residual clustering + tiered rules.** Run the clustering
-  pipeline on accumulated residuals to find secondary patterns; emit such
-  rules with `after=Rn` attribution. Residuals attributed with chains
-  (`rule=R1,R2`). Test: §5.2 extended with a third site producing a
-  secondary rule.
+  pipeline on the accumulated residuals of *all* rules globally — not per
+  rule — so a secondary change shared across two primary clusters
+  becomes one rule (§3.3 "common factors"). `after=` attribution is
+  therefore per-site, not per-rule (`after=R1` at one site, `after=R2`
+  at another); §9.3's format gains that refinement. Residuals
+  attributed with chains (`rule=R1,R2`). Test: §5.2 extended with a
+  third site producing a secondary rule, plus a common-factor case
+  (two primary clusters whose residuals share a change).
 
 - **M2.5 — Decomposition safety as a property test.** The M1.8c gate
   enforces safety at emission time; this milestone re-states it as an
@@ -1227,9 +1260,26 @@ declaration prevents silent misconfiguration.
 ## 10. Related work
 
 - Andersen & Lawall, *Generic Patch Inference* (2010). Establishes safety
-  and compactness formally. Our decomposition story corresponds to their
-  sequential-patch composition `gp_1 ; gp_2`, computed constructively via
-  residual extraction rather than via enumerate-and-intersect.
+  (one-step reachability, their Def. 5/6 — our §2.3 geodesic property is
+  the same condition in metric phrasing) and the subpatch partial order
+  (their Def. 8 — our §4.5) formally. The decisive difference is their
+  Def. 7: a patch must be safe for *every* pair in the input set `C`,
+  with monotonicity making `LCP(C)` collapse to ∅ when one odd pair
+  joins — which is why `spfind` needed a hand-curated `C` and left a
+  frequency threshold as future work. This design replaces the single
+  `(gp, C)` with *discovered* `(rule_i, C_i)` pairs: clustering proposes
+  partition seeds, per-site safety shedding refines each `C_i` to where
+  safety actually holds (the M1.10 extension), `min_support` is their
+  proposed threshold realised, and residuals account for the complement
+  that Def. 7's world silently drops. Their Theorem 1 (all of `LCP(C)`
+  extensionally equivalent; the quotient a join semi-lattice) is the
+  formal license for selection's effect-equality treatment of
+  equal-behaviour candidates. Our decomposition story corresponds to
+  their sequential composition `gp_1 ; gp_2`, computed constructively
+  via residual extraction rather than searched via safe-after-prefix
+  extension; their exhaustive abstract-and-intersect generation remains
+  the completeness gold standard within one small `C_i` and could back
+  a second-chance proposer over residual clusters.
 - Bader, Scott, Pradel & Chandra, *Getafix* (FSE 2019). Provides the
   anti-unification-with-memoisation primitive, the agglomerative clustering
   structure, and the hierarchy-as-output idea. Our clustering pipeline is
