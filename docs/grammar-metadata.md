@@ -43,81 +43,43 @@ of truth.
 
 `lib/grammar_metadata.ml{,i}` parses each language's embedded JSON
 lazily on first lookup and memoizes the result. The current API
-exposes:
+exposes the DEL definition — the bracket pairs, string-literal shapes,
+and comment markers derived from `grammar.json` — plus the language
+list:
 
 ```ocaml
-val list_shape_wrappers : language:string -> string list
-val is_list_shape_wrapper : language:string -> node_type:string -> bool
+type string_def = { opener : string; closer : string; escape : char option }
+type del_definition = {
+  bracket_pairs : (string * string) list;
+  string_defs : string_def list;
+  line_comments : string list;
+  block_comments : (string * string) list;
+}
+val del_definition : language:string -> del_definition
 val all_languages : unit -> string list
 ```
 
-The criterion for "list-shape wrapper" is structural: `named: true`
-and `fields` empty or absent. This identifies named nodes whose
-children carry no semantic role — list containers (`import_list`,
-`value_arguments`, `class_body`) and statement-context wrappers
-(`expression_statement`).
-
 The API is deliberately narrow. As consumers materialise — role-aware
-metavar naming, type-restricted holes, bracket-pair extraction for a
-future matcher — additional accessors will be added that read different
-projections out of the same parsed JSON. The existing accessors will
-likely be revisited when consumers need finer-grained information than
-"is this a wrapper?".
+metavar naming, type-restricted holes — additional accessors will be
+added that read different projections out of the same parsed JSON.
 
-## 3. What the pipeline does *not* yet do
+## 3. History: the `unwrap_root` consumer
 
-### 3.1 Replacing the existing `unwrap_root`
+The pipeline was originally scoped to also feed `Tree.unwrap_root` in
+`lib/tree.ml`: a `list_shape_wrappers` / `is_list_shape_wrapper`
+projection over `node-types.json` (named nodes with no field-named
+children) supplied candidate wrapper types, and `unwrap_root` peeled
+them at the root of a parsed pattern fragment so a single-node pattern
+matched against the corresponding node in the source rather than the
+whole file.
 
-This work was originally scoped to also rewrite `Tree.unwrap_root` in
-`lib/tree.ml` to consult the metadata in place of its hardcoded
-whitelist (`program | module | source_file | compilation_unit |
-expression_statement`). That consumer has been deferred.
-
-The reason: a clean metadata-driven peel turned out to require two
-ingredients neither of which is straightforwardly derivable from
-`node-types.json` alone.
-
-- **A way to distinguish "transparent wrappers" from "structured
-  nodes that happen to share the metadata shape."** Many node types
-  satisfy `named && no fields` without being safe to peel: Kotlin's
-  `postfix_expression` for `value!!` matches the criterion but the
-  trailing `!!` is semantic content, not a terminator. Without a
-  finer discriminator the matcher over-peels and loses meaning.
-- **A way to handle grammars whose parsers require a trailing
-  terminator** to recognise a fragment. PHP rejects `<?php new Foo()`
-  but accepts `<?php new Foo();`. A strict byte-range guard ("peel
-  only when the wrapper's range equals its child's") would discard
-  the trailing `;`'s contribution, leaving expression-shaped patterns
-  unable to match expressions inside other expressions in PHP source
-  code. The current `unwrap_root` whitelist sidesteps this by always
-  peeling `expression_statement` regardless of byte range; a metadata
-  rule that preserves this behaviour without naming the type
-  explicitly turns out to require either fragile heuristics or
-  per-language input.
-
-A pragmatic intermediate (small universal whitelist + metadata-driven
-peel for new types with byte-range equality) does work for the test
-suite, but it doesn't deliver on the goal of removing hardcoded
-grammar knowledge from `tree.ml` — the whitelist is still there,
-just smaller. We chose not to ship that compromise.
-
-### 3.2 Why the consumer is deferred rather than fixed
-
-The pattern-unwrap problem is on its way out architecturally. The
-matcher direction being explored separately (a hybrid using
-tree-sitter's tokenizer for both pattern and source token streams,
-with the matching engine running parser-combinator-style alignment
-over tokens and AST verification on the source side) replaces the
-"parse pattern as a fragment, peel to the content" approach
-wholesale. Under that architecture the pattern is never a parsed AST,
-so there is nothing to unwrap; `Tree.unwrap_root` and its callers are
-deleted, not refined.
-
-Investing further effort in a clean metadata-driven unwrap would be
-spent on a consumer scheduled to be removed. The pipeline itself
-survives the transition and provides metadata to the new architecture
-for purposes other than peeling — field-aware naming, type-restricted
-holes, supertype lookups, bracket-pair extraction.
+The universal tokenizer made that consumer unnecessary: the pattern is
+tokenized to a leaf stream rather than parsed as a fragment, so there
+is no root to peel. `Tree.unwrap_root` and the `list_shape_wrappers`
+projection were both removed (verified: a single-import pattern matches
+and rewrites the right line in a multi-import file with no root peel).
+The DEL accessors above are the part of the pipeline the new
+architecture retains.
 
 ## 4. Trade-offs
 
@@ -142,10 +104,10 @@ holes, supertype lookups, bracket-pair extraction.
 - Schema drift in `node-types.json` upstream would need the parser to
   update. The schema is stable in practice but not formally
   versioned.
-- The current API exposes only `list_shape_wrappers` and friends.
-  Without a consumer the API hasn't been pressure-tested against
-  field-info or supertype use cases; it will likely grow or change
-  as those consumers materialise.
+- The live API exposes only the DEL definition accessors. The
+  `node-types.json` projection has no consumer since `unwrap_root` was
+  removed (§3); the embedding is retained as foundation for future
+  field-info / supertype use cases but is currently unexercised.
 
 ## 5. Open questions
 
@@ -162,6 +124,6 @@ holes, supertype lookups, bracket-pair extraction.
 - **Should the smoke test be promoted to a startup invariant?** The
   current implementation is a unit test; an alternative is for
   `Context.create` (or another startup hook) to validate that every
-  registered language has a non-empty wrapper list and fail fast if
+  registered language has a non-empty DEL definition and fail fast if
   not. Defer until we have a consumer where stale-metadata behaviour
   would otherwise be silent.

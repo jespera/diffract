@@ -169,7 +169,10 @@ the only language-specific data, and it's already linked.
 
 - `Match_engine`, `Match_search`, `Match_parse`, `Match_types` —
   the existing production matcher.
-- `Tree.unwrap_root` and the wrapper whitelist.
+- ~~`Tree.unwrap_root` and the wrapper whitelist.~~ *(done: both
+  removed — `unwrap_root` and `Grammar_metadata`'s
+  `list_shape_wrappers`/`is_list_shape_wrapper` — once the tokenizer
+  proved single-fragment patterns match without root peeling.)*
 - `Tree.parse_as_pattern` and any code that parses patterns as full
   language fragments.
 - `Match_engine.try_match_children_directly` and similar AST
