@@ -99,6 +99,21 @@ let test_statement_reorder () =
   let pairs = Tree_diff.change_pairs d in
   Alcotest.(check int) "no replaced pairs" 0 (List.length pairs)
 
+(* Test: a difference confined to unnamed tokens, with the named
+   children pairwise identical, is a real change — not Unchanged. Here
+   only the trailing comma of the argument list differs ([f(x,)] vs
+   [f(x)]); the named child [x] is identical in both. Decomposing by
+   named children alone would miss it and report Unchanged; the diff
+   must instead surface the change (the surrounding parent reports
+   Modified, with the [arguments] node Replaced). *)
+let test_unnamed_only_difference () =
+  let before = parse "f(x,)" in
+  let after = parse "f(x)" in
+  let d = Tree_diff.diff ~before ~after in
+  Alcotest.(check bool)
+    "unnamed-only difference is not Unchanged" false
+    (is_unchanged d.root_change)
+
 (* Test: Mixed changes — add + remove + modify *)
 let test_mixed_changes () =
   let before =
@@ -242,6 +257,8 @@ let tests =
     Alcotest.test_case "statement added" `Quick test_statement_added;
     Alcotest.test_case "statement removed" `Quick test_statement_removed;
     Alcotest.test_case "statement reorder" `Quick test_statement_reorder;
+    Alcotest.test_case "unnamed-only difference" `Quick
+      test_unnamed_only_difference;
     Alcotest.test_case "mixed changes" `Quick test_mixed_changes;
     Alcotest.test_case "formatting only" `Quick test_formatting_only;
     Alcotest.test_case "change pairs extraction" `Quick

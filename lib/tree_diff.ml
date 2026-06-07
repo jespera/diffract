@@ -329,7 +329,29 @@ let rec derive_change mapping ~before_source ~after_source
           before_children after_children
       in
       if List.for_all (function Same _ -> true | _ -> false) child_changes
-      then Unchanged
+      then
+        (* All named children agree, yet [Tree.equal] said the parents
+           differ. Two sub-cases: (1) named-children match pairwise at
+           the same positions — the difference must be in unnamed
+           children only (e.g. PHP's [array(...)] vs [\[...\]] wrap
+           the same [array_element_initializer]s with different
+           surrounding tokens). The named-child decomposition can't
+           express this, so treat as Replaced. (2) named children
+           swapped positions — a reorder; the all-Same result is
+           correct as Unchanged because every named child is mapped
+           somewhere unchanged, and the GumTree mapping handles
+           reordering as a non-event. *)
+        let same_length =
+          List.length before_children = List.length after_children
+        in
+        let pairwise_equal =
+          same_length
+          && List.for_all2
+               (fun b a ->
+                 Tree.equal before_source b after_source a)
+               before_children after_children
+        in
+        if pairwise_equal then Replaced else Unchanged
       else Modified { child_changes }
 
 (** Derive child_change list from the mapping. *)
