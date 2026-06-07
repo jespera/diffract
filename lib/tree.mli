@@ -161,13 +161,6 @@ val format_tree : _ tree -> string
             number [1:11-1:12] "42"
     v} *)
 
-(** {1 Unwrapping} *)
-
-val unwrap_root : 'kind t -> 'kind t
-(** [unwrap_root node] unwraps parser wrapper nodes (program, module,
-    expression_statement, etc.) to get to the innermost meaningful content node.
-    Handles PHP's php_tag prefix in program nodes. *)
-
 (** {1 Phantom type conversion} *)
 
 val forget_node : _ t -> any t

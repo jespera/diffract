@@ -113,8 +113,8 @@ let test_equal_different_source () =
 let test_hash_formatting_insensitive () =
   let tree1 = Diffract.parse_tree ~ctx ~language:"typescript" "f(x,  y)" in
   let tree2 = Diffract.parse_tree ~ctx ~language:"typescript" "f(x,y)" in
-  let root1 = Tree.unwrap_root tree1.root in
-  let root2 = Tree.unwrap_root tree2.root in
+  let root1 = tree1.root in
+  let root2 = tree2.root in
   Alcotest.(check int)
     "formatting insensitive hash" root1.Tree.hash root2.Tree.hash;
   Alcotest.(check bool)
