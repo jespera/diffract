@@ -528,31 +528,106 @@ the intersection and the combined application reproduces the per-file after-
 source. This is exactly what `Match.transform_nested` already does; the
 summariser just needs to check it.
 
-### 4.3 Cross-side hole alignment via GumTree
+### 4.3 Cross-side alignment by content sharing (after hdiff)
 
-Anti-unification memoizes holes on pairs of concrete subtrees. Before- and
-after-sides are anti-unified independently; cross-side correspondence emerges
-only when the same concrete-pair appears on both sides. This breaks when the
-after's subtree is a *part of* (or a reshaping of) one of the before's
-subtrees — which is pervasive in realistic refactors (see the synthetic
-example in §5.2 and the `const user = useAppSelector(s => s.users.user)` case
-in §5.4).
+> Adopts the change representation and core algorithm of Miraldo &
+> Swierstra's *hdiff* (ICFP 2019, §10), scoped to cross-side alignment and
+> composed with our cross-file generalisation. Supersedes the earlier
+> "GumTree-based hole renaming" framing (M1.8b), which only repaired an
+> already-formed orphan and could not produce the fused-context rules
+> below.
 
-**Fix.** After anti-unification produces before-holes `{$h_i}` and after-holes
-`{$h'_j}`:
+**The problem.** A change pair's `(-, +)` contexts are built by
+anti-unifying the before-tree and after-tree *independently* (shared
+hole counter), so a `+`-side metavariable binds to a `-`-side one only
+when the *same concrete subtree* sits at a corresponding position. It
+orphans whenever the after reuses a value that is present in the before
+but *position-misaligned* — pervasive in real refactors, and the subject
+of the `*_unwrap_*` / `*_extract_*` fixtures:
 
-1. For each file pair, use the GumTree mapping from `Tree_diff.compute_mapping`
-   to determine which after-subtrees correspond to which before-subtrees.
-2. For each after-hole `$h'_j` with values `{v_j^k}` across sites, find the
-   before-hole `$h_i` such that for every site `k`, `v_j^k` is mapped (possibly
-   through a sub-position) to a subterm of `$h_i`'s value at site `k`.
-3. If a unique such `$h_i` exists, rename `$h'_j := $h_i`.
-4. If no such `$h_i` exists, the rule has an orphan metavariable on the `+`
-   side — the spatch engine rejects it. Drop the cluster (or, if the
-   containing dendrogram node has a coherent parent, fall back to it).
+```
+box(x + 1).get()           ⤳  x + 1        (extract a wrapped expression)
+save({ id: u, name: n })   ⤳  save(u)      (field → positional argument)
+<B>{e}</B>                 ⤳  e            (unwrap a JSX element)
+```
 
-This is pure post-processing on the anti-unified pattern. It reuses the
-`Tree_diff` mapping already computed for change-pair extraction.
+Today the orphan is rejected by the coherence gate and the change falls
+to the one-sided-removal path: delete the whole before-compound and
+residualise the re-inserted value (the broken-looking `val v = `,
+`save()`, `const c = ` intermediates seen in the soaks).
+
+**Representation = our rule.** hdiff represents a change as a pair
+`(del, ins)` of contexts sharing metavariables — exactly our `-`/`+`
+rule. The leverage is in *how* the metavariables get assigned.
+
+**Content-keyed assignment (`wcs` / `extract`).** Rather than aligning
+positions, hdiff assigns a metavariable to every subtree *common to
+both* before and after (the `wcs`, "which common subtree", oracle), then
+`extract` replaces each maximal common subtree by its metavariable in
+*both* contexts. A value nested in the before and standalone in the
+after thus receives the **same metavariable regardless of position** —
+the orphan never arises. For `box(x + 1).get() ⤳ x + 1`, `x + 1` is a
+common subtree, so extraction yields `box($H).get() ⤳ $H` directly.
+
+The oracle is effectively free for us. hdiff makes `wcs` linear with a
+Merkle hash per subtree plus a set of common digests; `Tree.hash` *is*
+that Merkle root (a structural, position-independent hash), and the
+common set is a `Hashtbl` over before/after subtree hashes.
+(`Tree_diff.compute_mapping`'s GumTree correspondence is an alternative
+oracle; the hash intersection is simpler, linear, and needs no anchor
+alignment.)
+
+**Closure.** Content extraction can still leave a `+`-metavariable
+unbound in the `-` context when its binding source is a *sibling* part
+of the change — e.g. the `): M[]` return type whose `M` is the default
+of a `<T = M[]>` deleted elsewhere in the same function. hdiff's
+`closure` enlarges the change *up the spine* until every `+`-metavariable
+is bound. For us this reads the §3.1 multi-level emission as a ladder:
+closure is the choice of the smallest enclosing Modified ancestor at
+which the orphan binds. Its two outcomes *are* the rule/residual
+boundary:
+
+- *Closes at some ancestor* → that ancestor is the rule. The function-
+  level `<T = M[]>(…): T → body` ⤳ `(…): M[] → body` is a closure — it
+  binds `M`, fusing the generic-drop, the `select`-drop and the
+  return-type change into one rule.
+- *Never closes, even at the change-pair root* → the value is genuinely
+  new (not a copy of any before-content); the unbound part is a true
+  residual (§4.4, M1.9b). Closure-fails-at-root is the precise criterion
+  separating "this is a rule" from "this is a residual."
+
+**Composition with generalisation — and its limit.** hdiff diffs a
+*single* pair; our output is a rule generalised over *many*. The two
+objectives are duals: content extraction holes *commonalities within a
+pair* (copies); our anti-unification (§4.1) holes *variabilities across
+pairs* (generalisation). They compose in the common case — build each
+pair's `(del, ins)` by content extraction + closure, then anti-unify
+across files — and for the `*_unwrap_*` fixtures, where the surrounding
+structure is identical across the cluster, this yields one clean rule
+with no residual.
+
+They *conflict* when the surrounding structure varies across the
+cluster. §5.2 (`f(x + 1, a) ⤳ g(x)` and `f(3, 1) ⤳ g(3)`) is the
+canonical case: per-pair content extraction gives `f($H + 1, a) ⤳ g($H)`
+for one site and `f($H, 1) ⤳ g($H)` for the other — exact per pair, but
+the `-` contexts disagree in shape and do not generalise to one rule.
+The generalising choice is to *un-share*: hole the whole first argument
+(`f($X, $Y) ⤳ g($X)`) and let a residual close the gap where the after
+used only a *sub-part* of it (`x + 1 ⤳ x`). That is the M1.9b
+decomposition, which is why §5.2 is a residual example, not a §4.3 one.
+The distinction is sharp: **§4.3 handles verbatim cross-side common
+subtrees that positional anti-unification mis-aligns; sub-part reshapes
+whose surrounding shape varies across the cluster are M1.9b residual
+cases.** Selection (§3.3) arbitrates — content extraction merely
+*proposes* the maximally-shared candidates; whether they win or are
+coarsened to a rule-plus-residual falls out of the region set-cover.
+
+We restrict content-keying to **cross-side** alignment (binding an
+after-value to a before-value). hdiff also shares *within* a side by
+default — forcing two before-occurrences of one value to a single
+metavariable, a contraction that imposes a non-linear match — which we
+leave to the existing generalisation, to avoid over-constraining emitted
+rules.
 
 ### 4.4 Residual extraction and recursive decomposition
 
@@ -683,10 +758,15 @@ file2.ts:  f(3, 1)     →   g(3)
 **Anti-unification alone** would emit `- f($h1, $h2) / + g($h3)` with `$h3`
 orphaned on the `+` side — rejected by the spatch engine, cluster dissolves.
 
-**With cross-side alignment (§4.3)**: GumTree maps the after's `x` in file1
-to the `x` subterm of `x+1` in the before; the after's `3` in file2 maps to
-the before's `3`. So `$h3` (with values `{x, 3}`) corresponds to the first
-argument across sites — rename `$h3 := $h1`.
+**Why this is M1.9b, not §4.3.** Per-pair content extraction (§4.3) would
+share the leaf `x`, giving `f($H + 1, a) ⤳ g($H)` for file1 and
+`f($H, 1) ⤳ g($H)` for file2 — exact per pair, but the `-` contexts
+disagree in shape and do not generalise. The generalising choice
+*un-shares*: hole the whole first argument as `f($X, $Y) ⤳ g($X)` and
+bind `$X` to the after across sites (for file2, `3` matches verbatim; for
+file1, the after's `x` is a *sub-part* of the before's `x + 1`, which is
+exactly the residual). This coarse rule does not reproduce file1's after
+on its own.
 
 **With residual extraction (§4.4)**: applying `f($X, $Y) → g($X)` to
 file1's before yields `g(x+1)`; comparing to `g(x)` leaves a residual
@@ -911,9 +991,9 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   `mixed_systematic` (case 3, two property renames) and
   `co_occurring_renames` (case 3, two function renames) fixtures. The
   §5.3 `useAppSelector.pat` reproduction is still aspirational —
-  reaching it depends on the GumTree mapping classifying the import
+  reaching it depends on cross-side alignment (§4.3) resolving the import
   rewrite and the call-site rewrite into clean two-sided clusters with
-  aligned holes; a dedicated fixture for that case will land alongside
+  bound holes; a dedicated fixture for that case will land alongside
   M1.8b.
 
 - **M1.7 — File-level operations (done).** Added/Deleted files emit as
@@ -930,12 +1010,20 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   anti-unifications aligns the holes when the same concrete subtree
   appears on both sides. (Pending: M1.8b below.)
 
-- **M1.8b — GumTree-based hole renaming.** Post-process anti-unified
-  patterns to rename `+`-side holes to their corresponding `-`-side
-  holes via the GumTree mapping, for cases where memoization-by-pair
-  doesn't suffice — i.e. when the after's subtree is a *part of* or a
-  *reshaping of* the before's subtree (the §5.2 example). Test: §5.2
-  (first part: cluster doesn't dissolve).
+- **M1.8b — Cross-side alignment by content sharing (§4.3, reframed).**
+  Originally scoped as a post-process that renames a `+`-side hole to its
+  `-`-side hole via the GumTree mapping. Superseded by the hdiff-based
+  formulation in §4.3: assign metavariables by *content* (common-subtree
+  oracle over `Tree.hash`) when building a change pair's `(del, ins)`
+  contexts, so a position-misaligned cross-side value binds by
+  construction; then *closure* widens the change to the smallest Modified
+  ancestor that binds any remaining orphan (closure-fails-at-root ⇒
+  residual, the M1.9b boundary). Tests: the `*_unwrap_*` / `*_extract_*`
+  pending fixtures (`ts_unwrap_chain`, `ts_object_to_positional`,
+  `kotlin_unwrap_chain`, `kotlin_ctor_extract_arg`, `tsx_unwrap_element`)
+  flip from xfail to green. Note §5.2 is *not* covered here — it is the
+  sub-part-reshape-with-varying-surround case, handled as rule + residual
+  under M1.9b (§4.3 "Composition" para).
 
 - **M1.8c — Per-site safety gate.** Replace the zero-match behavioural
   applicability check with the per-site safety classification (§3.1):
@@ -1285,12 +1373,39 @@ declaration prevents silent misconfiguration.
   structure, and the hierarchy-as-output idea. Our clustering pipeline is
   essentially Getafix, minus the deployment-oriented ranking.
 - Falleri et al., *GumTree* (ASE 2014). The node-mapping algorithm
-  underlying `Tree_diff.compute_mapping`. Used here for change-pair
-  extraction and for cross-side hole alignment.
+  underlying `Tree_diff.compute_mapping`, used for change-pair
+  extraction. (It was also the original basis for cross-side alignment;
+  §4.3 now does that by content sharing over `Tree.hash` instead, with
+  the GumTree mapping as a fallback oracle.)
+- Miraldo & Swierstra, *An Efficient Algorithm for Type-Safe Structural
+  Diffing* (`hdiff`, ICFP 2019). The basis for §4.3. Its change — a pair
+  of contexts `(del, ins)` sharing metavariables — *is* our `-`/`+`
+  rule. Two mechanisms transfer directly: (1) metavariables assigned by
+  *content* via a "which common subtree" (`wcs`) oracle, so a
+  position-misaligned cross-side value binds by construction — and the
+  oracle is free for us, since hdiff's Merkle root per subtree is our
+  `Tree.hash`; (2) *closure*, which enlarges a change up the spine until
+  every `+`-metavariable is bound — our rule/residual boundary
+  (closure-fails-at-root ⇒ residual). It diffs a single pair, so we use
+  it to build cleaner per-pair changes that feed the cross-file
+  generalisation (§4.1), not as a replacement; the two metavariable
+  notions are duals (commonalities-within-a-pair vs.
+  variabilities-across-pairs), and they conflict for sub-part reshapes
+  whose surround varies across the cluster (§5.2, → residual).
 - Erdweg, Szabó & Pacak, *Concise, Type-Safe, and Efficient Structural
-  Diffing* (PLDI 2021). Typed edit-script framing. Relevant to how a
-  residual could be represented if we ever want it in a more structured
-  form than a `Tree_diff.diff`.
+  Diffing* (`truediff`, PLDI 2021). Linearly-typed edit scripts
+  (detach/attach/load/unload/update) whose type system guarantees
+  well-typed intermediate trees, in linear time. Not the §4.3 driver —
+  its "reuse" is subtree *moves via URIs*, not metavariable sharing
+  across a reshape — but the right reference for the *deferred*
+  applicable-residual work: if residuals ever need to be type-safe
+  *structured* edits rather than textual unified diffs (§9.1, the (b)
+  serialization track), `truechange` is the model. It also independently
+  confirms the hash oracle (it decides tree equivalence by cryptographic
+  hash) and its "candidates equal-except-for-literals" is a fast
+  anti-unification-by-hash primitive the proposer could borrow; heed its
+  critique of hdiff (whole-file patches mention many unchanged nodes —
+  moot for our *localised* rules, which want minimal context anyway).
 - Padioleau et al., *Coccinelle* / semantic patches. The output language of
   this feature — diffract's spatch DSL — is directly inspired by
   Coccinelle's SmPL. The `docs/patterns.md` file documents the concrete
