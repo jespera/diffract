@@ -761,9 +761,17 @@ type site_evaluation = {
           fully resolves: regions an edit touches whose t''-image carries
           no remaining change after application. The selector's coverage
           unit (§3.3). Empty unless [ev_exact]. *)
+  ev_clean : bool;
+      (** the candidate, applied alone, reproduces the site's after-source
+          (modulo whitespace) — i.e. it leaves no residual here. Used by
+          selection to prefer a rule that reconstructs over one that only
+          partially resolves the same regions (e.g. an extraction
+          [box($H).get() ⤳ $H] over a bare removal [box($H).get()] that
+          deletes and defers the rest to a residual). *)
 }
 
-let no_fire = { ev_exact = false; ev_fires = 0; ev_resolved = [] }
+let no_fire =
+  { ev_exact = false; ev_fires = 0; ev_resolved = []; ev_clean = false }
 
 (** Evaluate one candidate pattern at one site — the §3.1 gate, keeping
     the information it computes instead of reducing to a boolean. *)
@@ -878,6 +886,7 @@ let site_eval ~ctx ~language ~pattern_text (si : site_info) : site_evaluation
             ev_exact = true;
             ev_fires = List.length edits;
             ev_resolved = resolved;
+            ev_clean = (t'' = si.si_after || ws_collapse t'' = ws_collapse si.si_after);
           }
       end
   with _ -> no_fire
@@ -1187,6 +1196,55 @@ let rec subtree_has_structural (cc : Tree_diff.child_change list) =
     cluster-level decisions in what should already be leaf-level
     renames. Byte-range deduplication prevents duplicate ancestor
     emissions when multiple descendant chains meet at the same ancestor. *)
+(* Hashes of every subtree of [n] (incl. [n] itself). [Tree.hash] is a
+   structural, position-independent digest, so it doubles as hdiff's
+   "which common subtree" oracle (§4.3): a node is a common subtree of
+   two trees iff its hash appears in both. Comparing hashes across the
+   before/after parses is sound — the digest excludes position and source
+   buffer. *)
+let rec subtree_hashes (n : Tree.src Tree.t) (acc : int list) : int list =
+  List.fold_left
+    (fun a (c : Tree.src Tree.child) -> subtree_hashes c.node a)
+    (n.Tree.hash :: acc)
+    n.Tree.children
+
+(* §4.3 cross-side alignment, extraction case. When a [Modified] node has
+   a [Removed] child [r] and an [Added] child [a] where one is a subtree
+   of the other (a wrapper was added or removed around a preserved
+   value), the after reuses a sub-part of the before — GumTree reports it
+   as an unrelated Removed+Added rather than a rewrite. Emit it as a
+   two-sided change pair [(r, a)] so it forms an extraction rule
+   ([box($H).get() ⤳ $H]); the existing cross-file anti-unification then
+   binds the shared hole by content (the preserved value coincides on
+   both sides). The original one-sided Removed/Added candidates are left
+   intact — this augments, and selection (§3.3) picks whichever covers
+   more. *)
+let extraction_pairs (child_changes : Tree_diff.child_change list) :
+    (Tree.src Tree.t * Tree.src Tree.t) list =
+  let removeds =
+    List.filter_map
+      (function Tree_diff.Removed { node } -> Some node | _ -> None)
+      child_changes
+  in
+  let addeds =
+    List.filter_map
+      (function Tree_diff.Added { node } -> Some node | _ -> None)
+      child_changes
+  in
+  let subtree_of x y =
+    (* is [x] a subtree of [y] (by structural hash)? *)
+    List.mem x.Tree.hash (subtree_hashes y [])
+  in
+  List.concat_map
+    (fun (r : Tree.src Tree.t) ->
+      List.filter_map
+        (fun (a : Tree.src Tree.t) ->
+          if r.Tree.hash <> a.Tree.hash && (subtree_of a r || subtree_of r a)
+          then Some (r, a)
+          else None)
+        addeds)
+    removeds
+
 let collect_change_pairs_multi ?(emission_threshold = 0.5)
     (d : Tree_diff.diff) : Tree_diff.change_pair list =
   let out = ref [] in
@@ -1221,6 +1279,7 @@ let collect_change_pairs_multi ?(emission_threshold = 0.5)
            then picks the smallest among applicable candidates,
            resolving overlap by byte range. *)
         emit b a;
+        List.iter (fun (r, a) -> emit r a) (extraction_pairs child_changes);
         List.iter
           (function
             | Tree_diff.Changed { before; after; change } ->
@@ -1230,6 +1289,7 @@ let collect_change_pairs_multi ?(emission_threshold = 0.5)
   in
   (match d.root_change with
   | Tree_diff.Modified { child_changes } ->
+      List.iter (fun (r, a) -> emit r a) (extraction_pairs child_changes);
       List.iter
         (function
           | Tree_diff.Changed { before; after; change } ->
@@ -1919,8 +1979,21 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
           let m = marginal sc in
           if m < 2 then acc
           else
+            (* Among candidates covering the same marginal regions, prefer
+               the one that reconstructs its sites with no residual
+               (clean) — e.g. an extraction [box($H).get() ⤳ $H] over a
+               bare removal [box($H).get()] that deletes and defers the
+               rest to a residual. Then higher support, then shorter
+               pattern text, then text. *)
+            let clean =
+              List.length (List.filter (fun (_, e) -> e.ev_clean) sc.sc_extension)
+            in
             let key =
-              (m, sc.sc_support, -String.length sc.sc_pattern, sc.sc_pattern)
+              ( m,
+                clean,
+                sc.sc_support,
+                -String.length sc.sc_pattern,
+                sc.sc_pattern )
             in
             match acc with
             | Some (bkey, _) when bkey >= key -> acc

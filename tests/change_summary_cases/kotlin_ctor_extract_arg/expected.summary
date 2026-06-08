@@ -4,8 +4,8 @@ match: strict
 metavar _H0: single
 metavar _H1: single
 @@
-- save(Wrapper(_H0, _H1))
-+ save(_H0)
+- Wrapper(_H0, _H1)
++ _H0
 # sites R1
 a.kt
 b.kt
