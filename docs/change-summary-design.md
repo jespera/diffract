@@ -1010,20 +1010,33 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   anti-unifications aligns the holes when the same concrete subtree
   appears on both sides. (Pending: M1.8b below.)
 
-- **M1.8b — Cross-side alignment by content sharing (§4.3, reframed).**
+- **M1.8b — Cross-side alignment by content sharing (§4.3, reframed). Landed.**
   Originally scoped as a post-process that renames a `+`-side hole to its
   `-`-side hole via the GumTree mapping. Superseded by the hdiff-based
   formulation in §4.3: assign metavariables by *content* (common-subtree
-  oracle over `Tree.hash`) when building a change pair's `(del, ins)`
-  contexts, so a position-misaligned cross-side value binds by
-  construction; then *closure* widens the change to the smallest Modified
-  ancestor that binds any remaining orphan (closure-fails-at-root ⇒
-  residual, the M1.9b boundary). Tests: the `*_unwrap_*` / `*_extract_*`
-  pending fixtures (`ts_unwrap_chain`, `ts_object_to_positional`,
-  `kotlin_unwrap_chain`, `kotlin_ctor_extract_arg`, `tsx_unwrap_element`)
-  flip from xfail to green. Note §5.2 is *not* covered here — it is the
-  sub-part-reshape-with-varying-surround case, handled as rule + residual
-  under M1.9b (§4.3 "Composition" para).
+  oracle over `Tree.hash`) so a position-misaligned cross-side value binds
+  by construction. As built (`extraction_pairs`): when a `Modified` node
+  has a `Removed` child `r` and an `Added` child `a` with one a structural
+  subtree of the other (`Tree.hash` membership), emit the `(r, a)` pair as
+  a two-sided change pair *in addition to* the one-sided candidates. The
+  existing cross-file anti-unification then forms the extraction rule
+  (`box($H).get() ⤳ $H`) and binds the shared hole by content; the §3.3
+  selector arbitrates, with a `clean` tie-break (`ev_clean`: candidate
+  alone reproduces the site's after) so a reconstructing extraction beats
+  a bare removal that defers the rest to a residual. "Closure" is realised
+  implicitly: pairs are emitted at every level and selection picks the
+  tightest applicable one. Tests: `ts_unwrap_chain`, `tsx_unwrap_element`,
+  `kotlin_ctor_extract_arg`, `ts_object_to_positional` are live and green
+  (the latter two emit the bare extraction — more general than, and
+  preferred over, the original save()-wrapped targets). **Known gap:**
+  `kotlin_unwrap_chain` stays pending — the extraction pair *is* emitted,
+  but the `property_declaration`-level cluster shadows the bare
+  call-expression cluster in the dendrogram (`try_emit` success skips the
+  recursion into children), so the rule carries unchanged `val v =`
+  context. Safe and round-trip-clean, but suboptimal; the fix is in the
+  clustering recursion, not §4.3. Note §5.2 is *not* covered here — it is
+  the sub-part-reshape-with-varying-surround case, handled as rule +
+  residual under M1.9b (§4.3 "Composition" para).
 
 - **M1.8c — Per-site safety gate.** Replace the zero-match behavioural
   applicability check with the per-site safety classification (§3.1):
