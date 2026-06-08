@@ -293,6 +293,89 @@ let run_case case_name () =
       expected_canon actual_canon
   end
 
+(* ── Round-trip reconstruction (decomposition safety, §2.3) ───────────
+   The summary promises that rules + residuals reproduce the changeset.
+   This pins that as an executable invariant over the *live* summarize
+   output (not the golden expected.summary), so it holds regardless of
+   how compact the output is — and crucially it guards assembly-level
+   bugs (rule ordering, site-scoping, rules overlapping within a file)
+   that the per-(rule,site) safety gate cannot see.
+
+   Per Modified file: apply the rules whose [sites] include it, in rule-id
+   order, via the *emitted* pattern text (so this re-consumes the
+   serialized rules), then:
+   - residual-free file: the rules alone must reconstruct [after]. Compared
+     as *trees* (Tree.equal), not text: M1.9a suppresses whitespace-only
+     gaps, so reconstruction is guaranteed only up to formatting.
+   - residual-bearing file: re-diffing the rule-applied source against
+     [after] must reproduce the emitted residual exactly — i.e. rules +
+     residual provably compose to [after]. (Applying the serialized
+     residual would need real hunk headers; that's deferred, so we verify
+     the gap compositionally instead.) *)
+
+let rule_id_num (r : Change_summary.rule) =
+  (* "R12" -> 12; for ordering the per-file rule application. *)
+  try int_of_string (String.sub r.id 1 (String.length r.id - 1))
+  with _ -> max_int
+
+let roundtrip_case case_name () =
+  let case_dir = Filename.concat cases_dir case_name in
+  let before_dir = Filename.concat case_dir "before" in
+  let after_dir = Filename.concat case_dir "after" in
+  let default_language = case_language case_dir in
+  let ctx = Context.create () in
+  let changeset =
+    Change_summary.load_from_dirs ~before_dir ~after_dir ~default_language ()
+  in
+  let summary = Change_summary.summarize ~ctx changeset in
+  let residual_for path =
+    List.find_opt
+      (fun (res : Change_summary.residual) -> res.res_file = path)
+      summary.residuals
+  in
+  List.iter
+    (fun (fc : Change_summary.file_change) ->
+      match fc with
+      | Change_summary.Modified { path; language; before_source; after_source }
+        ->
+          let claiming =
+            summary.rules
+            |> List.filter (fun (r : Change_summary.rule) ->
+                   List.mem path r.sites)
+            |> List.sort (fun a b -> compare (rule_id_num a) (rule_id_num b))
+          in
+          let applied =
+            List.fold_left
+              (fun src (r : Change_summary.rule) ->
+                try
+                  Matcher.transform ~ctx ~language:r.language
+                    ~pattern_text:r.pattern_text ~source_text:src
+                with _ -> src)
+              before_source claiming
+          in
+          (match residual_for path with
+          | None ->
+              let t1 = Tree.parse ~ctx ~language applied in
+              let t2 = Tree.parse ~ctx ~language after_source in
+              Alcotest.(check bool)
+                (Printf.sprintf
+                   "%s: %s reconstructs after rules alone (tree-equal)"
+                   case_name path)
+                true
+                (Tree.equal t1.Tree.source t1.Tree.root t2.Tree.source
+                   t2.Tree.root)
+          | Some res ->
+              let regen =
+                Text_diff.generate_diff ~context:0 ~file_path:path
+                  ~original:applied ~transformed:after_source ()
+              in
+              Alcotest.(check string)
+                (Printf.sprintf "%s: %s residual bridges rules->after"
+                   case_name path)
+                res.res_diff regen)
+      | Change_summary.Added _ | Change_summary.Deleted _ -> ())
+    changeset.files
+
 (* ── M1.5: one-sided candidate extraction ────────────────────────── *)
 
 let test_one_sided_extraction () =
@@ -349,7 +432,14 @@ let tests =
         Alcotest.test_case label `Quick (run_case case))
       cases
   in
-  case_tests
+  let roundtrip_tests =
+    List.map
+      (fun case ->
+        Alcotest.test_case (case ^ " (round-trip)") `Quick
+          (roundtrip_case case))
+      cases
+  in
+  case_tests @ roundtrip_tests
   @ [
       Alcotest.test_case "one-sided import removals surfaced" `Quick
         test_one_sided_extraction;
