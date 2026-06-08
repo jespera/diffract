@@ -1,0 +1,12 @@
+# rule R1  support=3  language=typescript
+@@
+match: strict
+metavar _H0: single
+metavar _H1: single
+@@
+- save({ id: _H0, name: _H1 })
++ save(_H0)
+# sites R1
+a.ts
+b.ts
+c.ts

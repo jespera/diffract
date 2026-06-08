@@ -1,0 +1,11 @@
+# rule R1  support=3  language=tsx
+@@
+match: strict
+metavar _H0: single
+@@
+- <B>{_H0}</B>
++ _H0
+# sites R1
+a.tsx
+b.tsx
+c.tsx

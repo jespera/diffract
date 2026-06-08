@@ -261,16 +261,37 @@ let run_case case_name () =
   let expected = read_file expected_path in
   let actual_canon = canonicalize_summary actual in
   let expected_canon = canonicalize_summary expected in
-  if actual_canon <> expected_canon then begin
-    (* Show both forms for debugging *)
-    Printf.eprintf "\n=== %s: canonical mismatch ===\n" case_name;
-    Printf.eprintf "--- expected (canonical) ---\n%s\n" expected_canon;
-    Printf.eprintf "--- actual   (canonical) ---\n%s\n" actual_canon;
-    Printf.eprintf "--- actual   (raw) ---\n%s\n" actual
-  end;
-  Alcotest.(check string)
-    (Printf.sprintf "%s: canonical summary matches" case_name)
-    expected_canon actual_canon
+  (* A case dir may carry a [pending] marker: its [expected.summary]
+     encodes the *target* output for a feature not yet implemented (e.g.
+     §4.3 cross-side alignment). Until the feature lands, actual differs
+     from the target, and that is fine — assert they still differ so the
+     suite stays green. The moment the feature makes them match, fail
+     loudly so the marker is removed and the case becomes a live
+     regression test. (Same spirit as the matcher's "pin known bug"
+     tests.) *)
+  let pending_path = Filename.concat case_dir "pending" in
+  if Sys.file_exists pending_path then begin
+    let reason = try String.trim (read_file pending_path) with _ -> "" in
+    if actual_canon = expected_canon then
+      Alcotest.failf
+        "%s: PENDING case now matches its target (%s) — the feature is \
+         implemented; remove the [pending] marker so this becomes a live \
+         regression test"
+        case_name reason
+    (* else: expected-to-fail, pass quietly *)
+  end
+  else begin
+    if actual_canon <> expected_canon then begin
+      (* Show both forms for debugging *)
+      Printf.eprintf "\n=== %s: canonical mismatch ===\n" case_name;
+      Printf.eprintf "--- expected (canonical) ---\n%s\n" expected_canon;
+      Printf.eprintf "--- actual   (canonical) ---\n%s\n" actual_canon;
+      Printf.eprintf "--- actual   (raw) ---\n%s\n" actual
+    end;
+    Alcotest.(check string)
+      (Printf.sprintf "%s: canonical summary matches" case_name)
+      expected_canon actual_canon
+  end
 
 (* ── M1.5: one-sided candidate extraction ────────────────────────── *)
 
@@ -318,7 +339,15 @@ let test_one_sided_extraction () =
 let tests =
   let cases = list_subdirs cases_dir in
   let case_tests =
-    List.map (fun case -> Alcotest.test_case case `Quick (run_case case)) cases
+    List.map
+      (fun case ->
+        let pending =
+          Sys.file_exists
+            (Filename.concat (Filename.concat cases_dir case) "pending")
+        in
+        let label = if pending then case ^ " (pending)" else case in
+        Alcotest.test_case label `Quick (run_case case))
+      cases
   in
   case_tests
   @ [
