@@ -1,0 +1,1 @@
+const ok = bar(p);

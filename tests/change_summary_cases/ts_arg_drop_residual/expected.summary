@@ -1,0 +1,19 @@
+# rule R1  support=3  language=typescript
+@@
+match: strict
+metavar _H0: single
+metavar _H1: single
+@@
+- foo(_H0, _H1)
++ bar(_H0)
+# sites R1
+a.ts
+b.ts
+c.ts
+
+# residual  rule=R1
+--- a/a.ts
++++ b/a.ts
+@@ ... @@
+-const ok = bar(x + 1);
++const ok = bar(x);
