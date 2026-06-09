@@ -654,11 +654,6 @@ type site_info = {
       (** the file's changed regions in before-coordinates, sorted by
           start, disjoint: [(start, end, after_content)]. A zero-width
           region [(p, p, txt)] is an insertion at byte [p]. *)
-  si_dist : int;
-      (** [diff_node_count] of the file's before→after diff — the geodesic
-          target [d(before,after)] the M1.9b decomposable check compares
-          against. Cached here so it is computed once per site, not per
-          candidate. *)
 }
 
 (** Finest-grain changed regions of a diff, each carrying the
@@ -693,39 +688,14 @@ let changed_regions (d : Tree_diff.diff) : (int * int * string) list =
   go d.before_root d.after_root d.root_change;
   List.sort compare !acc
 
-(* Node-level edit size of a diff: the count of AST nodes touched —
-   subtree sizes of [Removed]/[Added] children and both sides of a leaf
-   [Replaced], summed through [Modified] chains. Unlike the changed-region
-   *count*, this preserves the *size* of a change, so inserting one node
-   into an already-rewritten region adds exactly one. That makes the
-   geodesic equality [d(b,a) = d(b,t'') + d(t'',a)] additive across large
-   structural reshapes — the discriminator M1.9b uses to tell a
-   safe-but-partial rewrite from a detour (design §2.3). *)
-let diff_node_count (d : Tree_diff.diff) : int =
-  let rec size (n : Tree.src Tree.t) =
-    List.fold_left
-      (fun a (c : Tree.src Tree.child) -> a + size c.node)
-      1 n.Tree.children
-  in
-  let rec go (b : Tree.src Tree.t) (a : Tree.src Tree.t)
-      (ch : Tree_diff.node_change) =
-    match ch with
-    | Tree_diff.Unchanged -> 0
-    | Tree_diff.Replaced -> size b + size a
-    | Tree_diff.Modified { child_changes } ->
-        List.fold_left
-          (fun acc cc ->
-            acc
-            +
-            match cc with
-            | Tree_diff.Same _ -> 0
-            | Tree_diff.Changed { before; after; change } ->
-                go before after change
-            | Tree_diff.Removed { node } -> size node
-            | Tree_diff.Added { node } -> size node)
-          0 child_changes
-  in
-  go d.before_root d.after_root d.root_change
+(* Plain substring membership: does [sub] occur in [s]? Used by the
+   deletion-direction guard of the decomposable check. *)
+let string_mem ~sub s =
+  let n = String.length sub and m = String.length s in
+  n = 0
+  ||
+  let rec at i = i + n <= m && (String.sub s i n = sub || at (i + 1)) in
+  at 0
 
 (** [path → site_info] for every [Modified] file in the changeset. The
     safety gate evaluates rules against these. *)
@@ -745,7 +715,6 @@ let build_site_db ~ctx (cs : changeset) : (string, site_info) Hashtbl.t =
                 si_after = after_source;
                 si_language = language;
                 si_regions = changed_regions d;
-                si_dist = diff_node_count d;
               }
           with _ -> ())
       | Added _ | Deleted _ -> ())
@@ -799,10 +768,11 @@ type site_evaluation = {
   ev_decomposable : bool;
       (** M1.9b: the candidate fires and makes safe-but-*partial* progress
           within a region — [t''] differs from the after inside a landing
-          zone, but the rule stays on the geodesic
-          ([d(before,t'') + d(t'',after) = d(before,after)], §2.3), so the
-          gap is an honest residual rather than a detour that must be
-          undone. A decomposable site counts toward support and coverage;
+          zone, but the rule stays on the geodesic (§2.3): [t''] and the
+          after are tree-inclusion comparable ([Tree_inclusion]), so the
+          gap is a pure insertion or pure deletion — an honest residual
+          rather than a detour (relabel) that must be undone. A
+          decomposable site counts toward support and coverage;
           its in-zone gap is emitted as a [rule=]-attributed residual
           (§4.4) by the re-diff in [summarize]. Mutually exclusive with
           [ev_exact]. *)
@@ -917,24 +887,41 @@ let site_eval ~ctx ~language ~pattern_text (si : site_info) : site_evaluation
             remaining
         in
         (* M1.9b decomposable: the rule's edits left a gap inside a landing
-           zone, but [t''] is on the geodesic between before and after —
-           i.e. the rule's change plus the residual change compose to the
-           site's change with no detour. Operationally (design §2.3, with
-           [d = diff_node_count], an edit size the triangle inequality
-           bounds below by [d(before,after)]):
-           [d(before,after) = d(before,t'') + d(t'',after)]. A detour
-           (writing a value in neither before nor after, e.g. [f→h] where
-           the change is [f→g]) strictly increases the sum, so only exact
-           equality is decomposable. False negatives from GumTree grouping
-           merely shed a site to its residual — honest, never unsafe. *)
+           zone, but [t''] is on the geodesic between before and after
+           (design §2.3) — the rule's change plus the residual change
+           compose to the site's change with no detour. Operationally:
+           [t''] and the after must be *tree-inclusion comparable* (one
+           obtainable from the other by node deletion alone,
+           [Tree_inclusion]) — the residual is then a pure insertion
+           ([t'' ⊑ after]: the rule under-wrote, e.g. an emptied
+           dependency array the site fills) or a pure deletion
+           ([after ⊑ t'']: the rule over-wrote through a metavariable,
+           e.g. [g(x+1)] where the site keeps only [x]). A detour —
+           writing a value in neither before nor after, [f→h] where the
+           change is [f→g] — is a relabel, which inclusion forbids in
+           both directions. The deletion direction additionally requires
+           the deleted content to be before-derived (it reached [t'']
+           through a metavariable binding, not an invented template
+           literal whose insertion the residual would have to undo).
+           Inclusion is checked on the whole file, so a site whose
+           remaining gap mixes insertions and deletions — or overlaps
+           another rule's pending region — is shed to its residual:
+           conservative, honest, never unsafe. *)
         let decomposable =
           (not exact)
-          &&
-          let before_t = Tree.parse ~ctx ~language si.si_before in
-          let d_before_t'' =
-            diff_node_count (Tree_diff.diff ~before:before_t ~after:bt)
-          in
-          si.si_dist = d_before_t'' + diff_node_count d
+          && (Tree_inclusion.included_src
+                ~sub:(t'', bt.Tree.root)
+                ~sup:(si.si_after, at.Tree.root)
+             ||
+             (Tree_inclusion.included_src
+                ~sub:(si.si_after, at.Tree.root)
+                ~sup:(t'', bt.Tree.root)
+             && List.for_all
+                  (fun (rs, re, txt) ->
+                    txt <> ""
+                    || string_mem ~sub:(String.sub t'' rs (re - rs))
+                         si.si_before)
+                  remaining))
         in
         if not (exact || decomposable) then no_fire
         else
