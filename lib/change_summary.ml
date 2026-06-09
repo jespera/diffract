@@ -754,24 +754,44 @@ let spans_overlap s e rs re =
     gap honestly. *)
 type site_evaluation = {
   ev_exact : bool;
-      (** the gate verdict: the candidate fires and every edit is safe *)
+      (** the gate verdict: the candidate fires and fully explains every
+          region it touches (no remaining change in its landing zones). *)
+  ev_decomposable : bool;
+      (** M1.9b: the candidate fires and makes safe-but-*partial* progress
+          within a region — [t''] differs from the after inside a landing
+          zone, but the rule stays on the geodesic
+          ([d(before,t'') + d(t'',after) = d(before,after)], §2.3), so the
+          gap is an honest residual rather than a detour that must be
+          undone. A decomposable site counts toward support and coverage;
+          its in-zone gap is emitted as a [rule=]-attributed residual
+          (§4.4) by the re-diff in [summarize]. Mutually exclusive with
+          [ev_exact]. *)
   ev_fires : int;  (** number of edits the candidate makes at the site *)
   ev_resolved : int list;
       (** indices into [si_regions] of the changed regions the candidate
           fully resolves: regions an edit touches whose t''-image carries
           no remaining change after application. The selector's coverage
-          unit (§3.3). Empty unless [ev_exact]. *)
+          unit (§3.3). A decomposable site lists only the regions it fully
+          resolves; partial ones fall to the residual. Empty unless
+          [ev_exact] or [ev_decomposable]. *)
   ev_clean : bool;
       (** the candidate, applied alone, reproduces the site's after-source
           (modulo whitespace) — i.e. it leaves no residual here. Used by
           selection to prefer a rule that reconstructs over one that only
           partially resolves the same regions (e.g. an extraction
           [box($H).get() ⤳ $H] over a bare removal [box($H).get()] that
-          deletes and defers the rest to a residual). *)
+          deletes and defers the rest to a residual). Always false for a
+          decomposable-only site. *)
 }
 
 let no_fire =
-  { ev_exact = false; ev_fires = 0; ev_resolved = []; ev_clean = false }
+  {
+    ev_exact = false;
+    ev_decomposable = false;
+    ev_fires = 0;
+    ev_resolved = [];
+    ev_clean = false;
+  }
 
 (** Evaluate one candidate pattern at one site — the §3.1 gate, keeping
     the information it computes instead of reducing to a boolean. *)
@@ -856,7 +876,28 @@ let site_eval ~ctx ~language ~pattern_text (si : site_info) : site_evaluation
                 zones)
             remaining
         in
-        if not exact then no_fire
+        (* M1.9b decomposable: the rule's edits left a gap inside a landing
+           zone, but [t''] is on the geodesic between before and after —
+           i.e. the rule's change plus the residual change compose to the
+           site's change with no detour. Operationally (design §2.3, with
+           [d] = changed-region count, a node-level edit-op proxy that the
+           triangle inequality bounds below by [d(before,after)]):
+           [d(before,after) = d(before,t'') + d(t'',after)]. A detour
+           (writing a value in neither before nor after, e.g. [f→h] where
+           the change is [f→g]) strictly increases the sum, so only exact
+           equality is decomposable. False negatives from GumTree grouping
+           merely shed a site to its residual — honest, never unsafe. *)
+        let decomposable =
+          (not exact)
+          &&
+          let before_t = Tree.parse ~ctx ~language si.si_before in
+          let d_before_t'' =
+            List.length
+              (changed_regions (Tree_diff.diff ~before:before_t ~after:bt))
+          in
+          List.length si.si_regions = d_before_t'' + List.length remaining
+        in
+        if not (exact || decomposable) then no_fire
         else
           let resolved =
             (* a region is resolved iff some edit touches it and its
@@ -883,7 +924,8 @@ let site_eval ~ctx ~language ~pattern_text (si : site_info) : site_evaluation
               si.si_regions
           in
           {
-            ev_exact = true;
+            ev_exact = exact;
+            ev_decomposable = decomposable;
             ev_fires = List.length edits;
             ev_resolved = resolved;
             ev_clean = (t'' = si.si_after || ws_collapse t'' = ws_collapse si.si_after);
@@ -1934,7 +1976,12 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
           List.filter_map
             (fun f ->
               let e = eval_at ~language ~pattern_text f in
-              if e.ev_exact && e.ev_fires > 0 then Some (f, e) else None)
+              (* M1.9b: a decomposable site fires safely (geodesic) and
+                 counts toward support; its in-zone gap becomes a
+                 [rule=]-attributed residual. *)
+              if (e.ev_exact || e.ev_decomposable) && e.ev_fires > 0 then
+                Some (f, e)
+              else None)
             all_files
         in
         let support =

@@ -1116,24 +1116,36 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   Rules + residuals now account for the whole changeset — the Covering
   desideratum of §2.3 holds.
 
-- **M1.9b — Decomposable-site relaxation. (Prioritised next step.)** Relax
+- **M1.9b — Decomposable-site relaxation. (Gate landed.)** Relax
   the M1 exact-only
   emission policy so safe-but-partial (`decomposable`) sites count
   toward a rule's support, carrying their `rule=`-attributed residual
   (the §5.2 case: `f($X,$Y) → g($X)` at `f(x+1,a) → g(x)` with
-  residual `x+1 → x`). Requires distinguishing `decomposable` from
-  `unsafe` for edits *within* a changed region: each of the rule's
-  minimal edits must appear in the site diff's edit script (a relabel
-  toward the after-content vs. a relabel that detours), which the
-  current span/effect checks cannot express. Single-tier only: no
-  `after=Rn` chains, no recursive re-clustering of residuals yet.
-  Test: §5.2. **Real-input driver** (§4.3 applicability note): the
-  hook-reshape soak's dominant residual, `HOOK({ select: $L }) ⤳
-  useAppMemo(HOOK(), useCallback($L, [DEPS]))` — captured as this rule
-  with `[DEPS]` (a per-site computed value) as the residual, it converts
-  ≈40 large residual hunks into one rule plus trivial per-site residuals.
-  This is the measurable payoff that makes M1.9b the priority over
-  extending §4.3.
+  residual `x+1 → x`). The `decomposable`/`unsafe` distinction is the
+  **geodesic test** (§2.3) computed at evaluation: with `d` = the
+  changed-region count (a node-level edit-op proxy, triangle-bounded
+  below by `d(before,after)`), a site is decomposable iff
+  `d(before,after) = d(before,t'') + d(t'',after)`. A detour — writing a
+  value in neither before nor after, e.g. `f→h` where the change is
+  `f→g` — strictly increases the sum, so only exact equality passes;
+  false negatives from GumTree grouping merely shed a site to its
+  residual (honest, never unsafe). As built (M1.10 propose/evaluate): the
+  coarse rule is *proposed* from the clean (exact) pairs and *claims* the
+  decomposable sites at evaluation (`extension` counts `ev_exact ||
+  ev_decomposable`); the existing residual re-diff then emits each
+  in-zone gap as a `rule=`-attributed residual with no further work.
+  Single-tier only: no `after=Rn` chains, no recursive re-clustering of
+  residuals yet. Tests: `ts_arg_drop_residual` (decomposable site claimed
+  + residual) and `ts_arg_drop_detour` (geodesic rejects the detour site,
+  which stays a pure residual); both round-trip. **Follow-on (not yet):**
+  the hook-reshape soak's dominant residual, `HOOK({ select: $L }) ⤳
+  useAppMemo(HOOK(), useCallback($L, [DEPS]))`, needs the *coarse rule to
+  be proposed* despite `[DEPS]` being an orphan (a per-site computed
+  value with no before counterpart). The gate alone captures it only if
+  some site seeds the proposal with empty `[]` deps; otherwise it needs
+  orphan-after-content coarsening on the proposal side (drop the orphan
+  to a fixed form, residualise the rest) — a separate step from this
+  gate relaxation.
 
 - **M1.10 — Evaluation-based semantics (§3.3) (done).** Invert the back half
   of the pipeline: clustering becomes a candidate generator whose
