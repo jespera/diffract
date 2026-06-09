@@ -4,6 +4,7 @@ module Bindings = Tree_sitter_bindings
 module Context = Context
 module Tree = Tree
 module Tree_diff = Tree_diff
+module Tree_inclusion = Tree_inclusion
 module Grammar_metadata = Grammar_metadata
 module Cursor = Cursor
 module Stmatch = Stmatch
