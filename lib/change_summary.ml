@@ -379,25 +379,9 @@ let anti_unify_pat (p1 : pat_node) (p2 : pat_node) : pat_node =
   let go = mk_anti_unify (make_hole_for ()) in
   go p1 p2
 
-(** Re-specialize a cluster to its surviving instances: re-anti-unify
-    their concrete patterns from scratch. Anti-unification only holes a
-    position whose values differ among the inputs, so every hole in a
-    freshly-formed cluster is witnessed by at least two distinct
-    instantiations — but covering and safety shedding remove instances
-    *after* formation, and a rule can otherwise be emitted with a hole
-    its own remaining sites never vary on (more general than its
-    evidence). Folding [anti_unify_edits] over the survivors' [ipat]s
-    restores the witnessed-holes invariant: positions the survivors
-    agree on collapse back to literals. The fold is safe without hole
-    shifting because the inputs are fully concrete. *)
-let respecialize (c : cluster) : cluster =
-  match c.instances with
-  | [] -> c
-  | i :: rest ->
-      let pattern =
-        List.fold_left (fun acc j -> anti_unify_edits acc j.ipat) i.ipat rest
-      in
-      { c with pattern }
+(* respecialize is defined after the orphan-coarsening block below: it
+   re-anti-unifies from fully-concrete ipats, so it must re-apply
+   coarsening or a coarsened cluster's orphan would resurface. *)
 
 let rec max_hole_node = function
   | Hole h -> h
@@ -906,9 +890,51 @@ let site_eval ~ctx ~language ~pattern_text (si : site_info) : site_evaluation
            Inclusion is checked on the whole file, so a site whose
            remaining gap mixes insertions and deletions — or overlaps
            another rule's pending region — is shed to its residual:
-           conservative, honest, never unsafe. *)
+           conservative, honest, never unsafe.
+
+           Inclusion alone validates only the *residual* leg. The rule's
+           own leg needs the net-progress guard below: a rule may delete
+           content the after still needs and let the residual re-add it —
+           inclusion holds ([t'' ⊑ after], the re-add is "pure
+           insertion") yet the delete-then-readd is wasted work off the
+           geodesic. Soaks hit exactly this: a coarsened rule emptying a
+           function body to [{}], whose residual re-inserts the whole
+           body — safe by reconstruction, worse than the raw diff by
+           size. The guard is the compactness half of the safety story
+           (spdiff's largest *common* part, MDL): the in-zone gap the
+           rule leaves must be strictly smaller than the change it
+           explains, so claiming the site states the change more
+           compactly than the raw hunk would. *)
+        let net_progress =
+          let extent (rs, re, txt) = re - rs + String.length txt in
+          let gap =
+            List.fold_left
+              (fun a ((rs, re, _) as r) ->
+                if
+                  List.exists
+                    (fun (zs, ze) -> spans_overlap zs ze rs re)
+                    zones
+                then a + extent r
+                else a)
+              0 remaining
+          in
+          let explained =
+            List.fold_left
+              (fun a ((rs, re, _) as r) ->
+                if
+                  List.exists
+                    (fun (ed : Matcher.edit) ->
+                      spans_overlap ed.start_byte ed.end_byte rs re)
+                    edits
+                then a + extent r
+                else a)
+              0 si.si_regions
+          in
+          gap < explained
+        in
         let decomposable =
           (not exact)
+          && net_progress
           && (Tree_inclusion.included_src
                 ~sub:(t'', bt.Tree.root)
                 ~sup:(si.si_after, at.Tree.root)
@@ -962,6 +988,143 @@ let site_eval ~ctx ~language ~pattern_text (si : site_info) : site_evaluation
 let site_safe ~ctx ~language ~pattern_text (si : site_info) : bool =
   (site_eval ~ctx ~language ~pattern_text si).ev_exact
 
+(* ── Proposal-side orphan coarsening (tree embedding, ordered) ─────────
+   When anti-unification leaves a [+]-side hole with no [-]-side binding
+   (an orphan), the after reuses content that *varies across instances*
+   and has no before counterpart — e.g. a dependency array freshly
+   introduced by a reshape (`useCallback($L, [d_i])`). The coherence gate
+   would reject the whole candidate. Instead we coarsen the orphan to the
+   instances' common embedded skeleton (ordered tree inclusion, §4.3
+   discussion): the geodesic gate (§M1.9b) then claims each site
+   *decomposably* and the per-site remainder becomes a `rule=`-attributed
+   residual. This first cut handles the under-approximating direction
+   (`C ⊑ A_i`) for *container* orphans of varying arity — drop to the
+   empty container (`[]`/`()`/`{}`), which embeds in every instance. (The
+   over-approximating / sub-part direction and richer common-subsequence
+   cores are noted in the design as follow-ons; unordered embedding too.)
+   Soundness is the gate's job — coarsening only proposes. *)
+
+(* An unnamed (punctuation/keyword) AST node — a delimiter like [[], []],
+   [(], [)]. of_src lowers these to a childless [PNode] with [is_named =
+   false] (named leaves become [Leaf], which is always content). *)
+let is_delim = function PNode { is_named = false; _ } -> true | _ -> false
+
+(* Surface of [p] emptied of its content: a container whose first and last
+   children are delimiters renders, with the middle dropped, as just those
+   delimiters — [[d]] -> "[]", [(a, b)] -> "()", [{x: 1}] -> "{}". Tree
+   delimiters are child nodes (not template text), so the empty form keeps
+   the outermost two children and drops everything between (commas
+   included). [None] for a leaf or a node not bracketed by delimiters
+   (where emptying is not meaningful, e.g. [x + 1]). *)
+let empty_container_surface (p : pat_node) : string option =
+  match p with
+  | PNode { children; _ } -> (
+      match children with
+      | first :: _ :: _ ->
+          let last = List.nth children (List.length children - 1) in
+          if is_delim first.child && is_delim last.child then
+            Some (render_pat_node first.child ^ render_pat_node last.child)
+          else None
+      | _ -> None)
+  | _ -> None
+
+(* Substitute [repl] for every [Hole h] in a pat_node. *)
+let rec subst_hole h repl = function
+  | Hole h' when h' = h -> repl
+  | (Hole _ | Leaf _) as p -> p
+  | PNode n ->
+      PNode
+        {
+          n with
+          children =
+            List.map
+              (fun c -> { c with child = subst_hole h repl c.child })
+              n.children;
+        }
+
+(* The concrete subtree an instance binds at [Hole h] (the pattern and the
+   instance share shape everywhere the pattern is not a hole). *)
+let rec subtree_at_hole (pat : pat_node) (con : pat_node) (h : int) :
+    pat_node option =
+  match pat with
+  | Hole h' -> if h' = h then Some con else None
+  | Leaf _ -> None
+  | PNode pn -> (
+      match con with
+      | PNode cn when List.length pn.children = List.length cn.children ->
+          List.fold_left2
+            (fun acc pc cc ->
+              match acc with
+              | Some _ -> acc
+              | None -> subtree_at_hole pc.child cc.child h)
+            None pn.children cn.children
+      | _ -> None)
+
+(* Replace each orphan [+]-side hole with the instances' empty-container
+   skeleton, when their bindings there are containers of one type sharing
+   a delimiter surface. Leaves non-container orphans untouched (they stay
+   orphans and the candidate is rejected — correctly a deviation). *)
+let coarsen_orphans (ep : edit_pat) (ipats : edit_pat list) : edit_pat =
+  let before_holes = collect_holes [] ep.before in
+  let orphans =
+    List.filter
+      (fun h -> not (List.mem h before_holes))
+      (collect_holes [] ep.after)
+  in
+  let after =
+    List.fold_left
+      (fun after h ->
+        let subs =
+          List.filter_map (fun ip -> subtree_at_hole ep.after ip.after h) ipats
+        in
+        let surfaces = List.filter_map empty_container_surface subs in
+        match (subs, surfaces) with
+        | _ :: _, v :: _
+          when List.length surfaces = List.length subs
+               && List.for_all (fun s -> s = v) surfaces ->
+            let node_type =
+              List.fold_left
+                (fun acc s ->
+                  match (acc, s) with
+                  | Some t, PNode n when t = n.node_type -> acc
+                  | None, PNode n -> Some n.node_type
+                  | _ -> Some "")
+                None subs
+            in
+            (match node_type with
+            | Some nt when nt <> "" ->
+                subst_hole h (Leaf { node_type = nt; value = v }) after
+            | _ -> after)
+        | _ -> after)
+      ep.after orphans
+  in
+  { ep with after }
+
+(** Re-specialize a cluster to its surviving instances: re-anti-unify
+    their concrete patterns from scratch. Anti-unification only holes a
+    position whose values differ among the inputs, so every hole in a
+    freshly-formed cluster is witnessed by at least two distinct
+    instantiations — but covering and safety shedding remove instances
+    *after* formation, and a rule can otherwise be emitted with a hole
+    its own remaining sites never vary on (more general than its
+    evidence). Folding [anti_unify_edits] over the survivors' [ipat]s
+    restores the witnessed-holes invariant: positions the survivors
+    agree on collapse back to literals. The fold is safe without hole
+    shifting because the inputs are fully concrete. Coarsening is
+    re-applied at the end: the fold rebuilds the pattern from concrete
+    ipats, so a coarsened orphan would otherwise resurface. *)
+let respecialize (c : cluster) : cluster =
+  match c.instances with
+  | [] -> c
+  | i :: rest ->
+      let pattern =
+        List.fold_left (fun acc j -> anti_unify_edits acc j.ipat) i.ipat rest
+      in
+      let pattern =
+        coarsen_orphans pattern (List.map (fun j -> j.ipat) c.instances)
+      in
+      { c with pattern }
+
 let cut_dendrogram ?(threshold = 0.35)
     ?(safe_instances = fun (_ : edit_pat) insts -> insts) min_size root =
   let is_coherent ep =
@@ -998,6 +1161,14 @@ let cut_dendrogram ?(threshold = 0.35)
     end
     else false
   in
+  (* M1.9c: before the coherence check, coarsen any [+]-side orphan to the
+     instances' common container skeleton (tree-embedding, ordered). A
+     candidate that would have been rejected for an orphan instead becomes
+     a decomposable rule plus residuals. No-op when there is no orphan or
+     none is a coarsenable container. *)
+  let coarse ep insts =
+    coarsen_orphans ep (List.map (fun (i : instance) -> i.ipat) insts)
+  in
   let rec go node =
     let insts = dnode_instances node in
     let n = List.length insts in
@@ -1005,10 +1176,12 @@ let cut_dendrogram ?(threshold = 0.35)
     else
       match node with
       | DLeaf (_, ep) ->
+          let ep = coarse ep insts in
           if not (is_coherent ep && try_emit ep insts) then
             singletons := insts @ !singletons
       | DMerge m ->
-          if not (is_coherent m.pattern && try_emit m.pattern insts) then begin
+          let pat = coarse m.pattern insts in
+          if not (is_coherent pat && try_emit pat insts) then begin
             go m.left;
             go m.right
           end
@@ -1772,7 +1945,11 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
           e
   in
   let pattern_safe_at ~language ~pattern_text file =
-    (eval_at ~language ~pattern_text file).ev_exact
+    (* M1.9b/c: a decomposable site is safely explained too (geodesic), so
+       it counts when shaping clusters — without it a coarsened candidate's
+       own decomposable instances would be shed and the cluster dissolve. *)
+    let e = eval_at ~language ~pattern_text file in
+    e.ev_exact || e.ev_decomposable
   in
   let safe_instances ep (insts : instance list) =
     let pattern_text = render_pattern_body ep in
