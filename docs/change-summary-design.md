@@ -650,7 +650,11 @@ real soaks confirm the gap is elsewhere:
   content-keying is not even *needed*); the blocker is `[DEPS]` — a
   per-site *computed* value (the lambda's free variables), which no
   metavariable substitution can produce. That is an **M1.9b** rule +
-  per-site residual, not a content-keying case.
+  per-site residual, not a content-keying case. *(Post-M1.9b/c
+  correction: the verbatim-repeated instances of this shape were already
+  exact concrete rules in the baseline; the rest vary in hook, body, and
+  object fields simultaneously, so they sit behind the clustering
+  frontier, not the deps orphan — see M1.9c's real-changeset reading.)*
 
 So even the most hdiff-adjacent real residual needs M1.9b as the
 load-bearing piece, with content-keying at most a non-load-bearing
@@ -1116,51 +1120,83 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   Rules + residuals now account for the whole changeset — the Covering
   desideratum of §2.3 holds.
 
-- **M1.9b — Decomposable-site relaxation. (Gate landed.)** Relax
-  the M1 exact-only
+- **M1.9b — Decomposable-site relaxation. (Landed; gate = tree
+  inclusion + net progress.)** Relax the M1 exact-only
   emission policy so safe-but-partial (`decomposable`) sites count
   toward a rule's support, carrying their `rule=`-attributed residual
   (the §5.2 case: `f($X,$Y) → g($X)` at `f(x+1,a) → g(x)` with
   residual `x+1 → x`). The `decomposable`/`unsafe` distinction is the
-  **geodesic test** (§2.3) computed at evaluation: with `d =
-  diff_node_count` (AST nodes touched — subtree sizes of Removed/Added
-  children and both sides of a leaf Replaced, summed through Modified
-  chains; triangle-bounded below by `d(before,after)`), a site is
-  decomposable iff `d(before,after) = d(before,t'') + d(t'',after)`. A
-  detour — writing a value in neither before nor after, e.g. `f→h` where
-  the change is `f→g` — strictly increases the sum (the intermediate is
-  counted in both halves), so only exact equality passes; false negatives
-  from GumTree grouping merely shed a site to its residual (honest, never
-  unsafe). The node count, not a region *count*, is what makes the
-  equality additive across a *large* structural reshape: inserting one
-  node into an already-rewritten region adds exactly one on both the
-  `before→after` and `t''→after` sides, so a coarse rule that rebuilds the
-  scaffold and leaves a per-site value to the residual stays on the
-  geodesic. As built (M1.10 propose/evaluate): the coarse rule is
-  *proposed* from the clean (exact) pairs and *claims* the decomposable
-  sites at evaluation (`extension` counts `ev_exact || ev_decomposable`);
-  the existing residual re-diff then emits each in-zone gap as a
-  `rule=`-attributed residual with no further work. Single-tier only: no
-  `after=Rn` chains, no recursive re-clustering of residuals yet. Tests:
-  `ts_arg_drop_residual` (decomposable site claimed + residual) and
-  `ts_arg_drop_detour` (geodesic rejects the detour site, which stays a
-  pure residual); both round-trip. A synthetic `useAppMemo` reshape
-  (`HOOK({ select: $L }) ⤳ useAppMemo(HOOK(), useCallback($L, []))`)
-  confirms the gate captures a large reshape: sites with non-empty deps
-  are claimed decomposably with a `[] → [dep]` residual.
+  **geodesic test** (§2.3), computed at evaluation in two legs:
 
-  **Where it still does *not* fire — the proposal wall.** On the real
-  hook-reshape soak the output is unchanged: the gate never gets a chance,
-  because no coarse rule is *proposed*. The real reshapes are
-  heterogeneous (different hooks, wildly different `select` bodies, varied
-  before-shapes, and `[DEPS]` orphaned by being a per-site computed value)
-  — so anti-unification produces no clean `useAppMemo($H(),
-  useCallback($L, []))` cluster to seed. Capturing them needs
-  proposal-side work: orphan-after-content coarsening (drop an orphan like
-  `[DEPS]` to a minimal fixed form `[]` and residualise the rest — the
-  dual of this gate's coarsening) plus more abstract structural clustering
-  of heterogeneous reshapes. That is the next real-input bottleneck, and
-  it is distinct from this gate relaxation.
+  *Residual leg — ordered tree inclusion* (`Tree_inclusion`, on `main`;
+  Kilpeläinen & Mannila): `t''` and the after must be
+  inclusion-comparable — one obtainable from the other by node deletion
+  alone, internal deletions promoting children. The residual is then a
+  pure insertion (`t'' ⊑ after`: the rule under-wrote, e.g. an emptied
+  dependency array the site fills) or a pure deletion (`after ⊑ t''`:
+  the rule over-wrote through a metavariable, `g(x+1)` where the site
+  keeps `x` — guarded so deleted content must be before-derived, never an
+  invented template literal). A detour (`f→h` where the change is `f→g`)
+  is a relabel, forbidden in both directions. Inclusion replaced an
+  earlier `diff_node_count` distance equality, which was not additive
+  across multi-element edits (inserting `[b, c]` into an
+  already-rewritten region) and shed exactly the sites that mattered;
+  inclusion tests the trees directly, with no additivity assumption and
+  no sensitivity to how the diff groups changes.
+
+  *Rule leg — net progress.* Inclusion alone misses delete-then-readd: a
+  rule that empties a function body to `{}` passes the residual leg (the
+  re-add is "pure insertion") yet does work the residual must undo —
+  the soak surfaced precisely this, +437 output lines of a rule
+  re-stating bodies its residuals re-inserted. The guard is the
+  compactness half (spdiff's largest *common* part, MDL): the in-zone
+  gap a decomposable claim leaves must be strictly smaller than the
+  change it explains, so claiming a site always states the change more
+  compactly than its raw hunk.
+
+  As built (M1.10 propose/evaluate): the coarse rule is *proposed* from
+  clean pairs (or by M1.9c coarsening, below) and *claims* decomposable
+  sites at evaluation (`extension` and `pattern_safe_at` count
+  `ev_exact || ev_decomposable`); the existing residual re-diff emits
+  each in-zone gap as a `rule=`-attributed residual with no further
+  work. Single-tier only: no `after=Rn` chains, no recursive
+  re-clustering of residuals yet. Tests: `ts_arg_drop_residual`,
+  `ts_arg_drop_detour`, `tsx_memo_reshape_deps`; all round-trip.
+
+- **M1.9c — Proposal-side orphan coarsening (tree embedding). (First cut
+  landed.)** When anti-unification leaves a `+`-side hole with no
+  `-`-side binding (an orphan — a freshly-introduced value that varies
+  per site, e.g. a `useCallback` dependency array), the coherence gate
+  rejected the whole candidate. `coarsen_orphans` instead coarsens a
+  varying-arity *container* orphan to its empty delimiter skeleton
+  (`[]`/`()`/`{}`) — the largest common core under ordered tree
+  embedding that every instance's after includes — and the M1.9b gate
+  claims each site decomposably, contents falling to residuals.
+  `respecialize` re-applies coarsening (it rebuilds patterns from
+  concrete instances, which would resurface the orphan). Soundness is
+  the gate's job — coarsening only proposes, and the net-progress guard
+  is what stops it over-reaching (the emptied-function-body pathology).
+  Fixture `tsx_memo_reshape_deps` pins the delivered shape: deps varying
+  in arity (`[a]`/`[b, c]`/`[d, e, f]`) yield one rule with `[]` plus
+  three one-line residuals. Follow-ons, in the embedding frame: the
+  over-approximating direction (bind an orphan to the *whole* before
+  hole it is a sub-part of), common-subsequence skeletons richer than
+  empty, recursive coarsening into shared structure, and unordered
+  embedding (sibling reorders — NP-complete in general, needs
+  heuristics; noted, deferred).
+
+  **Real-changeset reading (corrected).** With the guard in place the
+  hook-reshape soak's output is byte-identical to the pre-M1.9b
+  baseline. Two findings. (1) The verbatim-repeated reshapes were
+  *already* captured as exact concrete rules by the baseline — an
+  earlier "zero `useAppMemo` rules in the baseline" reading was a
+  measurement artifact (a grep window too short to reach the rules'
+  `+` lines). (2) The remaining reshape instances are heterogeneous
+  beyond the deps orphan — different hooks, wildly different `select`
+  bodies, extra object fields — so no cluster forms for coarsening to
+  rescue. Capturing those needs more abstract structural clustering
+  (and partial-field movement), which is the real-input frontier, not
+  this mechanism.
 
 - **M1.10 — Evaluation-based semantics (§3.3) (done).** Invert the back half
   of the pipeline: clustering becomes a candidate generator whose
