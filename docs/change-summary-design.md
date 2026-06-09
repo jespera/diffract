@@ -629,6 +629,36 @@ metavariable, a contraction that imposes a non-linear match — which we
 leave to the existing generalisation, to avoid over-constraining emitted
 rules.
 
+**Empirical applicability and deferral (2026-06-09).** §4.3 is
+implemented (containment slice + `ev_clean` selection) and kept as a
+regression-tested capability, but it is **dormant** — on every real
+changeset available it fires on nothing, and output is byte-identical to
+the pre-§4.3 baseline. Its distinctive reach is narrow: a preserved value
+*relocated* such that the tree-diff orphans it positionally, with no
+containment (else the implemented slice already catches it) and not a
+sibling reorder (which the diff reports as *unchanged*, §5.3 / the swap
+case — a tree-diff sensitivity problem, upstream of content-keying). Two
+real soaks confirm the gap is elsewhere:
+
+- An *introduce-variant* refactor residualises a novel one-off type
+  definition (correctly — support 1), a handful of sub-`min_support`
+  renames, and deletions. None is relocation-with-misalignment.
+- A *hook-reshape* changeset's dominant residual (≈40 of 54 hunks) is one
+  systematic shape, `HOOK({ select: (m) => BODY }) ⤳ useAppMemo(HOOK(),
+  useCallback((m) => BODY, [DEPS]))`. `HOOK` and `BODY` are
+  verbatim-preserved and the diff matches them positionally (so
+  content-keying is not even *needed*); the blocker is `[DEPS]` — a
+  per-site *computed* value (the lambda's free variables), which no
+  metavariable substitution can produce. That is an **M1.9b** rule +
+  per-site residual, not a content-keying case.
+
+So even the most hdiff-adjacent real residual needs M1.9b as the
+load-bearing piece, with content-keying at most a non-load-bearing
+helper. We therefore prioritise M1.9b (next section) and do not extend
+content-keying (within-side sharing, content-keyed orphan rescue beyond
+containment) until a changeset that actually exhibits
+relocation-with-misalignment appears.
+
 ### 4.4 Residual extraction and recursive decomposition
 
 Cross-side alignment does not guarantee the rule reproduces the after-source
@@ -1086,7 +1116,8 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   Rules + residuals now account for the whole changeset — the Covering
   desideratum of §2.3 holds.
 
-- **M1.9b — Decomposable-site relaxation.** Relax the M1 exact-only
+- **M1.9b — Decomposable-site relaxation. (Prioritised next step.)** Relax
+  the M1 exact-only
   emission policy so safe-but-partial (`decomposable`) sites count
   toward a rule's support, carrying their `rule=`-attributed residual
   (the §5.2 case: `f($X,$Y) → g($X)` at `f(x+1,a) → g(x)` with
@@ -1096,7 +1127,13 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   toward the after-content vs. a relabel that detours), which the
   current span/effect checks cannot express. Single-tier only: no
   `after=Rn` chains, no recursive re-clustering of residuals yet.
-  Test: §5.2.
+  Test: §5.2. **Real-input driver** (§4.3 applicability note): the
+  hook-reshape soak's dominant residual, `HOOK({ select: $L }) ⤳
+  useAppMemo(HOOK(), useCallback($L, [DEPS]))` — captured as this rule
+  with `[DEPS]` (a per-site computed value) as the residual, it converts
+  ≈40 large residual hunks into one rule plus trivial per-site residuals.
+  This is the measurable payoff that makes M1.9b the priority over
+  extending §4.3.
 
 - **M1.10 — Evaluation-based semantics (§3.3) (done).** Invert the back half
   of the pipeline: clustering becomes a candidate generator whose
