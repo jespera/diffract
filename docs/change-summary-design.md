@@ -1028,15 +1028,26 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   tightest applicable one. Tests: `ts_unwrap_chain`, `tsx_unwrap_element`,
   `kotlin_ctor_extract_arg`, `ts_object_to_positional` are live and green
   (the latter two emit the bare extraction — more general than, and
-  preferred over, the original save()-wrapped targets). **Known gap:**
-  `kotlin_unwrap_chain` stays pending — the extraction pair *is* emitted,
-  but the `property_declaration`-level cluster shadows the bare
-  call-expression cluster in the dendrogram (`try_emit` success skips the
-  recursion into children), so the rule carries unchanged `val v =`
-  context. Safe and round-trip-clean, but suboptimal; the fix is in the
-  clustering recursion, not §4.3. Note §5.2 is *not* covered here — it is
-  the sub-part-reshape-with-varying-surround case, handled as rule +
-  residual under M1.9b (§4.3 "Composition" para).
+  preferred over, the original save()-wrapped targets). `kotlin_unwrap_chain`
+  is also live (see fusion-input arbitration fix below). Note §5.2 is *not*
+  covered here — it is the sub-part-reshape-with-varying-surround case,
+  handled as rule + residual under M1.9b (§4.3 "Composition" para).
+
+  **Fusion-input arbitration over global semantics, not provenance.**
+  `kotlin_unwrap_chain` first carried unchanged `val v =` context: the bare
+  `box($H).get() ⤳ $H` call-expression cluster *did* form, but the
+  fusion-input arbitration ("keep one representative per change-family,
+  prefer more resolved regions then shorter text") scored each cluster's
+  resolved regions over its *own provenance files* — and one call-level
+  instance had been shed during clustering, so the call cluster's
+  provenance was 2 files vs the statement cluster's 3. The broader cluster
+  won on region count and shadowed the tighter one before it could be
+  evaluated globally (where its pattern resolves all 3 sites). The fix:
+  score `resolved_of` over **all changed files**. Nested granularities of
+  the same change then resolve the same regions, and the existing
+  shorter-pattern tie-break picks the tighter rule. The dendrogram
+  `try_emit`-skips-recursion path was *not* the cause — both clusters were
+  already present after the cut.
 
 - **M1.8c — Per-site safety gate.** Replace the zero-match behavioural
   applicability check with the per-site safety classification (§3.1):

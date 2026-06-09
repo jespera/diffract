@@ -1739,6 +1739,10 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
       buckets.(0) buckets.(1) buckets.(2) buckets.(3) buckets.(4)
       buckets.(5) buckets.(6)
   end;
+  let all_files =
+    Hashtbl.fold (fun k _ acc -> k :: acc) site_db []
+    |> List.sort String.compare
+  in
   let two_sided_clusters =
     match initial with
     | [] -> []
@@ -1814,9 +1818,15 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
      with identical file sets — Jaccard would fuse them into one
      self-overlapping conjunctive whose sections collide at application
      time. Keep one representative per change-family, chosen by
-     *evaluated* resolved regions over the cluster's own files —
-     proposer shaping on true semantics, not provenance. Preference:
-     more resolved regions, then shorter pattern text. *)
+     *evaluated* resolved regions over all changed files —
+     proposer shaping on true semantics, not provenance. Evaluating over
+     the cluster's own provenance files would undercount a tighter
+     candidate whose instances were partly shed during clustering: a
+     nested call-level cluster (provenance 2 files) and the enclosing
+     statement-level cluster (provenance 3) resolve the SAME regions when
+     each is evaluated globally, so the tie-break below picks the shorter
+     (tighter) one rather than the broader by accident of provenance.
+     Preference: more resolved regions, then shorter pattern text. *)
   let fusion_inputs =
     let cluster_language (c : cluster) =
       match c.instances with i :: _ -> i.language | [] -> ""
@@ -1824,9 +1834,7 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
     let resolved_of (c : cluster) =
       let pattern_text = render_pattern_body c.pattern in
       let language = cluster_language c in
-      c.instances
-      |> List.map (fun (i : instance) -> i.file)
-      |> List.sort_uniq String.compare
+      all_files
       |> List.concat_map (fun f ->
           let e = eval_at ~language ~pattern_text f in
           List.map (fun i -> (f, i)) e.ev_resolved)
@@ -1919,10 +1927,6 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
   if Sys.getenv_opt "CS_TRACE" <> None then
     Printf.eprintf "candidates proposed: %d\n%!" (List.length cands);
   (* ── EVALUATE (§3.3): each candidate's true extension ──────────── *)
-  let all_files =
-    Hashtbl.fold (fun k _ acc -> k :: acc) site_db []
-    |> List.sort String.compare
-  in
   let evaluated =
     List.filter_map
       (fun (pattern_text, language) ->

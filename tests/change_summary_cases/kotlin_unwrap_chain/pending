@@ -1,7 +1,0 @@
-§4.3 extraction pair box(E).get()⤳E IS emitted (confirmed), but the
-property_declaration-level cluster (val v = box(_H0).get() ⤳ val v = _H0)
-shadows the bare call-expression cluster: the dendrogram emits the parent on
-try_emit success and never recurses to the child. Result is safe and
-reconstructs (round-trip green) but carries the unchanged `val v =` context
-instead of the bare box(_H0).get() ⤳ _H0 the TS twin produces. Fix lives in
-the clustering recursion, not extraction_pairs.
