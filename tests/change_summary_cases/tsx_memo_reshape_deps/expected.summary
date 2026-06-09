@@ -1,0 +1,33 @@
+# rule R1  support=3  language=tsx
+@@
+match: strict
+metavar _H0: single
+metavar _H1: single
+@@
+- _H0({ select: (m) => m._H1 })
++ useAppMemo(_H0(), useCallback((m) => m._H1, []))
+# sites R1
+a.tsx
+b.tsx
+c.tsx
+
+# residual  rule=R1
+--- a/a.tsx
++++ b/a.tsx
+@@ ... @@
+-const x = useAppMemo(useFoo(), useCallback((m) => m.id, []));
++const x = useAppMemo(useFoo(), useCallback((m) => m.id, [a]));
+
+# residual  rule=R1
+--- a/b.tsx
++++ b/b.tsx
+@@ ... @@
+-const y = useAppMemo(useBar(), useCallback((m) => m.name, []));
++const y = useAppMemo(useBar(), useCallback((m) => m.name, [b, c]));
+
+# residual  rule=R1
+--- a/c.tsx
++++ b/c.tsx
+@@ ... @@
+-const z = useAppMemo(useBaz(), useCallback((m) => m.val, []));
++const z = useAppMemo(useBaz(), useCallback((m) => m.val, [d, e, f]));
