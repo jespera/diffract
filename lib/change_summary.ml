@@ -654,6 +654,11 @@ type site_info = {
       (** the file's changed regions in before-coordinates, sorted by
           start, disjoint: [(start, end, after_content)]. A zero-width
           region [(p, p, txt)] is an insertion at byte [p]. *)
+  si_dist : int;
+      (** [diff_node_count] of the file's before→after diff — the geodesic
+          target [d(before,after)] the M1.9b decomposable check compares
+          against. Cached here so it is computed once per site, not per
+          candidate. *)
 }
 
 (** Finest-grain changed regions of a diff, each carrying the
@@ -688,6 +693,40 @@ let changed_regions (d : Tree_diff.diff) : (int * int * string) list =
   go d.before_root d.after_root d.root_change;
   List.sort compare !acc
 
+(* Node-level edit size of a diff: the count of AST nodes touched —
+   subtree sizes of [Removed]/[Added] children and both sides of a leaf
+   [Replaced], summed through [Modified] chains. Unlike the changed-region
+   *count*, this preserves the *size* of a change, so inserting one node
+   into an already-rewritten region adds exactly one. That makes the
+   geodesic equality [d(b,a) = d(b,t'') + d(t'',a)] additive across large
+   structural reshapes — the discriminator M1.9b uses to tell a
+   safe-but-partial rewrite from a detour (design §2.3). *)
+let diff_node_count (d : Tree_diff.diff) : int =
+  let rec size (n : Tree.src Tree.t) =
+    List.fold_left
+      (fun a (c : Tree.src Tree.child) -> a + size c.node)
+      1 n.Tree.children
+  in
+  let rec go (b : Tree.src Tree.t) (a : Tree.src Tree.t)
+      (ch : Tree_diff.node_change) =
+    match ch with
+    | Tree_diff.Unchanged -> 0
+    | Tree_diff.Replaced -> size b + size a
+    | Tree_diff.Modified { child_changes } ->
+        List.fold_left
+          (fun acc cc ->
+            acc
+            +
+            match cc with
+            | Tree_diff.Same _ -> 0
+            | Tree_diff.Changed { before; after; change } ->
+                go before after change
+            | Tree_diff.Removed { node } -> size node
+            | Tree_diff.Added { node } -> size node)
+          0 child_changes
+  in
+  go d.before_root d.after_root d.root_change
+
 (** [path → site_info] for every [Modified] file in the changeset. The
     safety gate evaluates rules against these. *)
 let build_site_db ~ctx (cs : changeset) : (string, site_info) Hashtbl.t =
@@ -706,6 +745,7 @@ let build_site_db ~ctx (cs : changeset) : (string, site_info) Hashtbl.t =
                 si_after = after_source;
                 si_language = language;
                 si_regions = changed_regions d;
+                si_dist = diff_node_count d;
               }
           with _ -> ())
       | Added _ | Deleted _ -> ())
@@ -880,8 +920,8 @@ let site_eval ~ctx ~language ~pattern_text (si : site_info) : site_evaluation
            zone, but [t''] is on the geodesic between before and after —
            i.e. the rule's change plus the residual change compose to the
            site's change with no detour. Operationally (design §2.3, with
-           [d] = changed-region count, a node-level edit-op proxy that the
-           triangle inequality bounds below by [d(before,after)]):
+           [d = diff_node_count], an edit size the triangle inequality
+           bounds below by [d(before,after)]):
            [d(before,after) = d(before,t'') + d(t'',after)]. A detour
            (writing a value in neither before nor after, e.g. [f→h] where
            the change is [f→g]) strictly increases the sum, so only exact
@@ -892,10 +932,9 @@ let site_eval ~ctx ~language ~pattern_text (si : site_info) : site_evaluation
           &&
           let before_t = Tree.parse ~ctx ~language si.si_before in
           let d_before_t'' =
-            List.length
-              (changed_regions (Tree_diff.diff ~before:before_t ~after:bt))
+            diff_node_count (Tree_diff.diff ~before:before_t ~after:bt)
           in
-          List.length si.si_regions = d_before_t'' + List.length remaining
+          si.si_dist = d_before_t'' + diff_node_count d
         in
         if not (exact || decomposable) then no_fire
         else
