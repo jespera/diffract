@@ -1122,30 +1122,45 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   toward a rule's support, carrying their `rule=`-attributed residual
   (the §5.2 case: `f($X,$Y) → g($X)` at `f(x+1,a) → g(x)` with
   residual `x+1 → x`). The `decomposable`/`unsafe` distinction is the
-  **geodesic test** (§2.3) computed at evaluation: with `d` = the
-  changed-region count (a node-level edit-op proxy, triangle-bounded
-  below by `d(before,after)`), a site is decomposable iff
-  `d(before,after) = d(before,t'') + d(t'',after)`. A detour — writing a
-  value in neither before nor after, e.g. `f→h` where the change is
-  `f→g` — strictly increases the sum, so only exact equality passes;
-  false negatives from GumTree grouping merely shed a site to its
-  residual (honest, never unsafe). As built (M1.10 propose/evaluate): the
-  coarse rule is *proposed* from the clean (exact) pairs and *claims* the
-  decomposable sites at evaluation (`extension` counts `ev_exact ||
-  ev_decomposable`); the existing residual re-diff then emits each
-  in-zone gap as a `rule=`-attributed residual with no further work.
-  Single-tier only: no `after=Rn` chains, no recursive re-clustering of
-  residuals yet. Tests: `ts_arg_drop_residual` (decomposable site claimed
-  + residual) and `ts_arg_drop_detour` (geodesic rejects the detour site,
-  which stays a pure residual); both round-trip. **Follow-on (not yet):**
-  the hook-reshape soak's dominant residual, `HOOK({ select: $L }) ⤳
-  useAppMemo(HOOK(), useCallback($L, [DEPS]))`, needs the *coarse rule to
-  be proposed* despite `[DEPS]` being an orphan (a per-site computed
-  value with no before counterpart). The gate alone captures it only if
-  some site seeds the proposal with empty `[]` deps; otherwise it needs
-  orphan-after-content coarsening on the proposal side (drop the orphan
-  to a fixed form, residualise the rest) — a separate step from this
-  gate relaxation.
+  **geodesic test** (§2.3) computed at evaluation: with `d =
+  diff_node_count` (AST nodes touched — subtree sizes of Removed/Added
+  children and both sides of a leaf Replaced, summed through Modified
+  chains; triangle-bounded below by `d(before,after)`), a site is
+  decomposable iff `d(before,after) = d(before,t'') + d(t'',after)`. A
+  detour — writing a value in neither before nor after, e.g. `f→h` where
+  the change is `f→g` — strictly increases the sum (the intermediate is
+  counted in both halves), so only exact equality passes; false negatives
+  from GumTree grouping merely shed a site to its residual (honest, never
+  unsafe). The node count, not a region *count*, is what makes the
+  equality additive across a *large* structural reshape: inserting one
+  node into an already-rewritten region adds exactly one on both the
+  `before→after` and `t''→after` sides, so a coarse rule that rebuilds the
+  scaffold and leaves a per-site value to the residual stays on the
+  geodesic. As built (M1.10 propose/evaluate): the coarse rule is
+  *proposed* from the clean (exact) pairs and *claims* the decomposable
+  sites at evaluation (`extension` counts `ev_exact || ev_decomposable`);
+  the existing residual re-diff then emits each in-zone gap as a
+  `rule=`-attributed residual with no further work. Single-tier only: no
+  `after=Rn` chains, no recursive re-clustering of residuals yet. Tests:
+  `ts_arg_drop_residual` (decomposable site claimed + residual) and
+  `ts_arg_drop_detour` (geodesic rejects the detour site, which stays a
+  pure residual); both round-trip. A synthetic `useAppMemo` reshape
+  (`HOOK({ select: $L }) ⤳ useAppMemo(HOOK(), useCallback($L, []))`)
+  confirms the gate captures a large reshape: sites with non-empty deps
+  are claimed decomposably with a `[] → [dep]` residual.
+
+  **Where it still does *not* fire — the proposal wall.** On the real
+  hook-reshape soak the output is unchanged: the gate never gets a chance,
+  because no coarse rule is *proposed*. The real reshapes are
+  heterogeneous (different hooks, wildly different `select` bodies, varied
+  before-shapes, and `[DEPS]` orphaned by being a per-site computed value)
+  — so anti-unification produces no clean `useAppMemo($H(),
+  useCallback($L, []))` cluster to seed. Capturing them needs
+  proposal-side work: orphan-after-content coarsening (drop an orphan like
+  `[DEPS]` to a minimal fixed form `[]` and residualise the rest — the
+  dual of this gate's coarsening) plus more abstract structural clustering
+  of heterogeneous reshapes. That is the next real-input bottleneck, and
+  it is distinct from this gate relaxation.
 
 - **M1.10 — Evaluation-based semantics (§3.3) (done).** Invert the back half
   of the pipeline: clustering becomes a candidate generator whose
