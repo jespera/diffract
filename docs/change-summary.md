@@ -1,112 +1,260 @@
-# Generating change summaries
+# Change summaries: the `summarize` subcommand
 
-## Motivating example
-
-There are cases where a particular changeset (Pull-request, Merge-request, ...)
-contains several changes that are "similar". This can occur when the codebase is
-updated to reflect an API change of an external library, a rename refactoring,
-or other systematic changes.
-
-Whatever the cause, a systematic change can be very tedious to review when it's
-a large change across many places in the codebase because the canoncial way to
-denote the changes is by a "standard" diff where every change is explicitly
-enumerated.
-
-Instead, we could consider using a more compact representation of changes (such
-as the ones `diffract` allows) such that instead of 1000's of lines of
+`summarize` answers the question a reviewer of a large, systematic changeset
+actually has: *what was done here, as a rule — and what else happened?*
+Given a before/after pair of directory trees, it infers the spatch rules
+behind the changeset:
 
 ```
-- f(x, y)
-+ g(x)
+$ diffract summarize -l typescript -i '*.ts' before/ after/
 ```
 
-We could have just one denotation:
+The output is a set of **rules** (diffract patterns, each with the files it
+applies to) plus **residuals** (per-file diffs of whatever the rules don't
+explain). Instead of a thousand-line diff repeating the same edit, a reviewer
+reads one rule once, checks the mechanical part is right, and then inspects
+only the residuals — the places where something *else* went on.
+
+Two properties make the output trustworthy rather than approximate:
+
+- **Reconstruction.** Applying each file's claiming rules (in rule-id order)
+  and then its residual reproduces the after-state exactly. Nothing is lost;
+  the summary is the diff, factored.
+- **Never mis-state (the safety property).** A rule only claims a file when
+  applying it there moves the source *toward* the after-state without doing
+  anything that would have to be undone — formally, the rule's output stays
+  on a shortest edit path between before and after (the "geodesic", design
+  doc §2.3). A site where the change merely *looks* similar but differs in
+  content is left to its residual rather than claimed wrongly. The verified
+  per-file scope is the point: a rule's `sites` list is the set of files
+  where applying it is safe, not everywhere its pattern happens to match.
+
+## Invocation
 
 ```
+diffract summarize [-l LANG] [-i GLOB] [-e DIR]... [-v] BEFORE_DIR AFTER_DIR
+```
+
+| Flag | Meaning |
+|------|---------|
+| `-l`, `--language` | Grammar for the files (default `typescript`); `.ts`/`.tsx` are auto-detected by extension |
+| `-i`, `--include` | Glob for files to scan (e.g. `'*.kt'`) — required when scanning directories |
+| `-e`, `--exclude` | Directory names to skip (repeatable; sensible defaults) |
+| `-v` | Progress and phase timing on stderr |
+
+## Output format
+
+```
+# rule R1  support=53  language=kotlin          ← rule header
 @@
-metavar $X : single
-metavar $Y : single
+match: strict
+metavar _H0: single                              ← inferred metavariables
 @@
+- oldName(_H0)                                   ← a normal diffract pattern
++ newName(_H0)
+# sites R1                                       ← files where R1 is safe
+src/a.kt
+src/b.kt
 
-- f($X, $Y)
-+ g($X)
-```
-
-And maybe we'd also include all the locations/files affected.
-
-The more abstract denotation of the change makes it clear which parts are not
-important for the change and which parts are. In this example `f` and `g` are
-important, but the actual values to the functions are not.
-
-## Partitions
-
-The 
-
-**Common among only a few locations**
-
-**Some changes may
-
-- When not all changes are "the same"
-- ...
-
-## Existing approaches / ideas
-
-TODO
-- GetAFix
-- Generic Patch Inference (my own)
-
-## Meaning of "same change"
-
-### Tree edit distance metric
-
-Assume `apply(p1, t1) = t3`, and `d(t1, t2) + d(t2, t3) = d(t1, t3)`.
-Then one can say that `p1` is "part of" the change of `t1` to `t3` because the
-edits needed after applying `p1` are less than the edits from `t1` to `t3`.
-
-I think it's important that the edit-dist is a *metric* and in particular the triangle inequality is important:
-
-- `d(t1, t3) <= d(t1, t2) + d(t2, t3)`
-
-But the the symmetry and non-negative properties are also important:
-
-- `d(t1, t2) = d(t2, t1)`
-- `d(t1, t2) >= 0` and `d(t1, t2) = 0` iff `t1 = t2`
-
-### Commutativity 
-
-- `p1` commutes with `p2` for `(t1, t3)`
-  - still need to ensure `p1` and `p2` makes sense for `(t1, t3)`
-
-### Decomposition of change
-
-## Examples
-
-Imagine we have the following changed terms:
-
-```
-pair1: s(q.field) - f(x+1, y) -> s(q) - g(x)
-
-pair2: s(oo.field) - h + f(a, c) -> s(oo) - h * g(a)
-
-pair3: h + f(10, 2) -> h * g(10)
-```
-
-There are some changes that are common to all three pair:
-
-f($X, $Y) -> g($X)
-
-For pair1 and pair2 we have also
-
-s($Q.field) -> s($Q)
-
-For pair2 and pair3 we have
-
-h + $EXP -> h * $EXP
-
-(the above may be near impossible to find because we would rely which operator binds stronger in pair2 where we have both a - and +)
-
-In pair1 only we also have
-
-x + 1 -> x
-
+# rule R2  support=2  language=kotlin  after=R1  ← tier-2 rule: apply after R1
 ...
+
+# residual  rule=R1                              ← what R1 leaves at one site
+--- a/src/a.kt
++++ b/src/a.kt
+@@ ... @@
+-...
++...
+
+# residual                                       ← change no rule claims
+...
+```
+
+- `support` is the number of times the rule fires across its sites.
+- Metavariables are rendered `_H0, _H1, …` (valid identifiers in every
+  supported grammar; diffract metavars are sigil-free).
+- `after=R1` marks a **tiered** rule: its pattern matches the intermediate
+  state produced by applying R1, so application order is rule-id order.
+  When a tiered rule follows different rules at different sites, the
+  annotation moves onto the individual site lines.
+- A residual's `rule=` list names the rules applied before the gap was
+  measured; a residual with no `rule=` is a pure one-off change (or a
+  file-level add/delete, shown against `/dev/null`).
+
+## Worked examples
+
+All of these are test fixtures under `tests/change_summary_cases/` — the
+outputs below are the pinned expected results.
+
+### A systematic edit with look-alikes left alone
+
+Three files rename a call and drop its second argument; each file *also*
+contains a different call to the same function that was not changed:
+
+```
+a.ts  before:  const ok = foo(alpha, beta);    const z = foo(p, q, r);
+      after:   const ok = bar(alpha);          const z = foo(p, q, r);
+b.ts  before:  const ok = foo(gamma, delta);   const z = foo(p, q, r);
+      after:   const ok = bar(gamma);          const z = foo(p, q, r);
+c.ts  …
+```
+
+```
+# rule R1  support=3  language=typescript
+@@
+match: strict
+metavar _H0: single
+metavar _H1: single
+@@
+- foo(_H0, _H1)
++ bar(_H0)
+# sites R1
+a.ts
+b.ts
+c.ts
+```
+
+The two-argument shape distinguishes the changed calls, so the rule states
+the change exactly and the untouched `foo(p, q, r)` calls don't trip it. No
+residuals: the rule explains the whole changeset.
+(Fixture: `ts_arg_drop_confounded`.)
+
+### A site that did a bit more: rules + residuals
+
+Same rule, but one site's first argument was simplified at the same time
+(`x + 1` became `x`):
+
+```
+a.ts  before:  const ok = foo(x + 1, a);     after:  const ok = bar(x);
+b.ts  before:  const ok = foo(p, q);         after:  const ok = bar(p);
+c.ts  before:  const ok = foo(m, n);         after:  const ok = bar(m);
+```
+
+```
+# rule R1  support=3  language=typescript
+@@
+match: strict
+metavar _H0: single
+metavar _H1: single
+@@
+- foo(_H0, _H1)
++ bar(_H0)
+# sites R1
+a.ts
+b.ts
+c.ts
+
+# residual  rule=R1
+--- a/a.ts
++++ b/a.ts
+@@ ... @@
+-const ok = bar(x + 1);
++const ok = bar(x);
+```
+
+`a.ts` is still claimed — applying R1 there is safe progress — and the
+extra simplification is stated honestly as a residual *against the
+intermediate* (`bar(x + 1)`, i.e. after R1 has been applied). This is the
+"decomposable site" case: the gap must be a pure insertion or deletion on
+top of what the rule wrote (checked by ordered tree inclusion), and smaller
+than what the rule explains — otherwise the site is not claimed.
+(Fixture: `ts_arg_drop_residual`.)
+
+### Refusing to over-claim
+
+Three files unwrap `box(...).get()` down to the wrapped value — but in one
+of them the value was *also renamed*:
+
+```
+a.ts  before:  const r = box(old).get();     after:  const r = new1;
+b.ts  before:  const r = box(p).get();       after:  const r = p;
+c.ts  before:  const r = box(m).get();       after:  const r = m;
+```
+
+```
+# rule R1  support=2  language=typescript
+@@
+match: strict
+metavar _H0: single
+@@
+- box(_H0).get()
++ _H0
+# sites R1
+b.ts
+c.ts
+
+# residual
+--- a/a.ts
++++ b/a.ts
+@@ ... @@
+-const r = box(old).get();
++const r = new1;
+```
+
+The unwrap rule claims only the sites where the value is genuinely
+preserved. At `a.ts`, applying it would write `old` where the change wrote
+`new1` — work that would have to be undone — so the site is refused and its
+whole change is reported as a residual. The summary never asserts a rule
+did something it didn't. (Fixture: `ts_unwrap_rename_confound`.)
+
+### Tiered rules: factoring the change
+
+When the leftover gaps are themselves systematic, they are re-clustered
+into second-tier rules (recursively, until nothing systematic remains):
+
+```
+a.ts  before:  const r = f(x + 1, p);    after:  const r = g(x);
+b.ts  before:  const r = f(m, q);        after:  const r = g(m);
+c.ts  before:  const r = f(n, w);        after:  const r = g(n);
+d.ts  before:  const r = f(y + 1, s);    after:  const r = g(y);
+```
+
+```
+# rule R1  support=4  language=typescript
+@@
+match: strict
+metavar _H0: single
+metavar _H1: single
+@@
+- f(_H0, _H1)
++ g(_H0)
+# sites R1
+a.ts
+b.ts
+c.ts
+d.ts
+
+# rule R2  support=2  language=typescript  after=R1
+@@
+match: strict
+metavar _H0: single
+@@
+- (_H0 + 1)
++ (_H0)
+# sites R2
+a.ts
+d.ts
+```
+
+The primary rule covers all four files; the `+ 1`-dropping that two of them
+additionally did becomes its own rule, applied **after** R1 (its pattern
+matches the intermediate `g(x + 1)`). Each site's change factors as
+primary ∘ secondary ∘ residual, every tier individually safe — here with no
+residual at all. (Fixture: `ts_arg_drop_tiered`.)
+
+## How it works, briefly
+
+For every changed file, `summarize` computes an AST-level diff
+(`Tree_diff`), extracts change pairs at multiple granularities, and
+anti-unifies them across files into candidate patterns (hierarchical
+clustering). Candidates are then **evaluated**: each is applied to every
+changed file and kept only where a per-site safety gate verifies it — its
+edits land in changed regions, its output parses, and it reproduces the
+change it claims (or leaves a pure, smaller, insert-or-delete gap), never
+writing content that would need to be reverted. A greedy set-cover
+**selects** the final rule set; residuals are measured against what the
+selected rules actually produce, which is what makes the reconstruction
+property hold by construction. The full design — the safety property, the
+propose/evaluate/select pipeline, the geodesic gate, coarsening, tiers — is
+in [change-summary-design.md](change-summary-design.md), and the papers the
+machinery draws on are catalogued in [references.md](references.md).

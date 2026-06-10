@@ -29,6 +29,10 @@ dune exec tests/test_runner.exe -- test Matcher "find calls"
 diffract is an OCaml library and CLI for parsing source files with tree-sitter and pattern matching. Key capabilities:
 - Parse source to S-expressions using tree-sitter grammars
 - Pattern matching with concrete syntax and metavariables
+- Change summaries (`summarize`): infer the spatch rules behind a before/after
+  directory pair — rules with per-file sites, tiered `after=` rules over the
+  leftovers, and per-file residual diffs for what no rule explains
+  (`docs/change-summary.md` for usage, `docs/change-summary-design.md` for design)
 
 ## Architecture
 
@@ -47,6 +51,11 @@ diffract is an OCaml library and CLI for parsing source files with tree-sitter a
 - `stmatch.ml` - The matching engine: strict/partial/field leaf-level matching with backtracking (`Make` functor over a `Cursor.S`)
 - `matcher.ml` - End-to-end: preamble parse → tokenize → match → transform; the public `find`/`transform`/`debug_tokens`/`pattern_warnings` API
 - `text_diff.ml` - Line-based unified diff (for `apply`'s output)
+
+**Diff / change summaries (`lib/`)**
+- `tree_diff.ml` - AST-level diff (GumTree-style node mapping); used by `diff` and as `summarize`'s change-pair source
+- `tree_inclusion.ml` - Ordered tree embedding (Kilpeläinen–Mannila); the summary safety gate's residual-leg test
+- `change_summary.ml` - The `summarize` pipeline: cluster change pairs into rules (propose/evaluate/select), tier the residuals, emit rules + residuals that reproduce the changeset exactly. Golden tests in `tests/change_summary_cases/`
 
 **Tree-sitter Integration Flow:**
 1. C helper layer wraps TSNode/TSTree in OCaml custom blocks with finalizers

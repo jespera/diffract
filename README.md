@@ -8,6 +8,9 @@ An OCaml library and CLI tool for parsing source files using [tree-sitter](https
 - Pattern matching with concrete syntax and metavariables
 - Generic patch transforms in the style of Coccinelle (not-really semantic patches)
 - Expansion transforms: join or restructure each element of a matched sequence
+- Change summaries (`summarize`): infer the spatch rules behind a changeset —
+  cluster the systematic edits in a before/after directory pair into rules,
+  with per-file residuals for everything the rules don't explain
 - Support for TypeScript, TSX, Kotlin, PHP, Scala (extensible)
 
 ## Building
@@ -96,6 +99,9 @@ diffract apply --include '*.ts' patch.txt src/
 
 # Show AST-level changes between two file versions
 diffract diff before.ts after.ts
+
+# Summarize a changeset: infer the rules behind a before/after directory pair
+diffract summarize -l typescript -i '*.ts' before/ after/
 
 # List available languages
 diffract languages
@@ -199,10 +205,24 @@ Found 2 match(es) in 2 file(s) (scanned 47 files)
 
 ## Documentation
 
+User guides:
+
 - [Pattern format and library API](docs/patterns.md)
+- [Transforms (semantic patches)](docs/transforms.md)
+- [Partial mode](docs/partial-mode.md), [field mode](docs/field-mode.md),
+  [surgical transforms](docs/surgical-transforms.md)
+- [Change summaries (`summarize`)](docs/change-summary.md)
+
+Architecture and design:
+
 - [Architecture and internals](docs/internals.md)
-- [Testing](docs/benchmarks.md)
-- [The universal tokenizer matcher](docs/universal-tokenizer.md)
+- [The universal tokenizer matcher](docs/universal-tokenizer.md) (design note)
+- [Change-summary design](docs/change-summary-design.md) (safety property,
+  propose/evaluate/select, the geodesic gate, tiers)
+- [Grammar metadata](docs/grammar-metadata.md)
+- [References / existing work](docs/references.md) — the papers and ideas the
+  implementation draws on, and where each is used
+- [Testing](docs/benchmarks.md), [migration coverage](docs/migration-coverage.md)
 
 ## Matcher Architecture (Quick Overview)
 
