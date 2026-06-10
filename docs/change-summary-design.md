@@ -1449,7 +1449,8 @@ format is stable across diff-algorithm tweaks.
 
 Tier 1 comparison is structural, not textual:
 
-1. Parse the rule body with `Match_parse` on both sides.
+1. Parse the rule body (preamble + pattern lines, as `Matcher` does) on
+   both sides.
 2. Canonicalise each rule by walking match-side then replace-side in fixed
    pre-order, assigning metavar indices `#0, #1, ...` by first occurrence.
 3. For conjunctive rules, canonicalise per section (each section's metavar
@@ -1581,6 +1582,26 @@ declaration prevents silent misconfiguration.
   anti-unification-by-hash primitive the proposer could borrow; heed its
   critique of hdiff (whole-file patches mention many unchanged nodes —
   moot for our *localised* rules, which want minimal context anyway).
+- Kilpeläinen & Mannila, *Ordered and unordered tree inclusion* (SIAM
+  J. Comput. 1995). The ordered tree embedding (`Tree_inclusion`,
+  delete-only obtainability with child promotion) that the M1.9b gate
+  uses as the geodesic's residual-leg test: `t''` and the after must be
+  inclusion-comparable (pure insertion or pure deletion; a relabel — a
+  detour — is forbidden in both directions). Ordered inclusion is
+  polynomial; the unordered variant (sibling reorders) is NP-complete
+  and deferred.
+- Bille & Gørtz, *The Tree Inclusion Problem: In Linear Space and
+  Faster* (arXiv cs/0608124). The O(n_T)-space inclusion algorithm —
+  cited in `lib/tree_inclusion.ml` as the upgrade path if inclusion is
+  ever hot; the implemented Kilpeläinen–Mannila-style memoised DP is
+  adequate for the gate's inputs.
+- Bille, *A survey on tree edit distance and related problems* (TCS
+  2005). The map of the edit-distance / alignment / inclusion family.
+  Inclusion is the delete-only specialization of tree edit distance;
+  the recorded upgrade path for the gate — exact Zhang–Shasha TED on
+  changed-region subtrees when inclusion's conservatism starts costing
+  coverage (relabel-bearing or mixed insert+delete residuals) — lives
+  in this map.
 - Padioleau et al., *Coccinelle* / semantic patches. The output language of
   this feature — diffract's spatch DSL — is directly inspired by
   Coccinelle's SmPL. The `docs/patterns.md` file documents the concrete

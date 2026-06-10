@@ -11,18 +11,22 @@ diffract/
 │   ├── tree_sitter_helper.c         # C helper functions for tree-sitter
 │   ├── node.ml             # FFI-based tree traversal (internal)
 │   ├── languages.ml        # Static grammar registry
+│   ├── grammar_metadata.ml # Per-grammar node-type metadata (node-types.json)
 │   ├── tokenize.ml         # Pattern body -> (text, node_type) token stream
 │   ├── cursor.ml           # Abstract tree-cursor interface (Cursor.S)
 │   ├── tree_sitter_cursor.ml  # Cursor.S over a real tree-sitter parse
 │   ├── stmatch.ml          # Matching engine (strict/partial/field, backtracking)
 │   ├── matcher.ml          # End-to-end find/transform; public matcher API
-│   └── text_diff.ml        # Line-based unified diff (for `apply`)
+│   ├── text_diff.ml        # Line-based unified diff (for `apply`)
+│   ├── tree_diff.ml        # AST-level diff (GumTree-style node mapping)
+│   ├── tree_inclusion.ml   # Ordered tree embedding (Kilpeläinen–Mannila)
+│   └── change_summary.ml   # `summarize`: cluster a changeset into rules + residuals
 ├── bin/                    # CLI
 │   └── main.ml
 ├── grammars/               # Tree-sitter grammars
 │   ├── build-grammars.sh   # Script to build grammar static archives
 │   └── lib/                # Compiled grammar libraries
-└── tests/                  # Alcotest unit tests
+└── tests/                  # Alcotest unit tests (incl. tests/change_summary_cases/)
 ```
 
 ## Tree Module (`lib/tree.ml`)
@@ -201,6 +205,31 @@ List.iter
       c.sections)
   composites
 ```
+
+## Diffing and Change Summaries (`lib/tree_diff.ml`, `lib/tree_inclusion.ml`, `lib/change_summary.ml`)
+
+Alongside the matcher sits a diff/summary subsystem:
+
+- **`Tree_diff`** computes an AST-level diff between two parses: a
+  GumTree-style node mapping plus a recursive `node_change` structure
+  (`Unchanged` / `Modified` with per-child changes / `Replaced`). Used by
+  the `diff` CLI subcommand and as the change-pair source for
+  `Change_summary`.
+- **`Tree_inclusion`** decides ordered tree embedding — can one tree be
+  obtained from another by deleting nodes (internal deletions promote
+  children)? Used by `Change_summary`'s safety gate to classify a rule's
+  leftover gap as a pure insertion/deletion (an honest residual) versus a
+  relabel (a detour the rule must not claim).
+- **`Change_summary`** implements the `summarize` subcommand: given a
+  changeset (before/after directory pair), it clusters the systematic
+  edits into spatch-style rules with per-file sites, recursively
+  re-clusters what the rules leave unexplained into tiered rules
+  (`after=` attribution), and emits the remainder as per-file residual
+  diffs. Rules + residuals together reproduce the changeset exactly.
+  See [change-summary.md](change-summary.md) for usage and
+  [change-summary-design.md](change-summary-design.md) for the design
+  (the safety property, the propose/evaluate/select pipeline, the
+  geodesic gate).
 
 ## Adding a New Language
 
