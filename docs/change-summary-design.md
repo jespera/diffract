@@ -1128,6 +1128,16 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   residual `x+1 → x`). The `decomposable`/`unsafe` distinction is the
   **geodesic test** (§2.3), computed at evaluation in two legs:
 
+  *Well-formedness precondition (all verdicts, not just decomposable):*
+  the rule's output may not contain more parse-ERROR nodes than the
+  site's after. A removal-only rule deleting a grammar-required
+  sub-expression yields a broken intermediate (`const r = ;`) whose
+  re-diff is unreliable — it once judged such sites fully explained,
+  letting a bare deletion rule out-cover the real extraction rule and
+  mis-state preserved values as deleted-then-readded (fixture
+  `ts_unwrap_rename_confound`). Damage the rule itself causes is not a
+  residual's job to repair.
+
   *Residual leg — ordered tree inclusion* (`Tree_inclusion`, on `main`;
   Kilpeläinen & Mannila): `t''` and the after must be
   inclusion-comparable — one obtainable from the other by node deletion
