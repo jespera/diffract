@@ -1,8 +1,11 @@
 # Change Summary: Design Document
 
-Status: design, pre-implementation. Supersedes the rough notes in
-`change-summary.md` for the purposes of guiding the build. Keep this document
-up to date as decisions change.
+Status: living design document; implemented through M2. Per-feature status
+is marked consistently as *(implemented)*, *(planned)*, or *(deferred)* —
+see the milestones in §6. The user-facing guide is
+[change-summary.md](change-summary.md); the papers the design draws on are
+indexed in [references.md](references.md). Keep this document up to date as
+decisions change.
 
 ## 1. Motivation
 
@@ -284,7 +287,7 @@ level of ancestor wins for each site. Key properties:
   excluded from the quote-char set so `binary_expression` with `/` is
   not misclassified.
 
-### 3.2 Contextual emission with ellipses (future direction)
+### 3.2 Contextual emission with ellipses (planned)
 
 The §3.1 emission is bimodal: a `Modified` ancestor emits with its
 non-changed siblings rendered as `$Hk` placeholders, and a `Replaced`
@@ -994,7 +997,7 @@ absent side. No dedicated `file_ops` section — the format is uniform.
 Ordered for early end-to-end usability. Each milestone is testable in
 isolation against a synthetic fixture and leaves the tool in a usable state.
 
-- **M1 — lift prototype to library + CLI.** Move `examples/change_summary.ml`
+- **M1 — lift prototype to library + CLI (implemented).** Move `examples/change_summary.ml`
   logic into `lib/change_summary.ml{,i}`. Expose
   `summarize : changeset -> summary`. Add `diffract summarize BEFORE_DIR
   AFTER_DIR` subcommand to `bin/main.ml`, sharing the existing `--language`,
@@ -1003,7 +1006,7 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   `after=` tiers — see §9). Folder-based E2E harness with hand-written
   `expected.summary` files compared via alpha-equivalence (§9).
 
-- **M1.5 — Added/Removed as fusion candidates and residuals.** Extract
+- **M1.5 — Added/Removed as fusion candidates and residuals (implemented).** Extract
   `Added n` / `Removed n` from `child_change` and track them as candidates
   that can participate in conjunctive fusion (M1.6) by providing the match
   anchor that additions themselves lack. Additions/removals that do not get
@@ -1012,7 +1015,7 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   `-`-only block has no structural anchor for the spatch engine to attach
   to. Test: §5.5.
 
-- **M1.6 — Cross-cluster file-overlap fusion (done).** After independent
+- **M1.6 — Cross-cluster file-overlap fusion (implemented).** After independent
   clustering, two-sided clusters and one-sided swap pairs are unified into a
   single fusion graph keyed on file sets; connected components above a
   Jaccard threshold (default 0.7) emit as a single multi-section rule whose
@@ -1030,11 +1033,11 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   bound holes; a dedicated fixture for that case will land alongside
   M1.8b.
 
-- **M1.7 — File-level operations (done).** Added/Deleted files emit as
+- **M1.7 — File-level operations (implemented).** Added/Deleted files emit as
   unattributed residual sections with `/dev/null` on the absent side
-  (§5.6, §9); landed together with M1.9a. Test: §5.6.
+  (§5.6, §9); implemented together with M1.9a. Test: §5.6.
 
-- **M1.8a — Orphan-hole rejection (done).** Coherence gate rejects any
+- **M1.8a — Orphan-hole rejection (implemented).** Coherence gate rejects any
   cluster whose `+`-side has a metavariable not present on the `-` side
   (would render as `Metavars in replacement not bound in match` at apply
   time). The cut falls back to the coherent dendrogram parent, which
@@ -1044,7 +1047,7 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   anti-unifications aligns the holes when the same concrete subtree
   appears on both sides. (Pending: M1.8b below.)
 
-- **M1.8b — Cross-side alignment by content sharing (§4.3, reframed). Landed.**
+- **M1.8b — Cross-side alignment by content sharing (§4.3, reframed; implemented).**
   Originally scoped as a post-process that renames a `+`-side hole to its
   `-`-side hole via the GumTree mapping. Superseded by the hdiff-based
   formulation in §4.3: assign metavariables by *content* (common-subtree
@@ -1083,7 +1086,7 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   `try_emit`-skips-recursion path was *not* the cause — both clusters were
   already present after the cut.
 
-- **M1.8c — Per-site safety gate.** Replace the zero-match behavioural
+- **M1.8c — Per-site safety gate (implemented).** Replace the zero-match behavioural
   applicability check with the per-site safety classification (§3.1):
   every edit the rule would make at a claimed site must land in a
   changed region of the site's diff and reproduce that region's
@@ -1098,7 +1101,7 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   wrong-content fixture (over-general rewrite must not claim a site
   whose region changed differently).
 
-- **M1.8d — Subsumption reduction (§4.5).** Post-emission pass: drop
+- **M1.8d — Subsumption reduction (§4.5) (implemented; dissolved into selection by M1.10).** Post-emission pass: drop
   every rule whose minimal edits at all its sites are reproduced by
   another emitted rule, folding sites/support into the subsuming rule.
   On the real-changeset soak this removes the parent-level block
@@ -1109,7 +1112,7 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   once siblings matching handles grammar-restricted positions (pinned as
   a known-bug test on the matcher side).
 
-- **M1.9a — Residual emission / completeness (done).** Per Modified
+- **M1.9a — Residual emission / completeness (implemented).** Per Modified
   file: apply the file's claiming rules (in id order) and diff the
   intermediate against the real after-source with zero context; the
   gap, if any, emits as a `residual` section attributed `rule=R1,R2`
@@ -1120,8 +1123,8 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   Rules + residuals now account for the whole changeset — the Covering
   desideratum of §2.3 holds.
 
-- **M1.9b — Decomposable-site relaxation. (Landed; gate = tree
-  inclusion + net progress.)** Relax the M1 exact-only
+- **M1.9b — Decomposable-site relaxation (implemented; gate = tree
+  inclusion + net progress).** Relax the M1 exact-only
   emission policy so safe-but-partial (`decomposable`) sites count
   toward a rule's support, carrying their `rule=`-attributed residual
   (the §5.2 case: `f($X,$Y) → g($X)` at `f(x+1,a) → g(x)` with
@@ -1178,8 +1181,8 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   re-clustering of residuals yet. Tests: `ts_arg_drop_residual`,
   `ts_arg_drop_detour`, `tsx_memo_reshape_deps`; all round-trip.
 
-- **M1.9c — Proposal-side orphan coarsening (tree embedding). (First cut
-  landed.)** When anti-unification leaves a `+`-side hole with no
+- **M1.9c — Proposal-side orphan coarsening (tree embedding)
+  (implemented, first cut).** When anti-unification leaves a `+`-side hole with no
   `-`-side binding (an orphan — a freshly-introduced value that varies
   per site, e.g. a `useCallback` dependency array), the coherence gate
   rejected the whole candidate. `coarsen_orphans` instead coarsens a
@@ -1213,7 +1216,7 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   (and partial-field movement), which is the real-input frontier, not
   this mechanism.
 
-- **M1.10 — Evaluation-based semantics (§3.3) (done).** Invert the back half
+- **M1.10 — Evaluation-based semantics (§3.3) (implemented).** Invert the back half
   of the pipeline: clustering becomes a candidate generator whose
   instance bookkeeping stays internal; every emitted rule's sites,
   support, and coverage derive from evaluating the candidate against
@@ -1226,7 +1229,7 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   resolves at that file (a property test over the soak corpus, not a
   golden file).
 
-- **M2 — Recursive residual clustering + tiered rules. (Landed.)** Run the
+- **M2 — Recursive residual clustering + tiered rules (implemented).** Run the
   clustering pipeline on the accumulated residuals of *all* rules
   globally — not per rule — so a secondary change shared across two
   primary clusters becomes one rule (§3.3 "common factors"). `after=`
@@ -1272,20 +1275,23 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   at any tier — §3.2 contextual emission is the unlock there, and tiers
   will compound with it.
 
-- **M2.5 — Decomposition safety as a property test.** The M1.8c gate
+- **M2.5 — Decomposition safety as a property test (implemented).** The M1.8c gate
   enforces safety at emission time; this milestone re-states it as an
   end-to-end Tier 2 property test over the tool's actual output: for
   every rule and every site, applying the rule (and then the attached
   residual and `after=` tiers, if any) reconstructs the after-source
-  exactly.
+  exactly. Implemented as the round-trip suite in
+  `tests/test_change_summary.ml`, which checks this property (comparing
+  parsed trees, rules applied in id order so tiers compose) over every
+  golden case; soak corpora are exercised manually.
 
-- **M3 — Role-aware metavar naming.** Use tree-sitter field names to name
+- **M3 — Role-aware metavar naming (planned).** Use tree-sitter field names to name
   metavariables (`$function`, `$arguments`) when unambiguous.
 
-- **M4 — Hierarchy exposure.** Output format supports emitting dendrogram
+- **M4 — Hierarchy exposure (planned).** Output format supports emitting dendrogram
   children. Test: §5.4.
 
-- **M5 — Tuning and real-world soak.** `--min-support`, `--max-hole-fraction`,
+- **M5 — Tuning and real-world soak (planned).** `--min-support`, `--max-hole-fraction`,
   `--strategy`. Snapshot the summary of `changeset/` and `remove-redux.patch`
   as regression fixtures.
 
