@@ -1,0 +1,17 @@
+# rule R1  support=2  language=typescript
+@@
+match: strict
+metavar _H0: single
+@@
+- box(_H0).get()
++ _H0
+# sites R1
+b.ts
+c.ts
+
+# residual
+--- a/a.ts
++++ b/a.ts
+@@ ... @@
+-const r = box(old).get();
++const r = new1;

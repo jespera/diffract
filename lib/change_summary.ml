@@ -672,6 +672,14 @@ let changed_regions (d : Tree_diff.diff) : (int * int * string) list =
   go d.before_root d.after_root d.root_change;
   List.sort compare !acc
 
+(* Number of ERROR nodes in a parse tree — tree-sitter's marker for
+   unparseable stretches. Used by the gate's well-formedness guard. *)
+let rec error_node_count (n : Tree.src Tree.t) =
+  List.fold_left
+    (fun a (c : Tree.src Tree.child) -> a + error_node_count c.node)
+    (if n.Tree.node_type = "ERROR" then 1 else 0)
+    n.Tree.children
+
 (* Plain substring membership: does [sub] occur in [s]? Used by the
    deletion-direction guard of the decomposable check. *)
 let string_mem ~sub s =
@@ -860,6 +868,19 @@ let site_eval ~ctx ~language ~pattern_text (si : site_info) : site_evaluation
         in
         let bt = Tree.parse ~ctx ~language t'' in
         let at = Tree.parse ~ctx ~language si.si_after in
+        (* Well-formedness: a rule may not introduce parse errors its
+           target doesn't have. A removal-only rule that deletes a
+           grammar-required sub-expression produces a broken intermediate
+           (e.g. [const r = ;]); the re-diff over that ERROR-laden tree is
+           unreliable, and it once judged such sites "fully explained" —
+           letting a deletion rule out-cover the extraction rule and
+           mis-state preserved values as deleted-then-readded. More
+           ERROR nodes than the after means the residual would have to
+           repair damage the rule itself caused — off the geodesic by
+           construction. *)
+        if error_node_count bt.Tree.root > error_node_count at.Tree.root
+        then no_fire
+        else begin
         let d = Tree_diff.diff ~before:bt ~after:at in
         let remaining = changed_regions d in
         let exact =
@@ -982,6 +1003,7 @@ let site_eval ~ctx ~language ~pattern_text (si : site_info) : site_evaluation
             ev_resolved = resolved;
             ev_clean = (t'' = si.si_after || ws_collapse t'' = ws_collapse si.si_after);
           }
+        end
       end
   with _ -> no_fire
 
