@@ -22,6 +22,15 @@ type rule = {
   support : int;
   language : string;
   sites : string list;  (** distinct file paths where the rule fires, sorted *)
+  after : (string * string list) list;
+      (** M2 per-site tier attribution: [(site, earlier rule ids)] — the
+          rule's pattern at [site] matches the intermediate produced by
+          applying those earlier rules, so it must be applied after them
+          (rule-id order is application order). Empty for tier-1 rules;
+          a site absent from the list has no predecessors. Global residual
+          clustering makes this per-site: one tier-2 rule may follow
+          different primaries at different sites (design §3.3 "common
+          factors", §9.3). *)
 }
 
 type residual = {
@@ -1969,12 +1978,13 @@ type scored_candidate = {
   sc_extension : (string * site_evaluation) list;
 }
 
-let summarize ?progress ~ctx (cs : changeset) : summary =
-  let on_file_for stage =
-    match progress with
-    | None -> None
-    | Some p -> Some (fun ~idx ~total ~path -> p ~stage ~idx ~total ~path)
-  in
+(** One tier of the pipeline (§3.3): propose → evaluate → select over a
+    changeset, returning the selected rules sorted by support, unnumbered
+    ([id = ""], [after = []] — the M2 tier loop in [summarize] assigns
+    both). Tier 1 runs this on the raw changeset; tier n+1 re-runs it on
+    the (intermediate, after) pairs the earlier tiers leave unexplained
+    (design §4.4 recursive clustering). *)
+let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
   let site_db = build_site_db ~ctx cs in
   (* Evaluation of a candidate pattern at one site, memoized on
      (pattern body, file). PROPOSE's internal gates (the dendrogram cut,
@@ -2326,19 +2336,152 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
             (String.sub sc.sc_pattern 0
                (min 60 (String.length sc.sc_pattern)))
   done;
-  let combined =
-    List.rev !selected
-    |> List.map (fun sc ->
-        {
-          id = "";
-          pattern_text = sc.sc_pattern;
-          support = sc.sc_support;
-          language = sc.sc_language;
-          sites = List.map fst sc.sc_extension;
-        })
-    |> List.sort (fun a b -> compare b.support a.support)
-    |> List.mapi (fun i r -> { r with id = Printf.sprintf "R%d" (i + 1) })
+  List.rev !selected
+  |> List.map (fun sc ->
+      {
+        id = "";
+        pattern_text = sc.sc_pattern;
+        support = sc.sc_support;
+        language = sc.sc_language;
+        sites = List.map fst sc.sc_extension;
+        after = [];
+      })
+  |> List.sort (fun a b -> compare b.support a.support)
+
+let summarize ?progress ~ctx (cs : changeset) : summary =
+  let on_file_for stage =
+    match progress with
+    | None -> None
+    | Some p -> Some (fun ~idx ~total ~path -> p ~stage ~idx ~total ~path)
   in
+  (* Apply [path]'s claiming rules to [src] in rule-id order — the
+     application contract shared by the tier loop, the residual pass and
+     the round-trip property. *)
+  let apply_claiming rules path ~language src =
+    List.fold_left
+      (fun s (r : rule) ->
+        if r.language = language && List.mem path r.sites then
+          try
+            Matcher.transform ~ctx ~language:r.language
+              ~pattern_text:r.pattern_text ~source_text:s
+          with _ -> s
+        else s)
+      src rules
+  in
+  (* ── M2 tier loop (§4.4) ─────────────────────────────────────────
+     Run propose/evaluate/select; then rebuild the changeset from the
+     (intermediate, after) pairs the rules so far leave unexplained —
+     including files no rule claims, whose residuals join the global
+     pool (§3.3 common factors) — and recurse. Each emitting tier
+     strictly shrinks the unexplained gap (the net-progress guard), so
+     the loop terminates when a tier emits nothing; the depth cap and
+     the no-progress check are backstops, not the intended exit. A
+     tier-n rule's per-site [after] lists the earlier rules claiming
+     that site: its pattern matched the intermediate those rules
+     produce, so id order is application order. *)
+  let max_tiers = 5 in
+  let intermediate_key c =
+    List.filter_map
+      (function
+        | Modified { path; before_source; _ } -> Some (path, before_source)
+        | Added _ | Deleted _ -> None)
+      c.files
+  in
+  (* Drop tier rules that never fire under id-order application. A
+     rule's sites and coverage are evaluated rule-independently against
+     the tier's changeset (§3.3), but application composes sequentially —
+     an earlier rule's edits can consume a later rule's matches entirely
+     (R1 = [f($X,$Y) ⤳ g($X)] rewrites the call that R2 =
+     [f($X+1,$Y) ⤳ g($X)] would have matched). Keeping such a rule
+     emits a dead pattern whose claimed sites mislead; dropping it leaves
+     its regions unexplained for the *next* tier, which re-proposes
+     against the actual intermediate ([( $X+1 ) ⤳ ( $X )], after=R1). *)
+  let prune_dead (prior : rule list) (tier : rule list) : rule list =
+    let fired : (string * string, unit) Hashtbl.t = Hashtbl.create 8 in
+    List.iter
+      (function
+        | Modified { path; language; before_source; _ } ->
+            ignore
+              (List.fold_left
+                 (fun s (r : rule) ->
+                   if r.language = language && List.mem path r.sites then begin
+                     let s' =
+                       try
+                         Matcher.transform ~ctx ~language:r.language
+                           ~pattern_text:r.pattern_text ~source_text:s
+                       with _ -> s
+                     in
+                     if s' <> s then
+                       Hashtbl.replace fired (r.pattern_text, r.language) ();
+                     s'
+                   end
+                   else s)
+                 before_source (prior @ tier))
+        | Added _ | Deleted _ -> ())
+      cs.files;
+    List.filter
+      (fun (r : rule) -> Hashtbl.mem fired (r.pattern_text, r.language))
+      tier
+  in
+  let rec tier_loop tier_idx (cur : changeset) (acc : rule list) : rule list
+      =
+    let tier = prune_dead acc (tier_rules ~on_file_for ~ctx cur) in
+    if tier = [] then acc
+    else
+      let offset = List.length acc in
+      let numbered =
+        List.mapi
+          (fun i (r : rule) ->
+            let id = Printf.sprintf "R%d" (offset + i + 1) in
+            let after =
+              List.filter_map
+                (fun site ->
+                  match
+                    List.filter
+                      (fun (p : rule) -> List.mem site p.sites)
+                      acc
+                  with
+                  | [] -> None
+                  | preds -> Some (site, List.map (fun p -> p.id) preds))
+                r.sites
+            in
+            { r with id; after })
+          tier
+      in
+      let acc = acc @ numbered in
+      if tier_idx >= max_tiers then acc
+      else
+        let next_files =
+          List.filter_map
+            (function
+              | Modified { path; language; before_source; after_source } ->
+                  let inter =
+                    apply_claiming acc path ~language before_source
+                  in
+                  if
+                    inter = after_source
+                    || ws_collapse inter = ws_collapse after_source
+                  then None
+                  else
+                    Some
+                      (Modified
+                         {
+                           path;
+                           language;
+                           before_source = inter;
+                           after_source;
+                         })
+              | Added _ | Deleted _ -> None)
+            cs.files
+        in
+        let next = { files = next_files } in
+        if
+          next_files = []
+          || intermediate_key next = intermediate_key cur
+        then acc
+        else tier_loop (tier_idx + 1) next acc
+  in
+  let combined = tier_loop 1 cs [] in
   (* M1.9 residual extraction: for each Modified file, apply its claiming
      rules (in id order) and diff the intermediate against the real
      after-source. The gap, if any, is the residual — computed against
@@ -2379,37 +2522,26 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
     List.filter_map
       (fun fc ->
         match fc with
-        | Modified { path; _ } -> (
-            match Hashtbl.find_opt site_db path with
-            | None -> None
-            | Some si ->
-                let claiming = rules_at path in
-                let inter =
-                  List.fold_left
-                    (fun src (r : rule) ->
-                      try
-                        Matcher.transform ~ctx ~language:r.language
-                          ~pattern_text:r.pattern_text ~source_text:src
-                      with _ -> src)
-                    si.si_before claiming
-                in
-                if
-                  inter = si.si_after
-                  || ws_collapse inter = ws_collapse si.si_after
-                then None
-                else
-                  let d =
-                    Text_diff.generate_diff ~context:0 ~file_path:path
-                      ~original:inter ~transformed:si.si_after ()
-                  in
-                  if d = "" then None
-                  else
-                    Some
-                      {
-                        res_file = path;
-                        res_rules = List.map (fun (r : rule) -> r.id) claiming;
-                        res_diff = d;
-                      })
+        | Modified { path; language; before_source; after_source } ->
+            let claiming = rules_at path in
+            let inter = apply_claiming combined path ~language before_source in
+            if
+              inter = after_source
+              || ws_collapse inter = ws_collapse after_source
+            then None
+            else
+              let d =
+                Text_diff.generate_diff ~context:0 ~file_path:path
+                  ~original:inter ~transformed:after_source ()
+              in
+              if d = "" then None
+              else
+                Some
+                  {
+                    res_file = path;
+                    res_rules = List.map (fun (r : rule) -> r.id) claiming;
+                    res_diff = d;
+                  }
         | Added { path; after_source; _ } ->
             Some
               {
@@ -2431,16 +2563,42 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
 let format_summary (s : summary) : string =
   let buf = Buffer.create 256 in
   List.iteri
-    (fun i r ->
+    (fun i (r : rule) ->
       if i > 0 then Buffer.add_char buf '\n';
+      (* §9.3 tier attribution: [after=] in the header when every site
+         has the same predecessors, per-site annotations otherwise (a
+         common-factor rule follows different primaries at different
+         sites). *)
+      let after_of site = List.assoc_opt site r.after in
+      let uniform =
+        match r.sites with
+        | [] -> None
+        | first :: rest -> (
+            match after_of first with
+            | Some preds when List.for_all (fun x -> after_of x = Some preds) rest
+              ->
+                Some preds
+            | _ -> None)
+      in
       Buffer.add_string buf
-        (Printf.sprintf "# rule %s  support=%d  language=%s\n" r.id r.support
-           r.language);
+        (Printf.sprintf "# rule %s  support=%d  language=%s%s\n" r.id
+           r.support r.language
+           (match uniform with
+           | Some preds -> "  after=" ^ String.concat "," preds
+           | None -> ""));
       Buffer.add_string buf r.pattern_text;
       if r.sites <> [] then begin
         Buffer.add_string buf (Printf.sprintf "# sites %s\n" r.id);
         List.iter
-          (fun p -> Buffer.add_string buf (p ^ "\n"))
+          (fun p ->
+            let annot =
+              if uniform <> None then ""
+              else
+                match after_of p with
+                | Some preds -> "  after=" ^ String.concat "," preds
+                | None -> ""
+            in
+            Buffer.add_string buf (p ^ annot ^ "\n"))
           r.sites
       end)
     s.rules;

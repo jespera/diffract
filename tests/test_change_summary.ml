@@ -443,4 +443,69 @@ let tests =
   @ [
       Alcotest.test_case "one-sided import removals surfaced" `Quick
         test_one_sided_extraction;
+      (* §9.3 mixed per-site after= rendering: a common-factor rule whose
+         sites follow different primaries annotates each site line rather
+         than the header. Exercised directly — soaks show mixed factors
+         are structurally rare (aligned ones are caught at tier 1,
+         unanchored ones cannot rule-ify; see tsx_tier_unanchored_factor),
+         so no golden fixture produces this shape. *)
+      Alcotest.test_case "tiered format: mixed per-site after" `Quick
+        (fun () ->
+          let r =
+            {
+              Change_summary.id = "R3";
+              pattern_text = "@@\nmatch: strict\n@@\n- a\n+ b\n";
+              support = 2;
+              language = "typescript";
+              sites = [ "x.ts"; "y.ts" ];
+              after = [ ("x.ts", [ "R1" ]); ("y.ts", [ "R2" ]) ];
+            }
+          in
+          let out =
+            Change_summary.format_summary
+              { Change_summary.rules = [ r ]; residuals = [] }
+          in
+          Alcotest.(check bool)
+            "header carries no after=" true
+            (not
+               (String.split_on_char '\n' out
+               |> List.exists (fun l ->
+                   String.length l >= 6
+                   && String.sub l 0 6 = "# rule"
+                   && String.length l
+                      > String.length "# rule R3  support=2  language=typescript"
+                  )));
+          Alcotest.(check bool)
+            "site lines annotated" true
+            (String.split_on_char '\n' out
+            |> List.exists (fun l -> l = "x.ts  after=R1")
+            &&
+            String.split_on_char '\n' out
+            |> List.exists (fun l -> l = "y.ts  after=R2")));
+      (* Uniform per-site after= lifts to the rule header. *)
+      Alcotest.test_case "tiered format: uniform after in header" `Quick
+        (fun () ->
+          let r =
+            {
+              Change_summary.id = "R2";
+              pattern_text = "@@\nmatch: strict\n@@\n- a\n+ b\n";
+              support = 2;
+              language = "typescript";
+              sites = [ "x.ts"; "y.ts" ];
+              after = [ ("x.ts", [ "R1" ]); ("y.ts", [ "R1" ]) ];
+            }
+          in
+          let out =
+            Change_summary.format_summary
+              { Change_summary.rules = [ r ]; residuals = [] }
+          in
+          Alcotest.(check bool)
+            "header has after=R1" true
+            (String.split_on_char '\n' out
+            |> List.exists (fun l ->
+                l = "# rule R2  support=2  language=typescript  after=R1"));
+          Alcotest.(check bool)
+            "site lines unannotated" true
+            (String.split_on_char '\n' out
+            |> List.exists (fun l -> l = "x.ts")));
     ]
