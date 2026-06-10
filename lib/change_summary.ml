@@ -638,6 +638,10 @@ type site_info = {
       (** the file's changed regions in before-coordinates, sorted by
           start, disjoint: [(start, end, after_content)]. A zero-width
           region [(p, p, txt)] is an insertion at byte [p]. *)
+  si_before_errors : string list;
+      (** texts of the before-parse's ERROR nodes (usually empty). The
+          well-formedness guard tolerates these in a rule's output — they
+          predate the rule — while rejecting any error the rule invents. *)
 }
 
 (** Finest-grain changed regions of a diff, each carrying the
@@ -672,13 +676,35 @@ let changed_regions (d : Tree_diff.diff) : (int * int * string) list =
   go d.before_root d.after_root d.root_change;
   List.sort compare !acc
 
-(* Number of ERROR nodes in a parse tree — tree-sitter's marker for
-   unparseable stretches. Used by the gate's well-formedness guard. *)
-let rec error_node_count (n : Tree.src Tree.t) =
-  List.fold_left
-    (fun a (c : Tree.src Tree.child) -> a + error_node_count c.node)
-    (if n.Tree.node_type = "ERROR" then 1 else 0)
-    n.Tree.children
+(* Source texts of the outermost ERROR nodes in a parse tree —
+   tree-sitter's markers for unparseable stretches. Position-independent
+   identities for the gate's well-formedness guard: edits elsewhere in
+   the file shift an untouched error's offsets but not its text. *)
+let error_texts source (root : Tree.src Tree.t) : string list =
+  let rec go acc (n : Tree.src Tree.t) =
+    if n.Tree.node_type = "ERROR" then Tree.text source n :: acc
+    else
+      List.fold_left
+        (fun a (c : Tree.src Tree.child) -> go a c.node)
+        acc n.Tree.children
+  in
+  go [] root
+
+(* Multiset inclusion: every element of [xs] consumed from [allowance]. *)
+let multiset_covered xs allowance =
+  let tbl = Hashtbl.create 8 in
+  List.iter
+    (fun a ->
+      Hashtbl.replace tbl a (1 + Option.value ~default:0 (Hashtbl.find_opt tbl a)))
+    allowance;
+  List.for_all
+    (fun x ->
+      match Hashtbl.find_opt tbl x with
+      | Some n when n > 0 ->
+          Hashtbl.replace tbl x (n - 1);
+          true
+      | _ -> false)
+    xs
 
 (* Plain substring membership: does [sub] occur in [s]? Used by the
    deletion-direction guard of the decomposable check. *)
@@ -707,6 +733,7 @@ let build_site_db ~ctx (cs : changeset) : (string, site_info) Hashtbl.t =
                 si_after = after_source;
                 si_language = language;
                 si_regions = changed_regions d;
+                si_before_errors = error_texts before_source bt.Tree.root;
               }
           with _ -> ())
       | Added _ | Deleted _ -> ())
@@ -868,17 +895,24 @@ let site_eval ~ctx ~language ~pattern_text (si : site_info) : site_evaluation
         in
         let bt = Tree.parse ~ctx ~language t'' in
         let at = Tree.parse ~ctx ~language si.si_after in
-        (* Well-formedness: a rule may not introduce parse errors its
-           target doesn't have. A removal-only rule that deletes a
-           grammar-required sub-expression produces a broken intermediate
-           (e.g. [const r = ;]); the re-diff over that ERROR-laden tree is
-           unreliable, and it once judged such sites "fully explained" —
-           letting a deletion rule out-cover the extraction rule and
-           mis-state preserved values as deleted-then-readded. More
-           ERROR nodes than the after means the residual would have to
-           repair damage the rule itself caused — off the geodesic by
-           construction. *)
-        if error_node_count bt.Tree.root > error_node_count at.Tree.root
+        (* Well-formedness: a transform must produce parseable code. A
+           removal-only rule that deletes a grammar-required
+           sub-expression yields a broken intermediate ([const r = ;]);
+           the re-diff over that ERROR-laden tree is unreliable, and it
+           once judged such sites "fully explained" — letting a deletion
+           rule out-cover the extraction rule and mis-state preserved
+           values as deleted-then-readded. Every ERROR in [t''] must
+           already exist in the before (pre-dates the rule; real corpora
+           do contain the odd unparseable stretch) or in the after (the
+           target state itself carries it) — by error text, position
+           shifts aside. An error in neither endpoint is one the rule
+           invented, and repairing rule-inflicted damage is not a
+           residual's job. *)
+        if
+          not
+            (multiset_covered
+               (error_texts t'' bt.Tree.root)
+               (si.si_before_errors @ error_texts si.si_after at.Tree.root))
         then no_fire
         else begin
         let d = Tree_diff.diff ~before:bt ~after:at in

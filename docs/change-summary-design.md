@@ -1129,14 +1129,19 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   **geodesic test** (§2.3), computed at evaluation in two legs:
 
   *Well-formedness precondition (all verdicts, not just decomposable):*
-  the rule's output may not contain more parse-ERROR nodes than the
-  site's after. A removal-only rule deleting a grammar-required
-  sub-expression yields a broken intermediate (`const r = ;`) whose
-  re-diff is unreliable — it once judged such sites fully explained,
-  letting a bare deletion rule out-cover the real extraction rule and
-  mis-state preserved values as deleted-then-readded (fixture
-  `ts_unwrap_rename_confound`). Damage the rule itself causes is not a
-  residual's job to repair.
+  a transform must produce parseable code — every parse-ERROR in the
+  rule's output must already exist (by error text) in the site's before
+  or after; an error in neither endpoint is one the rule invented.
+  A removal-only rule deleting a grammar-required sub-expression yields
+  a broken intermediate (`const r = ;`) whose re-diff is unreliable — it
+  once judged such sites fully explained, letting a bare deletion rule
+  out-cover the real extraction rule and mis-state preserved values as
+  deleted-then-readded (fixture `ts_unwrap_rename_confound`). Damage the
+  rule itself causes is not a residual's job to repair. Pre-existing
+  errors are tolerated rather than disqualifying the file — real corpora
+  contain the odd unparseable stretch (a soak survey found 5 of 3240
+  files), and a rule editing elsewhere in such a file is unaffected
+  (fixture `ts_rename_with_parse_error`).
 
   *Residual leg — ordered tree inclusion* (`Tree_inclusion`, on `main`;
   Kilpeläinen & Mannila): `t''` and the after must be
