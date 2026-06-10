@@ -1226,15 +1226,51 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   resolves at that file (a property test over the soak corpus, not a
   golden file).
 
-- **M2 — Recursive residual clustering + tiered rules.** Run the clustering
-  pipeline on the accumulated residuals of *all* rules globally — not per
-  rule — so a secondary change shared across two primary clusters
-  becomes one rule (§3.3 "common factors"). `after=` attribution is
-  therefore per-site, not per-rule (`after=R1` at one site, `after=R2`
-  at another); §9.3's format gains that refinement. Residuals
-  attributed with chains (`rule=R1,R2`). Test: §5.2 extended with a
-  third site producing a secondary rule, plus a common-factor case
-  (two primary clusters whose residuals share a change).
+- **M2 — Recursive residual clustering + tiered rules. (Landed.)** Run the
+  clustering pipeline on the accumulated residuals of *all* rules
+  globally — not per rule — so a secondary change shared across two
+  primary clusters becomes one rule (§3.3 "common factors"). `after=`
+  attribution is per-site, not per-rule; §9.3 renders it in the rule
+  header when uniform, as site-line annotations when mixed. Residuals
+  attributed with chains (`rule=R1,R2`).
+
+  As built: `summarize` is a loop over `tier_rules` (the extracted
+  propose/evaluate/select core). After each tier, the changeset is
+  rebuilt from the (intermediate, after) pairs the rules so far leave
+  unexplained — including files no rule claims, whose residuals join the
+  global pool — and the loop recurses until a tier emits nothing (depth
+  cap 5 and a no-progress check as backstops; each emitting tier
+  strictly shrinks the gap by the net-progress guard). Application
+  contract: per file, claiming rules apply in rule-id order; ids number
+  across tiers, so id order is tier order. **Dead-rule pruning**: a
+  tier's rules are evaluated independently against its changeset, but
+  application composes sequentially — an earlier rule can consume a
+  later rule's matches entirely (`f($X,$Y) ⤳ g($X)` rewrites the call
+  that `f($X+1,$Y) ⤳ g($X)` would match). Such never-firing rules are
+  dropped; their regions fall through to the next tier, which
+  re-proposes against the actual intermediate. Tests:
+  `ts_arg_drop_tiered` (the §5.2 ideal: coarse rule support 4 +
+  `($X+1) ⤳ ($X)` `after=R1`, no residuals), `tsx_memo_tiered_deps`
+  (reshape + shared-deps tier-2 rule, no residuals), plus direct format
+  tests for uniform/mixed `after=` rendering.
+
+  Two findings from building it. (1) *Aligned secondary changes are
+  caught at tier 1*: multi-level change-pair emission already proposes
+  an inner pair (`x+1 ⤳ x`) whenever the tree-diff aligns it, and
+  selection takes both rules in one pass — tier 2 is genuinely needed
+  only for gaps invisible to the tier-1 diff, chiefly content with no
+  before-counterpart (a dependency array a coarsened rule writes as
+  `[]`). (2) *Cross-primary common factors rarely survive the anchoring
+  bar*: a minimal shared gap like `[] ⤳ [dep]` is punctuation-only on
+  the match side and is rightly rejected as unanchored
+  (`tsx_tier_unanchored_factor` pins the honest fallback — attributed
+  per-primary residuals); anchored wider levels are primary-specific.
+  Mixed per-site `after=` therefore exists in the format but no natural
+  fixture produces it yet. On the real soaks M2 is byte-neutral: their
+  residuals are one-offs or context-dependent renames (only some
+  occurrences of an identifier renamed), which fail the placement gate
+  at any tier — §3.2 contextual emission is the unlock there, and tiers
+  will compound with it.
 
 - **M2.5 — Decomposition safety as a property test.** The M1.8c gate
   enforces safety at emission time; this milestone re-states it as an

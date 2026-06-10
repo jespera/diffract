@@ -1,0 +1,23 @@
+# rule R1  support=3  language=tsx
+@@
+match: strict
+metavar _H0: single
+metavar _H1: single
+@@
+- _H0({ select: (m) => m._H1 })
++ useAppMemo(_H0(), useCallback((m) => m._H1, []))
+# sites R1
+a.tsx
+b.tsx
+c.tsx
+
+# rule R2  support=2  language=tsx  after=R1
+@@
+match: strict
+metavar _H0: single
+@@
+- ((m) => m._H0, [])
++ ((m) => m._H0, [dep])
+# sites R2
+a.tsx
+b.tsx

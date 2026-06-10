@@ -1,8 +1,6 @@
 (** Change summary: cluster systematic edits across a changeset into
-    spatch-style rules.
-
-    M1 scope — rules only, no residuals or tiered attribution. See
-    [docs/change-summary-design.md]. *)
+    spatch-style rules, recursively — residuals re-cluster into tiered
+    rules (M2). See [docs/change-summary-design.md]. *)
 
 type file_change =
   | Modified of {
@@ -24,6 +22,12 @@ type rule = {
       (** grammar the rule's pattern body is written in; all instances share *)
   sites : string list;
       (** distinct files where the rule fires, sorted lexicographically *)
+  after : (string * string list) list;
+      (** M2 per-site tier attribution: [(site, earlier rule ids)] — at
+          that site the rule's pattern matches the intermediate produced
+          by applying those earlier rules, so rule-id order is application
+          order. Empty for tier-1 rules; a site absent from the list has
+          no predecessors. *)
 }
 
 type residual = {
