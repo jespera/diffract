@@ -365,8 +365,12 @@ let roundtrip_case case_name () =
                 (Tree.equal t1.Tree.source t1.Tree.root t2.Tree.source
                    t2.Tree.root)
           | Some res ->
+              (* Recompute the residual the same way summarize renders it
+                 (zero-context, layout-only hunks dropped) — the check is
+                 that the emitted residual truthfully relates the actual
+                 post-rule intermediate to the after-source. *)
               let regen =
-                Text_diff.generate_diff ~context:0 ~file_path:path
+                Change_summary.residual_diff ~ctx ~language ~file_path:path
                   ~original:applied ~transformed:after_source ()
               in
               Alcotest.(check string)

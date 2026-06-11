@@ -7,7 +7,8 @@
 
 type diff_op = DKeep of string | DRemove of string | DAdd of string
 
-let generate_diff ?(context = 3) ~file_path ~original ~transformed () =
+let generate_diff ?(context = 3) ?keep_hunk ~file_path ~original ~transformed
+    () =
   if original = transformed then ""
   else
     let orig_lines = String.split_on_char '\n' original in
@@ -71,27 +72,53 @@ let generate_diff ?(context = 3) ~file_path ~original ~transformed () =
             in
             let hunk_end = find_hunk_end change_idx change_idx in
             let hunk = Array.sub ops_arr hunk_start (hunk_end - hunk_start) in
-            hunk :: find_hunks hunk_end
+            (hunk_start, hunk) :: find_hunks hunk_end
     in
     let hunks = find_hunks 0 in
+    (* Original-side (0-based) line index at which each op sits: DKeep and
+       DRemove advance the original; DAdd does not. Used to report each
+       hunk's original position to [keep_hunk]. *)
+    let orig_line_at = Array.make (n_ops + 1) 0 in
+    for k = 0 to n_ops - 1 do
+      orig_line_at.(k + 1) <-
+        (orig_line_at.(k)
+        + match ops_arr.(k) with DKeep _ | DRemove _ -> 1 | DAdd _ -> 0)
+    done;
+    let emitted = ref false in
     List.iter
-      (fun hunk ->
-        Buffer.add_string buf "@@ ... @@\n";
-        Array.iter
-          (fun op ->
-            match op with
-            | DKeep s ->
-                Buffer.add_char buf ' ';
-                Buffer.add_string buf s;
-                Buffer.add_char buf '\n'
-            | DRemove s ->
-                Buffer.add_char buf '-';
-                Buffer.add_string buf s;
-                Buffer.add_char buf '\n'
-            | DAdd s ->
-                Buffer.add_char buf '+';
-                Buffer.add_string buf s;
-                Buffer.add_char buf '\n')
-          hunk)
+      (fun (start_op, hunk) ->
+        let keep =
+          match keep_hunk with
+          | None -> true
+          | Some f ->
+              let orig_start = orig_line_at.(start_op) in
+              let orig_len =
+                Array.fold_left
+                  (fun a op ->
+                    match op with DKeep _ | DRemove _ -> a + 1 | DAdd _ -> a)
+                  0 hunk
+              in
+              f ~orig_start ~orig_len
+        in
+        if keep then begin
+          emitted := true;
+          Buffer.add_string buf "@@ ... @@\n";
+          Array.iter
+            (fun op ->
+              match op with
+              | DKeep s ->
+                  Buffer.add_char buf ' ';
+                  Buffer.add_string buf s;
+                  Buffer.add_char buf '\n'
+              | DRemove s ->
+                  Buffer.add_char buf '-';
+                  Buffer.add_string buf s;
+                  Buffer.add_char buf '\n'
+              | DAdd s ->
+                  Buffer.add_char buf '+';
+                  Buffer.add_string buf s;
+                  Buffer.add_char buf '\n')
+            hunk
+        end)
       hunks;
-    Buffer.contents buf
+    if !emitted then Buffer.contents buf else ""

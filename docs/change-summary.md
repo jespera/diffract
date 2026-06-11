@@ -83,6 +83,11 @@ src/b.kt
 - A residual's `rule=` list names the rules applied before the gap was
   measured; a residual with no `rule=` is a pure one-off change (or a
   file-level add/delete, shown against `/dev/null`).
+- Layout-only changes never appear: a residual hunk is emitted only when
+  it touches a change the *parse tree* can see, so re-indentation,
+  spacing tweaks (`{ }` vs `{}`), and line splits are dropped — a file
+  whose entire leftover is layout emits no residual at all. (The summary's
+  reconstruction guarantee is modulo layout throughout.)
 
 ## Worked examples
 

@@ -1392,6 +1392,22 @@ Section kinds:
 File add/delete is expressed as a residual with `--- /dev/null` or
 `+++ /dev/null`. No dedicated `file_ops` section.
 
+**Layout-only hunks are dropped from residuals.** A residual hunk is
+emitted only when it touches a tree-level changed region of the
+(intermediate, after) diff (`residual_diff`): re-indentation, spacing
+(`{ }` vs `{}`), and line splits are invisible to the parse tree and
+state nothing about the change — the reconstruction guarantee is
+already modulo layout (the whole-file gap check, the gate's tree-level
+re-diff). A file whose entire gap is layout emits no residual at all.
+The boundary is deliberately the *tree*, not the token stream: a change
+with an identical token sequence can still reshape the parse (in
+Kotlin, moving a property's `get() = …` onto its own line moves the
+getter from a `property_declaration` child to a `class_body` sibling),
+and in newline-sensitive grammars token-stream equality does not imply
+semantic equality — such hunks are conservatively kept. Test:
+`ts_layout_residual_filtered` (a layout-only gap emits nothing; a mixed
+gap keeps only its real hunk).
+
 **Section-delimiter safety: the column-0 role-indicator contract.** The
 parser treats any line beginning with `# ` at column 0 as a section
 header. For this to be unambiguous, emitted rule bodies must never
