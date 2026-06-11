@@ -1251,11 +1251,26 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   later rule's matches entirely (`f($X,$Y) ⤳ g($X)` rewrites the call
   that `f($X+1,$Y) ⤳ g($X)` would match). Such never-firing rules are
   dropped; their regions fall through to the next tier, which
-  re-proposes against the actual intermediate. Tests:
-  `ts_arg_drop_tiered` (the §5.2 ideal: coarse rule support 4 +
+  re-proposes against the actual intermediate. **Chain-effect
+  accounting** extends this per site: a rule can be live at one file
+  and consumed-by-an-earlier-rule at others — the fused-rescue shape
+  from a real soak, where `assignee = null ⤳ assignees = emptySet()`
+  is the only rule safe at a file the bare rename cannot claim (an
+  unrelated `assignee` lives there), yet a no-op everywhere the rename
+  runs first. After selection, the chain is applied once per file and
+  every rule's `sites`, `support`, and per-site `after` are shrunk to
+  where it actually edits — so support never lists a file the rule
+  doesn't change, a chain-pruned rule may honestly report support
+  below `min_support` (it was selected for coverage it genuinely
+  provides), and residual `rule=` chains name only rules that acted on
+  the file. Selection, ids, and application order are not revisited;
+  the pass only makes the bookkeeping describe the chain truthfully.
+  Tests: `ts_arg_drop_tiered` (the §5.2 ideal: coarse rule support 4 +
   `($X+1) ⤳ ($X)` `after=R1`, no residuals), `tsx_memo_tiered_deps`
-  (reshape + shared-deps tier-2 rule, no residuals), plus direct format
-  tests for uniform/mixed `after=` rendering.
+  (reshape + shared-deps tier-2 rule, no residuals),
+  `kotlin_rename_fused_rescue` (rename + fused rescue at the blocked
+  file + anchored tier-2 value fix — the chain-accounting shape), plus
+  direct format tests for uniform/mixed `after=` rendering.
 
   Two findings from building it. (1) *Aligned secondary changes are
   caught at tier 1*: multi-level change-pair emission already proposes

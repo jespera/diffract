@@ -20,8 +20,16 @@ type rule = {
   id : string;
   pattern_text : string;
   support : int;
+      (** number of edits the rule makes in the applied chain, summed
+          over [sites] — chain-effective, not evaluation-time (see
+          [sites]) *)
   language : string;
-  sites : string list;  (** distinct file paths where the rule fires, sorted *)
+  sites : string list;
+      (** distinct file paths where the rule actually edits something
+          when the summary's rules are applied in id order — not merely
+          where its pattern matches the original source. An earlier rule
+          can consume a later rule's matches at some files; those files
+          are not listed (M2 chain-effect accounting). *)
   after : (string * string list) list;
       (** M2 per-site tier attribution: [(site, earlier rule ids)] — the
           rule's pattern at [site] matches the intermediate produced by
@@ -2482,15 +2490,95 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
         else tier_loop (tier_idx + 1) next acc
   in
   let combined = tier_loop 1 cs [] in
-  (* M1.9 residual extraction: for each Modified file, apply its claiming
-     rules (in id order) and diff the intermediate against the real
-     after-source. The gap, if any, is the residual — computed against
-     what the rules *actually* produce, so rules + residual reproduce the
-     site's change by construction. Files no rule claims yield
-     unattributed residuals (pure one-off changes); Added/Deleted files
-     appear as [/dev/null] residuals (M1.7). Layout-only gaps are
-     skipped — the same tolerance the safety gate's tree-level re-diff
-     gives. *)
+  (* ── Chain-effect accounting (per-site) ──────────────────────────
+     A rule's sites and support come from rule-independent evaluation
+     (§3.3), but application composes sequentially in id order — an
+     earlier rule can consume a later rule's matches at *some* of its
+     sites while the later rule stays live at others (the fused-rescue
+     shape: [assignee = null ⤳ assignees = emptySet()] is a no-op
+     wherever the bare rename already ran, yet is the only safe rule at
+     a file the rename cannot claim). Reporting evaluation-time sites
+     would list files where the rule never actually edits anything.
+     Walk the chain once per file, recording which (rule, file) pairs
+     really fire and the final intermediate; then shrink each rule's
+     sites, support, and after-attribution to its chain-effective
+     extension. Selection, rule ids, and application order are NOT
+     revisited — the chain (and so reconstruction) is already fixed;
+     this pass only makes the bookkeeping describe it truthfully. A
+     chain-pruned rule may legitimately report support below
+     min_support: it was selected for coverage it genuinely provides
+     at its surviving sites. *)
+  let fires : (string * string, int) Hashtbl.t = Hashtbl.create 32 in
+  let inters : (string, string) Hashtbl.t = Hashtbl.create 32 in
+  List.iter
+    (function
+      | Modified { path; language; before_source; _ } ->
+          let inter =
+            List.fold_left
+              (fun s (r : rule) ->
+                if r.language = language && List.mem path r.sites then
+                  try
+                    let edits =
+                      Matcher.transform_edits ~ctx ~language:r.language
+                        ~pattern_text:r.pattern_text ~source_text:s
+                    in
+                    if edits = [] then s
+                    else begin
+                      Hashtbl.replace fires (r.id, path) (List.length edits);
+                      Matcher.transform ~ctx ~language:r.language
+                        ~pattern_text:r.pattern_text ~source_text:s
+                    end
+                  with _ -> s
+                else s)
+              before_source combined
+          in
+          Hashtbl.replace inters path inter
+      | Added _ | Deleted _ -> ())
+    cs.files;
+  let combined =
+    List.filter_map
+      (fun (r : rule) ->
+        let sites =
+          List.filter (fun f -> Hashtbl.mem fires (r.id, f)) r.sites
+        in
+        if sites = [] then None
+        else
+          let support =
+            List.fold_left
+              (fun a f ->
+                a + Option.value ~default:0 (Hashtbl.find_opt fires (r.id, f)))
+              0 sites
+          in
+          (* Keep the tier-derived after-attribution, restricted to the
+             surviving sites, and within each site to predecessors that
+             actually edited there (a no-op predecessor did not shape
+             the intermediate this rule matched). *)
+          let after =
+            List.filter_map
+              (fun (site, preds) ->
+                if not (List.mem site sites) then None
+                else
+                  match
+                    List.filter
+                      (fun pid -> Hashtbl.mem fires (pid, site))
+                      preds
+                  with
+                  | [] -> None
+                  | preds -> Some (site, preds))
+              r.after
+          in
+          Some { r with sites; support; after })
+      combined
+  in
+  (* M1.9 residual extraction: for each Modified file, the chain pass
+     above already produced the intermediate (claiming rules applied in
+     id order); diff it against the real after-source. The gap, if any,
+     is the residual — computed against what the rules *actually*
+     produce, so rules + residual reproduce the site's change by
+     construction. Files no rule claims yield unattributed residuals
+     (pure one-off changes); Added/Deleted files appear as [/dev/null]
+     residuals (M1.7). Layout-only gaps are skipped — the same tolerance
+     the safety gate's tree-level re-diff gives. *)
   let residuals =
     let rules_at f =
       List.filter (fun (r : rule) -> List.mem f r.sites) combined
@@ -2522,9 +2610,13 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
     List.filter_map
       (fun fc ->
         match fc with
-        | Modified { path; language; before_source; after_source } ->
+        | Modified { path; language = _; before_source; after_source } ->
             let claiming = rules_at path in
-            let inter = apply_claiming combined path ~language before_source in
+            let inter =
+              match Hashtbl.find_opt inters path with
+              | Some s -> s
+              | None -> before_source
+            in
             if
               inter = after_source
               || ws_collapse inter = ws_collapse after_source
