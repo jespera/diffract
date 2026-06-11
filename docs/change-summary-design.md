@@ -1399,14 +1399,19 @@ emitted only when it touches a tree-level changed region of the
 state nothing about the change — the reconstruction guarantee is
 already modulo layout (the whole-file gap check, the gate's tree-level
 re-diff). A file whose entire gap is layout emits no residual at all.
-The boundary is deliberately the *tree*, not the token stream: a change
-with an identical token sequence can still reshape the parse (in
-Kotlin, moving a property's `get() = …` onto its own line moves the
-getter from a `property_declaration` child to a `class_body` sibling),
-and in newline-sensitive grammars token-stream equality does not imply
-semantic equality — such hunks are conservatively kept. Test:
-`ts_layout_residual_filtered` (a layout-only gap emits nothing; a mixed
-gap keeps only its real hunk).
+The boundary is deliberately the *tree*, not the token stream, for two
+reasons. First, in newline-sensitive grammars token-stream equality
+does not imply semantic equality (Kotlin's `return` + newline +
+expression is not `return expression`), so a token-level criterion
+could hide real changes. Second, the tool has no oracle beyond the
+parse: tree-sitter-kotlin reshapes its tree when a property's
+`get() = …` moves onto its own line (the getter goes from
+`property_declaration` child to `class_body` sibling) even though both
+forms are semantically identical Kotlin — a grammar artifact, but one
+the filter cannot distinguish from a real restructure, so such hunks
+are conservatively kept (noise may survive; nothing real is ever
+dropped). Test: `ts_layout_residual_filtered` (a layout-only gap emits
+nothing; a mixed gap keeps only its real hunk).
 
 **Section-delimiter safety: the column-0 role-indicator contract.** The
 parser treats any line beginning with `# ` at column 0 as a section
