@@ -1,3 +1,10 @@
 (executables
- (names traverse kotlin_advanced_example check_parse_errors inspect_change_pairs change_summary show_ast dump_full_ast)
+ (names
+  traverse
+  kotlin_advanced_example
+  check_parse_errors
+  inspect_change_pairs
+  change_summary
+  show_ast
+  dump_full_ast)
  (libraries diffract))

@@ -224,6 +224,6 @@ val transform_edits :
 (** The edits {!transform} would apply, without applying them — the same
     matching and template instantiation, surfaced as spans. Sorted by
     [start_byte], deduplicated. Used by callers that need to *inspect* a
-    transform's effect against other information about the source (e.g.
-    the change-summary safety gate comparing edits against a diff's
-    changed regions) rather than the rewritten text. *)
+    transform's effect against other information about the source (e.g. the
+    change-summary safety gate comparing edits against a diff's changed regions)
+    rather than the rewritten text. *)

@@ -1,6 +1,6 @@
 (** Change summary: cluster systematic edits across a changeset into
-    spatch-style rules. M1 scope — rules only (no residuals, no tiered
-    [after=] attribution). See docs/change-summary-design.md. *)
+    spatch-style rules. M1 scope — rules only (no residuals, no tiered [after=]
+    attribution). See docs/change-summary-design.md. *)
 
 (* ── Public types ────────────────────────────────────────────────── *)
 
@@ -20,25 +20,23 @@ type rule = {
   id : string;
   pattern_text : string;
   support : int;
-      (** number of edits the rule makes in the applied chain, summed
-          over [sites] — chain-effective, not evaluation-time (see
-          [sites]) *)
+      (** number of edits the rule makes in the applied chain, summed over
+          [sites] — chain-effective, not evaluation-time (see [sites]) *)
   language : string;
   sites : string list;
-      (** distinct file paths where the rule actually edits something
-          when the summary's rules are applied in id order — not merely
-          where its pattern matches the original source. An earlier rule
-          can consume a later rule's matches at some files; those files
-          are not listed (M2 chain-effect accounting). *)
+      (** distinct file paths where the rule actually edits something when the
+          summary's rules are applied in id order — not merely where its pattern
+          matches the original source. An earlier rule can consume a later
+          rule's matches at some files; those files are not listed (M2
+          chain-effect accounting). *)
   after : (string * string list) list;
-      (** M2 per-site tier attribution: [(site, earlier rule ids)] — the
-          rule's pattern at [site] matches the intermediate produced by
-          applying those earlier rules, so it must be applied after them
-          (rule-id order is application order). Empty for tier-1 rules;
-          a site absent from the list has no predecessors. Global residual
-          clustering makes this per-site: one tier-2 rule may follow
-          different primaries at different sites (design §3.3 "common
-          factors", §9.3). *)
+      (** M2 per-site tier attribution: [(site, earlier rule ids)] — the rule's
+          pattern at [site] matches the intermediate produced by applying those
+          earlier rules, so it must be applied after them (rule-id order is
+          application order). Empty for tier-1 rules; a site absent from the
+          list has no predecessors. Global residual clustering makes this
+          per-site: one tier-2 rule may follow different primaries at different
+          sites (design §3.3 "common factors", §9.3). *)
 }
 
 type residual = {
@@ -49,9 +47,9 @@ type residual = {
 
 type summary = { rules : rule list; residuals : residual list }
 
-(** Collapse whitespace runs to single spaces and trim. Layout-only
-    differences are presentational, not a statement about the change —
-    the same tolerance the safety gate's tree-level re-diff gives. *)
+(** Collapse whitespace runs to single spaces and trim. Layout-only differences
+    are presentational, not a statement about the change — the same tolerance
+    the safety gate's tree-level re-diff gives. *)
 let ws_collapse s =
   let b = Buffer.create (String.length s) in
   let pend = ref false in
@@ -77,10 +75,10 @@ type pat_node =
       children : pat_child list;
       template : template_part list;
           (** Inter-child source text and child placeholders, used by the
-              renderer to reconstruct the node's surface syntax. Captures
-              source bytes (e.g. the quote delimiters of a string literal)
-              that the grammar consumes silently — i.e. that fall inside
-              the node's byte range but aren't exposed as child nodes. *)
+              renderer to reconstruct the node's surface syntax. Captures source
+              bytes (e.g. the quote delimiters of a string literal) that the
+              grammar consumes silently — i.e. that fall inside the node's byte
+              range but aren't exposed as child nodes. *)
     }
 
 and pat_child = { field_name : string option; child : pat_node }
@@ -92,24 +90,23 @@ type instance = {
   before_text : string;
   after_text : string;
   before_full_source : string;
-      (** Full pre-change source of the file containing this site, used
-          by the applicability check to verify the rendered pattern
-          actually matches in real code. *)
+      (** Full pre-change source of the file containing this site, used by the
+          applicability check to verify the rendered pattern actually matches in
+          real code. *)
   file : string;
   line : int;
   language : string;
   site_start : int;
   site_end : int;
   ipat : edit_pat;
-      (** The instance's own fully-concrete pattern (no holes) — what the
-          site's change pair anti-unifies *from*. Kept so a cluster can be
-          re-specialized over its surviving instances after covering and
-          safety shedding: a hole the survivors no longer vary on
-          collapses back to the literal. *)
+      (** The instance's own fully-concrete pattern (no holes) — what the site's
+          change pair anti-unifies *from*. Kept so a cluster can be
+          re-specialized over its surviving instances after covering and safety
+          shedding: a hole the survivors no longer vary on collapses back to the
+          literal. *)
 }
 
 type cluster = { pattern : edit_pat; instances : instance list }
-
 type side = Before_side | After_side
 
 type one_sided_instance = {
@@ -122,24 +119,27 @@ type one_sided_instance = {
   os_end_byte : int;
 }
 
+type one_sided_candidate = {
+  os_pat : pat_node;
+  os_instance : one_sided_instance;
+}
 (** Internal candidate for M1.6 fusion: carries the structural shape alongside
     its site metadata. Not emitted as rules in M1. *)
-type one_sided_candidate = { os_pat : pat_node; os_instance : one_sided_instance }
 
-let one_sided_candidate_instance (c : one_sided_candidate) : one_sided_instance =
+let one_sided_candidate_instance (c : one_sided_candidate) : one_sided_instance
+    =
   c.os_instance
 
 (* ── Conversion ──────────────────────────────────────────────────── *)
 
-(** Build the inter-child template for a tree-sitter node. Walks the
-    node's byte range from [start_byte] to [end_byte], emitting [Lit]
-    parts for source bytes outside any kept child and [Slot j] for the
-    [j]-th kept child (0-based among kept children). Children for which
-    [keep c = false] have their byte range absorbed into the surrounding
-    [Lit] so the rendered output preserves the original surface text.
-    Captures source bytes that the grammar consumes silently (e.g.
-    string-literal quote delimiters in Kotlin/TS, or leading/trailing
-    whitespace inside a parenthesised list). *)
+(** Build the inter-child template for a tree-sitter node. Walks the node's byte
+    range from [start_byte] to [end_byte], emitting [Lit] parts for source bytes
+    outside any kept child and [Slot j] for the [j]-th kept child (0-based among
+    kept children). Children for which [keep c = false] have their byte range
+    absorbed into the surrounding [Lit] so the rendered output preserves the
+    original surface text. Captures source bytes that the grammar consumes
+    silently (e.g. string-literal quote delimiters in Kotlin/TS, or
+    leading/trailing whitespace inside a parenthesised list). *)
 let build_template ~source ~(node : Tree.src Tree.t)
     ?(keep = fun (_ : Tree.src Tree.t) -> true) () : template_part list =
   let parts = ref [] in
@@ -159,7 +159,7 @@ let build_template ~source ~(node : Tree.src Tree.t)
         incr kept_idx;
         cursor := c.node.end_byte
       end
-      (* else: dropped child — leave cursor alone so its bytes are
+        (* else: dropped child — leave cursor alone so its bytes are
          absorbed into the next Lit emit. *))
     node.children;
   emit_lit_upto node.end_byte;
@@ -167,15 +167,14 @@ let build_template ~source ~(node : Tree.src Tree.t)
 
 let is_ws c = c = ' ' || c = '\t' || c = '\n' || c = '\r'
 
-(** True if any byte in the node's range that is not covered by a child
-    is non-whitespace. These are "silently-consumed delimiters" — bytes
-    the grammar embeds in the parent node's text but does not expose as
-    children (e.g. the surrounding quotes of a string literal in
-    Kotlin/TS, the slashes of a regex literal). Treat such nodes as
-    leaves during [of_src]: anti-unification then holes the whole node
-    when its content varies, rather than holing inside the delimiters
-    and rendering a placeholder embedded inside a string literal — which
-    the pattern parser would misread as the literal characters of the
+(** True if any byte in the node's range that is not covered by a child is
+    non-whitespace. These are "silently-consumed delimiters" — bytes the grammar
+    embeds in the parent node's text but does not expose as children (e.g. the
+    surrounding quotes of a string literal in Kotlin/TS, the slashes of a regex
+    literal). Treat such nodes as leaves during [of_src]: anti-unification then
+    holes the whole node when its content varies, rather than holing inside the
+    delimiters and rendering a placeholder embedded inside a string literal —
+    which the pattern parser would misread as the literal characters of the
     delimited token rather than as a metavariable. *)
 let has_silent_concrete_delimiters ~source ~(node : Tree.src Tree.t) : bool =
   let found = ref false in
@@ -195,14 +194,13 @@ let has_silent_concrete_delimiters ~source ~(node : Tree.src Tree.t) : bool =
   !found
 
 (** Some grammars (TypeScript, JavaScript) expose string-literal quotes as
-    unnamed child nodes rather than consuming them silently. These nodes
-    have full byte-coverage by children (so [has_silent_concrete_delimiters]
-    misses them) but still wrap their content in tokens that would
-    sandwich any rendered hole into a string-literal token. Treat as a
-    leaf when an unnamed child has text equal to a string-quote character.
-    Limited to double-quote, single-quote, and backtick; the slash is
-    excluded because it is also the division operator and would
-    misclassify binary expressions. *)
+    unnamed child nodes rather than consuming them silently. These nodes have
+    full byte-coverage by children (so [has_silent_concrete_delimiters] misses
+    them) but still wrap their content in tokens that would sandwich any
+    rendered hole into a string-literal token. Treat as a leaf when an unnamed
+    child has text equal to a string-quote character. Limited to double-quote,
+    single-quote, and backtick; the slash is excluded because it is also the
+    division operator and would misclassify binary expressions. *)
 let has_quote_delim_children ~source ~(node : Tree.src Tree.t) : bool =
   List.exists
     (fun (c : _ Tree.child) ->
@@ -289,7 +287,8 @@ let render_pattern_body (ep : edit_pat) : string =
   Buffer.add_string buf "match: strict\n";
   List.iter
     (fun h ->
-      Buffer.add_string buf (Printf.sprintf "metavar %s: single\n" (hole_name h)))
+      Buffer.add_string buf
+        (Printf.sprintf "metavar %s: single\n" (hole_name h)))
     holes;
   Buffer.add_string buf "@@\n";
   let before_text = render_pat_node ep.before in
@@ -302,9 +301,9 @@ let render_pattern_body (ep : edit_pat) : string =
     (String.split_on_char '\n' after_text);
   Buffer.contents buf
 
-(** Render a removal-only pattern as a .pat-style block body containing
-    only [-] lines. Used for unpaired Before_side one-sided clusters that
-    survive M1.6 fusion as bare removals. *)
+(** Render a removal-only pattern as a .pat-style block body containing only [-]
+    lines. Used for unpaired Before_side one-sided clusters that survive M1.6
+    fusion as bare removals. *)
 let render_removal_only_body (p : pat_node) : string =
   let holes = collect_holes [] p |> List.sort compare in
   let buf = Buffer.create 128 in
@@ -312,7 +311,8 @@ let render_removal_only_body (p : pat_node) : string =
   Buffer.add_string buf "match: strict\n";
   List.iter
     (fun h ->
-      Buffer.add_string buf (Printf.sprintf "metavar %s: single\n" (hole_name h)))
+      Buffer.add_string buf
+        (Printf.sprintf "metavar %s: single\n" (hole_name h)))
     holes;
   Buffer.add_string buf "@@\n";
   let text = render_pat_node p in
@@ -340,16 +340,16 @@ let edit_size ep = pat_size ep.before + pat_size ep.after
 
 (* ── Anti-unification ────────────────────────────────────────────── *)
 
-(** Build a recursive anti-unifier parameterised on a [hole_for] function.
-    When [hole_for] is shared across multiple invocations (as in
-    [anti_unify_edits] across the before and after sides), identical
-    concrete-pair differences reuse the same hole index. *)
+(** Build a recursive anti-unifier parameterised on a [hole_for] function. When
+    [hole_for] is shared across multiple invocations (as in [anti_unify_edits]
+    across the before and after sides), identical concrete-pair differences
+    reuse the same hole index. *)
 let mk_anti_unify hole_for =
   let rec go p1 p2 =
     match (p1, p2) with
     | Hole h1, Hole h2 when h1 = h2 -> Hole h1
-    | Leaf l1, Leaf l2
-      when l1.node_type = l2.node_type && l1.value = l2.value ->
+    | Leaf l1, Leaf l2 when l1.node_type = l2.node_type && l1.value = l2.value
+      ->
         Leaf l1
     | PNode n1, PNode n2
       when n1.node_type = n2.node_type
@@ -361,10 +361,7 @@ let mk_anti_unify hole_for =
               if c1.field_name = c2.field_name then
                 { field_name = c1.field_name; child = go c1.child c2.child }
               else
-                {
-                  field_name = None;
-                  child = Hole (hole_for c1.child c2.child);
-                })
+                { field_name = None; child = Hole (hole_for c1.child c2.child) })
             n1.children n2.children
         in
         PNode { n1 with children }
@@ -390,8 +387,8 @@ let anti_unify_edits (e1 : edit_pat) (e2 : edit_pat) : edit_pat =
   let after = go e1.after e2.after in
   { before; after }
 
-(** Anti-unify two single [pat_node]s (used for one-sided candidate
-    clustering in M1.6a). Uses its own hole counter — no cross-side sharing. *)
+(** Anti-unify two single [pat_node]s (used for one-sided candidate clustering
+    in M1.6a). Uses its own hole counter — no cross-side sharing. *)
 let anti_unify_pat (p1 : pat_node) (p2 : pat_node) : pat_node =
   let go = mk_anti_unify (make_hole_for ()) in
   go p1 p2
@@ -448,31 +445,29 @@ let hole_frac ep =
   let s = edit_size ep in
   if s = 0 then 0.0 else float_of_int (edit_holes ep) /. float_of_int s
 
-(** Score a candidate merge for the dendrogram. Pure hole-fraction can
-    pick a merge whose anti-unification holes both sides at unrelated
-    positions — e.g. merging [tokenCache.read → tokenCache.get] with
-    [tokenCache.write → tokenCache.set] holes the property on each
-    side independently, producing a [+]-side hole with no [-]-side
-    binding source (orphan). Such patterns are rejected by the
-    coherence gate, dropping the merge to singletons. Penalise these
-    merges so the greedy step prefers a sibling pairing that keeps
-    holes aligned (e.g. merging different receivers with the same
-    property: [tokenCache.read] + [rateCache.read] → [$H0.read]). *)
+(** Score a candidate merge for the dendrogram. Pure hole-fraction can pick a
+    merge whose anti-unification holes both sides at unrelated positions — e.g.
+    merging [tokenCache.read → tokenCache.get] with
+    [tokenCache.write → tokenCache.set] holes the property on each side
+    independently, producing a [+]-side hole with no [-]-side binding source
+    (orphan). Such patterns are rejected by the coherence gate, dropping the
+    merge to singletons. Penalise these merges so the greedy step prefers a
+    sibling pairing that keeps holes aligned (e.g. merging different receivers
+    with the same property: [tokenCache.read] + [rateCache.read] → [$H0.read]).
+*)
 let merge_score ep =
   let base = hole_frac ep in
   let before_holes = collect_holes [] ep.before in
   let after_holes = collect_holes [] ep.after in
-  let aligned =
-    List.for_all (fun h -> List.mem h before_holes) after_holes
-  in
+  let aligned = List.for_all (fun h -> List.mem h before_holes) after_holes in
   if aligned then base else base +. 10.0
 
 (** Cheap signature for a pattern's root pair, used to short-circuit
-    [build_dendrogram]'s inner loop. Anti-unifying two patterns whose
-    [before] (or [after]) roots differ in kind or node_type produces a
-    hole-rooted pattern that the downstream coherence and safety gates
-    will reject. Comparing this signature is a string equality vs. a
-    full tree anti-unification. *)
+    [build_dendrogram]'s inner loop. Anti-unifying two patterns whose [before]
+    (or [after]) roots differ in kind or node_type produces a hole-rooted
+    pattern that the downstream coherence and safety gates will reject.
+    Comparing this signature is a string equality vs. a full tree
+    anti-unification. *)
 let root_sig (ep : edit_pat) =
   let tag = function
     | Hole _ -> ("H", "")
@@ -498,17 +493,17 @@ let build_dendrogram initial =
       let now = Unix.gettimeofday () in
       if now -. !last_tick >= heartbeat_interval then begin
         Printf.eprintf
-          "  dendrogram: iter %d/%d, n=%d, %d anti-unifies in iter, elapsed %.1fs\n%!"
-          !iter_no (initial_n - 1) !cur_n !cur_antiunifies
-          (now -. t_start);
+          "  dendrogram: iter %d/%d, n=%d, %d anti-unifies in iter, elapsed \
+           %.1fs\n\
+           %!"
+          !iter_no (initial_n - 1) !cur_n !cur_antiunifies (now -. t_start);
         last_tick := now
       end
     end
   in
   if trace then
     Printf.eprintf
-      "  dendrogram: starting hierarchical merge over %d clusters\n%!"
-      initial_n;
+      "  dendrogram: starting hierarchical merge over %d clusters\n%!" initial_n;
   while List.length !nodes > 1 do
     let arr = Array.of_list !nodes in
     let n = Array.length arr in
@@ -527,7 +522,7 @@ let build_dendrogram initial =
     let bfrac = ref (merge_score !bp) in
     for i = 0 to n - 2 do
       for j = i + 1 to n - 1 do
-        if not (i = 0 && j = 1) && sigs.(i) = sigs.(j) then begin
+        if (not (i = 0 && j = 1)) && sigs.(i) = sigs.(j) then begin
           incr cur_antiunifies;
           if !cur_antiunifies mod 1000 = 0 then heartbeat ();
           let p =
@@ -560,19 +555,19 @@ let build_dendrogram initial =
   done;
   if trace then
     Printf.eprintf "  dendrogram: done in %.2fs after %d iterations\n%!"
-      (Unix.gettimeofday () -. t_start) !iter_no;
+      (Unix.gettimeofday () -. t_start)
+      !iter_no;
   List.hd !nodes
 
-(** A pattern is "concrete" iff it contains at least one named [Leaf]
-    or a keyword-shaped unnamed token (one whose text contains an
-    alphabetic character — [array], [function], [class] etc.). Empty
-    [PNode]s whose node_type is pure punctuation ([,], [(], [;])
-    don't count: the pattern is structural scaffolding without a
-    keyword anchor and matches arbitrary content of the right shape.
-    The keyword carve-out is what lets a PHP rule like [array($H0)
-    -> [$H0]] survive coherence: the [array] keyword is the
-    distinguishing concrete signal even though every named-leaf
-    descendant becomes a hole. *)
+(** A pattern is "concrete" iff it contains at least one named [Leaf] or a
+    keyword-shaped unnamed token (one whose text contains an alphabetic
+    character — [array], [function], [class] etc.). Empty [PNode]s whose
+    node_type is pure punctuation ([,], [(], [;]) don't count: the pattern is
+    structural scaffolding without a keyword anchor and matches arbitrary
+    content of the right shape. The keyword carve-out is what lets a PHP rule
+    like [array($H0) -> [$H0]] survive coherence: the [array] keyword is the
+    distinguishing concrete signal even though every named-leaf descendant
+    becomes a hole. *)
 let has_keyword_text s =
   let n = String.length s in
   let rec loop i =
@@ -588,7 +583,8 @@ let rec has_concrete = function
   | Hole _ -> false
   | Leaf _ -> true
   | PNode { children = []; node_type; _ } -> has_keyword_text node_type
-  | PNode { children; _ } -> List.exists (fun c -> has_concrete c.child) children
+  | PNode { children; _ } ->
+      List.exists (fun c -> has_concrete c.child) children
 
 let rec collect_leaf_values acc = function
   | Hole _ -> acc
@@ -597,10 +593,10 @@ let rec collect_leaf_values acc = function
       List.fold_left (fun a c -> collect_leaf_values a c.child) acc children
 
 (** [same_shape_mod_holes p1 p2] holds iff [p1] and [p2] have identical
-    structural shape — same node types at every position and the same
-    number of children at every [PNode]. Leaf {e values} are not compared:
-    a pure rename [foo -> bar] is same-shape, but a call with different
-    argument counts ([foo(a, b)] vs [bar(a)]) is not.
+    structural shape — same node types at every position and the same number of
+    children at every [PNode]. Leaf {e values} are not compared: a pure rename
+    [foo -> bar] is same-shape, but a call with different argument counts
+    ([foo(a, b)] vs [bar(a)]) is not.
 
     Used to distinguish symmetric patterns (pure renames, one-for-one
     substitutions) from asymmetric ones (structural reshapes like dropped
@@ -619,26 +615,24 @@ let rec same_shape_mod_holes p1 p2 =
            n1.children n2.children
   | _ -> false
 
-(** True if the edit pattern carries at least one concrete edit signal —
-    either (a) the multiset of named-leaf values differs between [-] and
-    [+] sides (a concrete rename), or (b) the shape differs modulo holes
-    (a structural edit such as a dropped argument). A pattern whose only
-    differences are in which hole-variable index appears where is
-    substance-free: it's a generic "something in this context changed"
-    matcher that fires at every Modified ancestor and drowns more
-    specific rules. Rejected at coherence time. *)
+(** True if the edit pattern carries at least one concrete edit signal — either
+    (a) the multiset of named-leaf values differs between [-] and [+] sides (a
+    concrete rename), or (b) the shape differs modulo holes (a structural edit
+    such as a dropped argument). A pattern whose only differences are in which
+    hole-variable index appears where is substance-free: it's a generic
+    "something in this context changed" matcher that fires at every Modified
+    ancestor and drowns more specific rules. Rejected at coherence time. *)
 let has_concrete_edit (ep : edit_pat) : bool =
   let b = List.sort compare (collect_leaf_values [] ep.before) in
   let a = List.sort compare (collect_leaf_values [] ep.after) in
   b <> a || not (same_shape_mod_holes ep.before ep.after)
 
-(** No replace-side hole appears that lacks a binding source on the
-    match side. A pattern with a [+]-side metavariable not present on
-    the [-] side is rejected by the spatch engine at apply time
-    ("Metavars in replacement not bound in match"), so emitting it
-    would produce an unapplicable rule. This usually means the
-    cluster's anti-unification dropped some context that carried the
-    binding source — fall back to the coherent dendrogram parent
+(** No replace-side hole appears that lacks a binding source on the match side.
+    A pattern with a [+]-side metavariable not present on the [-] side is
+    rejected by the spatch engine at apply time ("Metavars in replacement not
+    bound in match"), so emitting it would produce an unapplicable rule. This
+    usually means the cluster's anti-unification dropped some context that
+    carried the binding source — fall back to the coherent dendrogram parent
     instead. See design doc §4.3. *)
 let no_orphan_after_holes (ep : edit_pat) : bool =
   let before_holes = collect_holes [] ep.before in
@@ -652,20 +646,20 @@ type site_info = {
   si_after : string;  (** full post-change source of the file *)
   si_language : string;  (** grammar the file parses with *)
   si_regions : (int * int * string) list;
-      (** the file's changed regions in before-coordinates, sorted by
-          start, disjoint: [(start, end, after_content)]. A zero-width
-          region [(p, p, txt)] is an insertion at byte [p]. *)
+      (** the file's changed regions in before-coordinates, sorted by start,
+          disjoint: [(start, end, after_content)]. A zero-width region
+          [(p, p, txt)] is an insertion at byte [p]. *)
   si_before_errors : string list;
       (** texts of the before-parse's ERROR nodes (usually empty). The
           well-formedness guard tolerates these in a rule's output — they
           predate the rule — while rejecting any error the rule invents. *)
 }
 
-(** Finest-grain changed regions of a diff, each carrying the
-    after-side content that replaced it. The walk recurses through
-    [Modified] chains so a region is the smallest changed node, not its
-    enclosing scaffold; [Added] children become zero-width insertions at
-    the before-position between their siblings. *)
+(** Finest-grain changed regions of a diff, each carrying the after-side content
+    that replaced it. The walk recurses through [Modified] chains so a region is
+    the smallest changed node, not its enclosing scaffold; [Added] children
+    become zero-width insertions at the before-position between their siblings.
+*)
 let changed_regions (d : Tree_diff.diff) : (int * int * string) list =
   let acc = ref [] in
   let add s e txt = acc := (s, e, txt) :: !acc in
@@ -712,7 +706,8 @@ let multiset_covered xs allowance =
   let tbl = Hashtbl.create 8 in
   List.iter
     (fun a ->
-      Hashtbl.replace tbl a (1 + Option.value ~default:0 (Hashtbl.find_opt tbl a)))
+      Hashtbl.replace tbl a
+        (1 + Option.value ~default:0 (Hashtbl.find_opt tbl a)))
     allowance;
   List.for_all
     (fun x ->
@@ -732,16 +727,15 @@ let string_mem ~sub s =
   let rec at i = i + n <= m && (String.sub s i n = sub || at (i + 1)) in
   at 0
 
-(** Residual diff from a post-rule intermediate to the real after-source,
-    with layout-only hunks dropped (§9.1): a hunk is kept only when it
-    touches a tree-level changed region of the (intermediate, after)
-    diff. Layout — re-indentation, [{ }] vs [{}], line splits — is
-    invisible to the parse tree, so a hunk over lines no changed region
-    touches states nothing about the change; the summary's reconstruction
-    guarantee is already modulo layout (the whole-file gap check, the
-    gate's tree-level re-diff). Returns [""] when the gap is entirely
-    layout. Conservative in the keep direction: hunk and region line
-    spans are each widened by one line before intersecting, and an
+(** Residual diff from a post-rule intermediate to the real after-source, with
+    layout-only hunks dropped (§9.1): a hunk is kept only when it touches a
+    tree-level changed region of the (intermediate, after) diff. Layout —
+    re-indentation, [{ }] vs [{}], line splits — is invisible to the parse tree,
+    so a hunk over lines no changed region touches states nothing about the
+    change; the summary's reconstruction guarantee is already modulo layout (the
+    whole-file gap check, the gate's tree-level re-diff). Returns [""] when the
+    gap is entirely layout. Conservative in the keep direction: hunk and region
+    line spans are each widened by one line before intersecting, and an
     unparseable side falls back to the unfiltered diff. *)
 let residual_diff ~ctx ~language ~file_path ~original ~transformed () =
   if original = transformed then ""
@@ -793,14 +787,13 @@ let residual_diff ~ctx ~language ~file_path ~original ~transformed () =
     in
     match keep_hunk with
     | None ->
-        Text_diff.generate_diff ~context:0 ~file_path ~original ~transformed
-          ()
+        Text_diff.generate_diff ~context:0 ~file_path ~original ~transformed ()
     | Some keep_hunk ->
         Text_diff.generate_diff ~context:0 ~keep_hunk ~file_path ~original
           ~transformed ()
 
-(** [path → site_info] for every [Modified] file in the changeset. The
-    safety gate evaluates rules against these. *)
+(** [path → site_info] for every [Modified] file in the changeset. The safety
+    gate evaluates rules against these. *)
 let build_site_db ~ctx (cs : changeset) : (string, site_info) Hashtbl.t =
   let tbl = Hashtbl.create 16 in
   List.iter
@@ -834,68 +827,65 @@ let spans_overlap s e rs re =
   || (s = e && rs <= s && s <= re)
   || (rs = re && s <= rs && rs <= e)
 
-(** Per-site safety gate: the operational form of the safety property
-    (design §2.3) — with [t'' = apply(rule, t)],
-    [d(t,t'') + d(t'',t') = d(t,t')]. Two legs (§3.1):
-
-    {b Placement}: every edit the rule would make must intersect a
-    changed region of the site's diff. An edit confined to unchanged
-    territory is, by construction, a change that must be undone to reach
-    the after-source — the over-merged [- import _H0] case, whose
-    application would remove every import in the file.
-
-    {b Content}: apply the rule ([t''] = the transformed source) and
-    re-diff against the real after-source. No remaining change may
-    overlap the rule's landing zones: a zone that still differs from
-    [t'] means the rule wrote something other than what the changeset
-    wrote there (claiming [f → h] where the change was [f → g]).
-    Comparing via a re-diff rather than reconstructing expected text
-    from the region list keeps separator tokens and layout — which the
-    node-level regions do not cover — out of the comparison.
-
-    A site where the rule produces no edits fails too — the rendered
-    rule cannot fire there at all (the old zero-match applicability
-    failure, e.g. a [property_identifier] rendered standalone re-parsing
-    as a bare [identifier]).
-
-    M1 emission policy: this is the [exact] classification only — the
-    rule fully explains every region it touches; regions it does not
-    touch are other rules' or residuals' business. A site where the rule
-    makes safe-but-partial progress {e within} a region (the residual
-    case, §4.4) is shed until M1.9b can attach residuals to state the
-    gap honestly. *)
 type site_evaluation = {
   ev_exact : bool;
-      (** the gate verdict: the candidate fires and fully explains every
-          region it touches (no remaining change in its landing zones). *)
+      (** the gate verdict: the candidate fires and fully explains every region
+          it touches (no remaining change in its landing zones). *)
   ev_decomposable : bool;
       (** M1.9b: the candidate fires and makes safe-but-*partial* progress
-          within a region — [t''] differs from the after inside a landing
-          zone, but the rule stays on the geodesic (§2.3): [t''] and the
-          after are tree-inclusion comparable ([Tree_inclusion]), so the
-          gap is a pure insertion or pure deletion — an honest residual
-          rather than a detour (relabel) that must be undone. A
-          decomposable site counts toward support and coverage;
-          its in-zone gap is emitted as a [rule=]-attributed residual
-          (§4.4) by the re-diff in [summarize]. Mutually exclusive with
-          [ev_exact]. *)
+          within a region — [t''] differs from the after inside a landing zone,
+          but the rule stays on the geodesic (§2.3): [t''] and the after are
+          tree-inclusion comparable ([Tree_inclusion]), so the gap is a pure
+          insertion or pure deletion — an honest residual rather than a detour
+          (relabel) that must be undone. A decomposable site counts toward
+          support and coverage; its in-zone gap is emitted as a
+          [rule=]-attributed residual (§4.4) by the re-diff in [summarize].
+          Mutually exclusive with [ev_exact]. *)
   ev_fires : int;  (** number of edits the candidate makes at the site *)
   ev_resolved : int list;
-      (** indices into [si_regions] of the changed regions the candidate
-          fully resolves: regions an edit touches whose t''-image carries
-          no remaining change after application. The selector's coverage
-          unit (§3.3). A decomposable site lists only the regions it fully
-          resolves; partial ones fall to the residual. Empty unless
-          [ev_exact] or [ev_decomposable]. *)
+      (** indices into [si_regions] of the changed regions the candidate fully
+          resolves: regions an edit touches whose t''-image carries no remaining
+          change after application. The selector's coverage unit (§3.3). A
+          decomposable site lists only the regions it fully resolves; partial
+          ones fall to the residual. Empty unless [ev_exact] or
+          [ev_decomposable]. *)
   ev_clean : bool;
       (** the candidate, applied alone, reproduces the site's after-source
           (modulo whitespace) — i.e. it leaves no residual here. Used by
           selection to prefer a rule that reconstructs over one that only
           partially resolves the same regions (e.g. an extraction
-          [box($H).get() ⤳ $H] over a bare removal [box($H).get()] that
-          deletes and defers the rest to a residual). Always false for a
+          [box($H).get() ⤳ $H] over a bare removal [box($H).get()] that deletes
+          and defers the rest to a residual). Always false for a
           decomposable-only site. *)
 }
+(** Per-site safety gate: the operational form of the safety property (design
+    §2.3) — with [t'' = apply(rule, t)], [d(t,t'') + d(t'',t') = d(t,t')]. Two
+    legs (§3.1):
+
+    {b Placement}: every edit the rule would make must intersect a changed
+    region of the site's diff. An edit confined to unchanged territory is, by
+    construction, a change that must be undone to reach the after-source — the
+    over-merged [- import _H0] case, whose application would remove every import
+    in the file.
+
+    {b Content}: apply the rule ([t''] = the transformed source) and re-diff
+    against the real after-source. No remaining change may overlap the rule's
+    landing zones: a zone that still differs from [t'] means the rule wrote
+    something other than what the changeset wrote there (claiming [f → h] where
+    the change was [f → g]). Comparing via a re-diff rather than reconstructing
+    expected text from the region list keeps separator tokens and layout — which
+    the node-level regions do not cover — out of the comparison.
+
+    A site where the rule produces no edits fails too — the rendered rule cannot
+    fire there at all (the old zero-match applicability failure, e.g. a
+    [property_identifier] rendered standalone re-parsing as a bare
+    [identifier]).
+
+    M1 emission policy: this is the [exact] classification only — the rule fully
+    explains every region it touches; regions it does not touch are other rules'
+    or residuals' business. A site where the rule makes safe-but-partial
+    progress {e within} a region (the residual case, §4.4) is shed until M1.9b
+    can attach residuals to state the gap honestly. *)
 
 let no_fire =
   {
@@ -906,10 +896,9 @@ let no_fire =
     ev_clean = false;
   }
 
-(** Evaluate one candidate pattern at one site — the §3.1 gate, keeping
-    the information it computes instead of reducing to a boolean. *)
-let site_eval ~ctx ~language ~pattern_text (si : site_info) : site_evaluation
-    =
+(** Evaluate one candidate pattern at one site — the §3.1 gate, keeping the
+    information it computes instead of reducing to a boolean. *)
+let site_eval ~ctx ~language ~pattern_text (si : site_info) : site_evaluation =
   try
     let edits =
       Matcher.transform_edits ~ctx ~language ~pattern_text
@@ -921,8 +910,7 @@ let site_eval ~ctx ~language ~pattern_text (si : site_info) : site_evaluation
         List.for_all
           (fun (ed : Matcher.edit) ->
             List.exists
-              (fun (rs, re, _) ->
-                spans_overlap ed.start_byte ed.end_byte rs re)
+              (fun (rs, re, _) -> spans_overlap ed.start_byte ed.end_byte rs re)
               si.si_regions)
           edits
       in
@@ -968,8 +956,8 @@ let site_eval ~ctx ~language ~pattern_text (si : site_info) : site_evaluation
                     result :=
                       Some
                         (ed.start_byte + !delta
-                        + min (p - ed.start_byte)
-                            (String.length ed.replacement)))
+                        + min (p - ed.start_byte) (String.length ed.replacement)
+                        ))
             edits;
           match !result with Some q -> q | None -> p + !delta
         in
@@ -999,17 +987,17 @@ let site_eval ~ctx ~language ~pattern_text (si : site_info) : site_evaluation
                (si.si_before_errors @ error_texts si.si_after at.Tree.root))
         then no_fire
         else begin
-        let d = Tree_diff.diff ~before:bt ~after:at in
-        let remaining = changed_regions d in
-        let exact =
-          List.for_all
-            (fun (rs, re, _) ->
-              List.for_all
-                (fun (zs, ze) -> not (spans_overlap zs ze rs re))
-                zones)
-            remaining
-        in
-        (* M1.9b decomposable: the rule's edits left a gap inside a landing
+          let d = Tree_diff.diff ~before:bt ~after:at in
+          let remaining = changed_regions d in
+          let exact =
+            List.for_all
+              (fun (rs, re, _) ->
+                List.for_all
+                  (fun (zs, ze) -> not (spans_overlap zs ze rs re))
+                  zones)
+              remaining
+          in
+          (* M1.9b decomposable: the rule's edits left a gap inside a landing
            zone, but [t''] is on the geodesic between before and after
            (design §2.3) — the rule's change plus the residual change
            compose to the site's change with no detour. Operationally:
@@ -1044,83 +1032,82 @@ let site_eval ~ctx ~language ~pattern_text (si : site_info) : site_evaluation
            rule leaves must be strictly smaller than the change it
            explains, so claiming the site states the change more
            compactly than the raw hunk would. *)
-        let net_progress =
-          let extent (rs, re, txt) = re - rs + String.length txt in
-          let gap =
-            List.fold_left
-              (fun a ((rs, re, _) as r) ->
-                if
-                  List.exists
-                    (fun (zs, ze) -> spans_overlap zs ze rs re)
-                    zones
-                then a + extent r
-                else a)
-              0 remaining
-          in
-          let explained =
-            List.fold_left
-              (fun a ((rs, re, _) as r) ->
-                if
-                  List.exists
-                    (fun (ed : Matcher.edit) ->
-                      spans_overlap ed.start_byte ed.end_byte rs re)
-                    edits
-                then a + extent r
-                else a)
-              0 si.si_regions
-          in
-          gap < explained
-        in
-        let decomposable =
-          (not exact)
-          && net_progress
-          && (Tree_inclusion.included_src
-                ~sub:(t'', bt.Tree.root)
-                ~sup:(si.si_after, at.Tree.root)
-             ||
-             (Tree_inclusion.included_src
-                ~sub:(si.si_after, at.Tree.root)
-                ~sup:(t'', bt.Tree.root)
-             && List.for_all
-                  (fun (rs, re, txt) ->
-                    txt <> ""
-                    || string_mem ~sub:(String.sub t'' rs (re - rs))
-                         si.si_before)
-                  remaining))
-        in
-        if not (exact || decomposable) then no_fire
-        else
-          let resolved =
-            (* a region is resolved iff some edit touches it and its
-               t''-image carries no remaining change *)
-            let idx = ref (-1) in
-            List.filter_map
-              (fun (rs, re, _) ->
-                incr idx;
-                let touched =
-                  List.exists
-                    (fun (ed : Matcher.edit) ->
-                      spans_overlap ed.start_byte ed.end_byte rs re)
-                    edits
-                in
-                if not touched then None
-                else
-                  let rs' = shift_pt rs and re' = shift_pt re in
+          let net_progress =
+            let extent (rs, re, txt) = re - rs + String.length txt in
+            let gap =
+              List.fold_left
+                (fun a ((rs, re, _) as r) ->
                   if
-                    List.for_all
-                      (fun (qs, qe, _) -> not (spans_overlap rs' re' qs qe))
-                      remaining
-                  then Some !idx
-                  else None)
-              si.si_regions
+                    List.exists
+                      (fun (zs, ze) -> spans_overlap zs ze rs re)
+                      zones
+                  then a + extent r
+                  else a)
+                0 remaining
+            in
+            let explained =
+              List.fold_left
+                (fun a ((rs, re, _) as r) ->
+                  if
+                    List.exists
+                      (fun (ed : Matcher.edit) ->
+                        spans_overlap ed.start_byte ed.end_byte rs re)
+                      edits
+                  then a + extent r
+                  else a)
+                0 si.si_regions
+            in
+            gap < explained
           in
-          {
-            ev_exact = exact;
-            ev_decomposable = decomposable;
-            ev_fires = List.length edits;
-            ev_resolved = resolved;
-            ev_clean = (t'' = si.si_after || ws_collapse t'' = ws_collapse si.si_after);
-          }
+          let decomposable =
+            (not exact) && net_progress
+            && (Tree_inclusion.included_src ~sub:(t'', bt.Tree.root)
+                  ~sup:(si.si_after, at.Tree.root)
+               || Tree_inclusion.included_src
+                    ~sub:(si.si_after, at.Tree.root)
+                    ~sup:(t'', bt.Tree.root)
+                  && List.for_all
+                       (fun (rs, re, txt) ->
+                         txt <> ""
+                         || string_mem
+                              ~sub:(String.sub t'' rs (re - rs))
+                              si.si_before)
+                       remaining)
+          in
+          if not (exact || decomposable) then no_fire
+          else
+            let resolved =
+              (* a region is resolved iff some edit touches it and its
+               t''-image carries no remaining change *)
+              let idx = ref (-1) in
+              List.filter_map
+                (fun (rs, re, _) ->
+                  incr idx;
+                  let touched =
+                    List.exists
+                      (fun (ed : Matcher.edit) ->
+                        spans_overlap ed.start_byte ed.end_byte rs re)
+                      edits
+                  in
+                  if not touched then None
+                  else
+                    let rs' = shift_pt rs and re' = shift_pt re in
+                    if
+                      List.for_all
+                        (fun (qs, qe, _) -> not (spans_overlap rs' re' qs qe))
+                        remaining
+                    then Some !idx
+                    else None)
+                si.si_regions
+            in
+            {
+              ev_exact = exact;
+              ev_decomposable = decomposable;
+              ev_fires = List.length edits;
+              ev_resolved = resolved;
+              ev_clean =
+                t'' = si.si_after || ws_collapse t'' = ws_collapse si.si_after;
+            }
         end
       end
   with _ -> no_fire
@@ -1221,7 +1208,7 @@ let coarsen_orphans (ep : edit_pat) (ipats : edit_pat list) : edit_pat =
         match (subs, surfaces) with
         | _ :: _, v :: _
           when List.length surfaces = List.length subs
-               && List.for_all (fun s -> s = v) surfaces ->
+               && List.for_all (fun s -> s = v) surfaces -> (
             let node_type =
               List.fold_left
                 (fun acc s ->
@@ -1231,7 +1218,7 @@ let coarsen_orphans (ep : edit_pat) (ipats : edit_pat list) : edit_pat =
                   | _ -> Some "")
                 None subs
             in
-            (match node_type with
+            match node_type with
             | Some nt when nt <> "" ->
                 subst_hole h (Leaf { node_type = nt; value = v }) after
             | _ -> after)
@@ -1240,19 +1227,18 @@ let coarsen_orphans (ep : edit_pat) (ipats : edit_pat list) : edit_pat =
   in
   { ep with after }
 
-(** Re-specialize a cluster to its surviving instances: re-anti-unify
-    their concrete patterns from scratch. Anti-unification only holes a
-    position whose values differ among the inputs, so every hole in a
-    freshly-formed cluster is witnessed by at least two distinct
-    instantiations — but covering and safety shedding remove instances
-    *after* formation, and a rule can otherwise be emitted with a hole
-    its own remaining sites never vary on (more general than its
-    evidence). Folding [anti_unify_edits] over the survivors' [ipat]s
-    restores the witnessed-holes invariant: positions the survivors
-    agree on collapse back to literals. The fold is safe without hole
-    shifting because the inputs are fully concrete. Coarsening is
-    re-applied at the end: the fold rebuilds the pattern from concrete
-    ipats, so a coarsened orphan would otherwise resurface. *)
+(** Re-specialize a cluster to its surviving instances: re-anti-unify their
+    concrete patterns from scratch. Anti-unification only holes a position whose
+    values differ among the inputs, so every hole in a freshly-formed cluster is
+    witnessed by at least two distinct instantiations — but covering and safety
+    shedding remove instances *after* formation, and a rule can otherwise be
+    emitted with a hole its own remaining sites never vary on (more general than
+    its evidence). Folding [anti_unify_edits] over the survivors' [ipat]s
+    restores the witnessed-holes invariant: positions the survivors agree on
+    collapse back to literals. The fold is safe without hole shifting because
+    the inputs are fully concrete. Coarsening is re-applied at the end: the fold
+    rebuilds the pattern from concrete ipats, so a coarsened orphan would
+    otherwise resurface. *)
 let respecialize (c : cluster) : cluster =
   match c.instances with
   | [] -> c
@@ -1277,11 +1263,8 @@ let cut_dendrogram ?(threshold = 0.35)
        e.g. PHP's [array($X, $Y) -> [$X, $Y]] where the [array]
        keyword on the [-] side anchors the rule even though the
        [+] side is just brackets and holes. *)
-    has_concrete ep.before
-    && has_concrete_edit ep
-    && no_orphan_after_holes ep
-    && (s = 0
-       || float_of_int (edit_holes ep) /. float_of_int s < threshold)
+    has_concrete ep.before && has_concrete_edit ep && no_orphan_after_holes ep
+    && (s = 0 || float_of_int (edit_holes ep) /. float_of_int s < threshold)
   in
   let clusters = ref [] in
   let singletons = ref [] in
@@ -1331,13 +1314,13 @@ let cut_dendrogram ?(threshold = 0.35)
 
 (* ── One-sided dendrogram (M1.6a) ──────────────────────────────── *)
 
-(** A cluster of Added-only or Removed-only candidates that share a common
-    pat_node shape. Internal — consumed by M1.6b fusion. *)
 type one_sided_cluster = {
   os_cluster_pattern : pat_node;
   os_cluster_side : side;
   os_cluster_instances : one_sided_instance list;
 }
+(** A cluster of Added-only or Removed-only candidates that share a common
+    pat_node shape. Internal — consumed by M1.6b fusion. *)
 
 type os_dnode =
   | OsDLeaf of one_sided_instance * pat_node
@@ -1396,8 +1379,7 @@ let build_os_dendrogram (initial : (one_sided_instance * pat_node) list) :
       OsDMerge
         {
           om_pattern = !bp;
-          om_instances =
-            os_dnode_instances arr.(i) @ os_dnode_instances arr.(j);
+          om_instances = os_dnode_instances arr.(i) @ os_dnode_instances arr.(j);
           om_left = arr.(i);
           om_right = arr.(j);
         }
@@ -1440,9 +1422,9 @@ let cut_os_dendrogram ?(threshold = 0.35) min_size side root =
   go root;
   (!clusters, !singletons)
 
-(** Cluster one-sided candidates into [one_sided_cluster]s, separately for
-    each side (Removeds with Removeds, Addeds with Addeds). Candidates that
-    don't cluster (singletons) are discarded at this stage. *)
+(** Cluster one-sided candidates into [one_sided_cluster]s, separately for each
+    side (Removeds with Removeds, Addeds with Addeds). Candidates that don't
+    cluster (singletons) are discarded at this stage. *)
 let cluster_one_sided (candidates : one_sided_candidate list) :
     one_sided_cluster list =
   let by_side s =
@@ -1462,10 +1444,10 @@ let cluster_one_sided (candidates : one_sided_candidate list) :
   cluster_side Before_side (by_side Before_side)
   @ cluster_side After_side (by_side After_side)
 
-(** A removal-only [.pat] body for a concrete removed text (no holes):
-    every line of [text] prefixed with [- ]. Used by the safety gate's
-    concrete-regroup fallback, where a group of instances shares the
-    removed text verbatim and no [pat_node] is at hand. *)
+(** A removal-only [.pat] body for a concrete removed text (no holes): every
+    line of [text] prefixed with [- ]. Used by the safety gate's
+    concrete-regroup fallback, where a group of instances shares the removed
+    text verbatim and no [pat_node] is at hand. *)
 let removal_body_of_text (text : string) : string =
   let buf = Buffer.create (String.length text + 32) in
   Buffer.add_string buf "@@\nmatch: strict\n@@\n";
@@ -1474,19 +1456,18 @@ let removal_body_of_text (text : string) : string =
     (String.split_on_char '\n' text);
   Buffer.contents buf
 
-(** Safe instances of a removal-only cluster, with a concrete-regroup
-    fallback (design §3.1). First the cluster's own (possibly holed)
-    pattern is safety-checked per site; if fewer than [min_support]
-    sites survive — the over-merge case, e.g. [- import _H0] whose
-    application would remove every import in the file — the instances
-    are regrouped by their literal removed text and each group ≥
-    [min_support] is gated with its own concrete pattern. The fallback
-    recovers the concrete-majority rule that the merged hole erased
-    (intermediate generalisations between the hole and the concrete
-    texts are not currently recovered). Returns
-    [(pattern_text, instances)] groups to emit. *)
-let safe_removal_groups ~ctx ~site_db ?(min_support = 2)
-    (c : one_sided_cluster) : (string * one_sided_instance list) list =
+(** Safe instances of a removal-only cluster, with a concrete-regroup fallback
+    (design §3.1). First the cluster's own (possibly holed) pattern is
+    safety-checked per site; if fewer than [min_support] sites survive — the
+    over-merge case, e.g. [- import _H0] whose application would remove every
+    import in the file — the instances are regrouped by their literal removed
+    text and each group ≥ [min_support] is gated with its own concrete pattern.
+    The fallback recovers the concrete-majority rule that the merged hole erased
+    (intermediate generalisations between the hole and the concrete texts are
+    not currently recovered). Returns [(pattern_text, instances)] groups to
+    emit. *)
+let safe_removal_groups ~ctx ~site_db ?(min_support = 2) (c : one_sided_cluster)
+    : (string * one_sided_instance list) list =
   let safe_with pattern_text (i : one_sided_instance) =
     i.os_language <> ""
     &&
@@ -1521,9 +1502,9 @@ let safe_removal_groups ~ctx ~site_db ?(min_support = 2)
 
 (* ── Change-pair extraction ──────────────────────────────────────── *)
 
-(** Fraction of a node's direct children whose change is non-[Same].
-    Higher ratio means the change converges at this level; lower means
-    this node is mostly unchanged boilerplate around a deeper change. *)
+(** Fraction of a node's direct children whose change is non-[Same]. Higher
+    ratio means the change converges at this level; lower means this node is
+    mostly unchanged boilerplate around a deeper change. *)
 let change_ratio (child_changes : Tree_diff.child_change list) : float =
   let total = List.length child_changes in
   if total = 0 then 0.0
@@ -1541,8 +1522,7 @@ let change_ratio (child_changes : Tree_diff.child_change list) : float =
 
 let has_direct_structural (cc : Tree_diff.child_change list) =
   List.exists
-    (function
-      | Tree_diff.Added _ | Tree_diff.Removed _ -> true | _ -> false)
+    (function Tree_diff.Added _ | Tree_diff.Removed _ -> true | _ -> false)
     cc
 
 let rec subtree_has_structural (cc : Tree_diff.child_change list) =
@@ -1554,40 +1534,39 @@ let rec subtree_has_structural (cc : Tree_diff.child_change list) =
       | _ -> false)
     cc
 
-(** Emit change pairs at emission points selected by the structure of the
-    diff, not by depth:
-
-    - Every [Replaced] leaf — the natural unit for a pure rename.
-    - Every [Modified] ancestor that either (a) has an [Added]/[Removed]
-      child directly (the locus of a structural change), or (b) has
-      [Added]/[Removed] somewhere in its subtree {e and} enough of its
-      own direct children are non-[Same] to make it a plausible lift
-      target (ratio ≥ [emission_threshold]).
-
-    Case (b) lifts through arbitrarily long wrapper chains — grammar-
-    agnostic, no depth bound — because at each wrapper level both
-    conditions (structural descendant, ratio ≥ threshold) still hold.
-    The lift stops at the first ancestor where most children are [Same],
-    which is typically the enclosing function/block. The covering pass
-    then ranks the candidate levels and picks the tightest informative
-    one.
-
-    Cases without any [Added]/[Removed] anywhere emit {e only} at
-    [Replaced] leaves — no ancestor candidates, so no churn from
-    cluster-level decisions in what should already be leaf-level
-    renames. Byte-range deduplication prevents duplicate ancestor
-    emissions when multiple descendant chains meet at the same ancestor. *)
 (* Hashes of every subtree of [n] (incl. [n] itself). [Tree.hash] is a
    structural, position-independent digest, so it doubles as hdiff's
    "which common subtree" oracle (§4.3): a node is a common subtree of
    two trees iff its hash appears in both. Comparing hashes across the
    before/after parses is sound — the digest excludes position and source
    buffer. *)
+
+(** Emit change pairs at emission points selected by the structure of the diff,
+    not by depth:
+
+    - Every [Replaced] leaf — the natural unit for a pure rename.
+    - Every [Modified] ancestor that either (a) has an [Added]/[Removed] child
+      directly (the locus of a structural change), or (b) has [Added]/[Removed]
+      somewhere in its subtree {e and} enough of its own direct children are
+      non-[Same] to make it a plausible lift target (ratio ≥
+      [emission_threshold]).
+
+    Case (b) lifts through arbitrarily long wrapper chains — grammar- agnostic,
+    no depth bound — because at each wrapper level both conditions (structural
+    descendant, ratio ≥ threshold) still hold. The lift stops at the first
+    ancestor where most children are [Same], which is typically the enclosing
+    function/block. The covering pass then ranks the candidate levels and picks
+    the tightest informative one.
+
+    Cases without any [Added]/[Removed] anywhere emit {e only} at [Replaced]
+    leaves — no ancestor candidates, so no churn from cluster-level decisions in
+    what should already be leaf-level renames. Byte-range deduplication prevents
+    duplicate ancestor emissions when multiple descendant chains meet at the
+    same ancestor. *)
 let rec subtree_hashes (n : Tree.src Tree.t) (acc : int list) : int list =
   List.fold_left
     (fun a (c : Tree.src Tree.child) -> subtree_hashes c.node a)
-    (n.Tree.hash :: acc)
-    n.Tree.children
+    (n.Tree.hash :: acc) n.Tree.children
 
 (* §4.3 cross-side alignment, extraction case. When a [Modified] node has
    a [Removed] child [r] and an [Added] child [a] where one is a subtree
@@ -1626,8 +1605,8 @@ let extraction_pairs (child_changes : Tree_diff.child_change list) :
         addeds)
     removeds
 
-let collect_change_pairs_multi ?(emission_threshold = 0.5)
-    (d : Tree_diff.diff) : Tree_diff.change_pair list =
+let collect_change_pairs_multi ?(emission_threshold = 0.5) (d : Tree_diff.diff)
+    : Tree_diff.change_pair list =
   let out = ref [] in
   let emitted : (int * int, unit) Hashtbl.t = Hashtbl.create 16 in
   let emit (b : Tree.src Tree.t) (a : Tree.src Tree.t) =
@@ -1681,14 +1660,12 @@ let collect_change_pairs_multi ?(emission_threshold = 0.5)
   | Tree_diff.Unchanged -> ());
   List.rev !out
 
-(** One-sided candidate extraction (M1.5).
-    Walks the diff and emits every [Added]/[Removed] child subtree it
-    encounters — including ones nested inside [Changed.Modified] chains.
-    These are collected so M1.6 Jaccard fusion can pair them with two-sided
-    clusters (e.g. a removed import anchoring a renamed call). They do not
-    become standalone rules. *)
-let lookahead_one_sided (d : Tree_diff.diff) :
-    (side * Tree.src Tree.t) list =
+(** One-sided candidate extraction (M1.5). Walks the diff and emits every
+    [Added]/[Removed] child subtree it encounters — including ones nested inside
+    [Changed.Modified] chains. These are collected so M1.6 Jaccard fusion can
+    pair them with two-sided clusters (e.g. a removed import anchoring a renamed
+    call). They do not become standalone rules. *)
+let lookahead_one_sided (d : Tree_diff.diff) : (side * Tree.src Tree.t) list =
   let out = ref [] in
   let emit s n = out := (s, n) :: !out in
   let rec visit_node_change = function
@@ -1702,8 +1679,7 @@ let lookahead_one_sided (d : Tree_diff.diff) :
     | Tree_diff.Added { node } -> emit After_side node
   in
   (match d.root_change with
-  | Tree_diff.Modified { child_changes } ->
-      List.iter visit_child child_changes
+  | Tree_diff.Modified { child_changes } -> List.iter visit_child child_changes
   | Tree_diff.Replaced | Tree_diff.Unchanged -> ());
   List.rev !out
 
@@ -1749,8 +1725,7 @@ let collect_initial_clusters ?on_file ~ctx (cs : changeset) : cluster list =
                     ipat = ep;
                   }
                 in
-                initial :=
-                  { pattern = ep; instances = [ inst ] } :: !initial)
+                initial := { pattern = ep; instances = [ inst ] } :: !initial)
               (collect_change_pairs_multi d)
           with _ -> ())
       | Added _ | Deleted _ -> ())
@@ -1758,8 +1733,8 @@ let collect_initial_clusters ?on_file ~ctx (cs : changeset) : cluster list =
   !initial
 
 (** Collect one-sided candidates (M1.5) across a changeset's [Modified] files.
-    Each candidate carries its pat_node shape and site metadata. Used
-    internally by M1.6 fusion; not wired into M1 rule output. *)
+    Each candidate carries its pat_node shape and site metadata. Used internally
+    by M1.6 fusion; not wired into M1 rule output. *)
 let collect_one_sided_candidates ?on_file ~ctx (cs : changeset) :
     one_sided_candidate list =
   let modified =
@@ -1817,13 +1792,12 @@ let jaccard (a : string list) (b : string list) : float =
   let union = List.sort_uniq compare (a @ b) in
   match union with
   | [] -> 0.0
-  | _ ->
-      float_of_int (List.length inter) /. float_of_int (List.length union)
+  | _ -> float_of_int (List.length inter) /. float_of_int (List.length union)
 
-(** Attempt to fuse a Removed cluster with an Added cluster into a
-    two-sided swap rule. Returns [None] if the after-side has holes (they
-    would be orphan metavars on the `+` side, rejected by the spatch
-    engine — cross-side alignment is M1.8's job). *)
+(** Attempt to fuse a Removed cluster with an Added cluster into a two-sided
+    swap rule. Returns [None] if the after-side has holes (they would be orphan
+    metavars on the `+` side, rejected by the spatch engine — cross-side
+    alignment is M1.8's job). *)
 let fuse_swap (removed : one_sided_cluster) (added : one_sided_cluster) :
     (edit_pat * one_sided_instance list) option =
   if count_holes added.os_cluster_pattern > 0 then None
@@ -1848,8 +1822,8 @@ let fuse_swap (removed : one_sided_cluster) (added : one_sided_cluster) :
     in
     Some (ep, insts)
 
-(** Greedy pair-up of Removed clusters with Added clusters by descending
-    Jaccard over file sets. Pairs above threshold consume both clusters. *)
+(** Greedy pair-up of Removed clusters with Added clusters by descending Jaccard
+    over file sets. Pairs above threshold consume both clusters. *)
 let pair_one_sided_clusters ?(threshold = 0.7)
     (clusters : one_sided_cluster list) :
     (one_sided_cluster * one_sided_cluster) list =
@@ -1872,9 +1846,7 @@ let pair_one_sided_clusters ?(threshold = 0.7)
       if j >= threshold then scored := (j, ri, ai) :: !scored
     done
   done;
-  let sorted =
-    List.sort (fun (j1, _, _) (j2, _, _) -> compare j2 j1) !scored
-  in
+  let sorted = List.sort (fun (j1, _, _) (j2, _, _) -> compare j2 j1) !scored in
   let pairs = ref [] in
   List.iter
     (fun (_, ri, ai) ->
@@ -1888,22 +1860,21 @@ let pair_one_sided_clusters ?(threshold = 0.7)
 
 (* ── M1.6 cases 2 & 3: conjunctive multi-section fusion ──────────── *)
 
-(** A node feeding the fusion graph: a two-sided edit pattern plus the
-    file set it fires in. Two-sided clusters and one-sided swap pairs
-    feed in identically — once a swap pair has been widened to two-sided
-    by [fuse_swap], the downstream fusion treats it the same as any
-    other two-sided cluster. Cases 2 (one-sided + two-sided) and 3
-    (two-sided + two-sided) of §4.2 differ only in input shape; the
-    output mechanics are uniform. *)
 type fusion_node = {
   fn_pattern : edit_pat;
   fn_files : string list;  (** sorted unique *)
   fn_support : int;
-      (** support to report when this node is emitted standalone — total
-          fire count for two-sided clusters, distinct-file count for
-          swap pairs (matches the prior single-rule conventions). *)
+      (** support to report when this node is emitted standalone — total fire
+          count for two-sided clusters, distinct-file count for swap pairs
+          (matches the prior single-rule conventions). *)
   fn_language : string;
 }
+(** A node feeding the fusion graph: a two-sided edit pattern plus the file set
+    it fires in. Two-sided clusters and one-sided swap pairs feed in identically
+    — once a swap pair has been widened to two-sided by [fuse_swap], the
+    downstream fusion treats it the same as any other two-sided cluster. Cases 2
+    (one-sided + two-sided) and 3 (two-sided + two-sided) of §4.2 differ only in
+    input shape; the output mechanics are uniform. *)
 
 let intersect_sorted (a : string list) (b : string list) : string list =
   List.filter (fun x -> List.mem x b) a
@@ -1919,9 +1890,7 @@ let fusion_node_of_two_sided (c : cluster) : fusion_node =
     |> List.map (fun (i : instance) -> i.file)
     |> List.sort_uniq String.compare
   in
-  let language =
-    match c.instances with i :: _ -> i.language | [] -> ""
-  in
+  let language = match c.instances with i :: _ -> i.language | [] -> "" in
   {
     fn_pattern = c.pattern;
     fn_files = files;
@@ -1950,8 +1919,8 @@ let fusion_node_of_swap (ep : edit_pat) (insts : one_sided_instance list) :
     fn_language = language;
   }
 
-(** Group fusion nodes into connected components by Jaccard ≥ threshold
-    over their file sets. Union-find: an edge [i—j] exists iff
+(** Group fusion nodes into connected components by Jaccard ≥ threshold over
+    their file sets. Union-find: an edge [i—j] exists iff
     [J(files_i, files_j) ≥ threshold]; components are reachable sets. *)
 let group_by_jaccard ?(threshold = 0.7) (nodes : fusion_node list) :
     fusion_node list list =
@@ -1971,8 +1940,7 @@ let group_by_jaccard ?(threshold = 0.7) (nodes : fusion_node list) :
   in
   for i = 0 to n - 2 do
     for j = i + 1 to n - 1 do
-      if jaccard arr.(i).fn_files arr.(j).fn_files >= threshold then
-        union i j
+      if jaccard arr.(i).fn_files arr.(j).fn_files >= threshold then union i j
     done
   done;
   let groups : (int, fusion_node list ref) Hashtbl.t = Hashtbl.create 8 in
@@ -1985,31 +1953,27 @@ let group_by_jaccard ?(threshold = 0.7) (nodes : fusion_node list) :
   Hashtbl.fold (fun _ lst acc -> List.rev !lst :: acc) groups []
 
 (** Materialise a fusion group into [(sections, sites, language, support)]
-    tuples ready for rule emission. Singleton groups produce one tuple
-    each. Multi-node groups fuse into one conjunctive rule whose sites
-    are the intersection of all members' file sets — but only if the
-    intersection has ≥ [min_support] members; otherwise the fusion is
-    abandoned and the members are emitted standalone (transitivity in
-    the union-find can chain pairs whose all-way intersection is empty;
-    standalone emission preserves coverage). Sections inside a fused
-    rule are ordered by their rendered body for deterministic output. *)
+    tuples ready for rule emission. Singleton groups produce one tuple each.
+    Multi-node groups fuse into one conjunctive rule whose sites are the
+    intersection of all members' file sets — but only if the intersection has ≥
+    [min_support] members; otherwise the fusion is abandoned and the members are
+    emitted standalone (transitivity in the union-find can chain pairs whose
+    all-way intersection is empty; standalone emission preserves coverage).
+    Sections inside a fused rule are ordered by their rendered body for
+    deterministic output. *)
 let materialise_group ?(min_support = 2) (group : fusion_node list) :
     (edit_pat list * string list * string * int) list =
   match group with
   | [] -> []
-  | [ n ] ->
-      [ ([ n.fn_pattern ], n.fn_files, n.fn_language, n.fn_support) ]
+  | [ n ] -> [ ([ n.fn_pattern ], n.fn_files, n.fn_language, n.fn_support) ]
   | _ ->
       let inter = intersect_all (List.map (fun n -> n.fn_files) group) in
       if List.length inter < min_support then
         List.map
-          (fun n ->
-            ([ n.fn_pattern ], n.fn_files, n.fn_language, n.fn_support))
+          (fun n -> ([ n.fn_pattern ], n.fn_files, n.fn_language, n.fn_support))
           group
       else
-        let language =
-          match group with n :: _ -> n.fn_language | [] -> ""
-        in
+        let language = match group with n :: _ -> n.fn_language | [] -> "" in
         let sorted =
           List.sort
             (fun a b ->
@@ -2026,11 +1990,10 @@ let materialise_group ?(min_support = 2) (group : fusion_node list) :
         ]
 
 (** Pre-cluster singletons whose patterns are structurally equal into
-    multi-instance clusters. Clustering singletons at ~1000-site scale
-    runs O(N³) through the dendrogram; deduplicating identical patterns
-    up front cuts N dramatically — a refactor that renames one symbol at
-    200 sites collapses into a single cluster before the dendrogram is
-    even constructed. *)
+    multi-instance clusters. Clustering singletons at ~1000-site scale runs
+    O(N³) through the dendrogram; deduplicating identical patterns up front cuts
+    N dramatically — a refactor that renames one symbol at 200 sites collapses
+    into a single cluster before the dendrogram is even constructed. *)
 let pre_group_identical (clusters : cluster list) : cluster list =
   let tbl : (edit_pat, instance list ref) Hashtbl.t = Hashtbl.create 32 in
   List.iter
@@ -2055,10 +2018,10 @@ type scored_candidate = {
 
 (** One tier of the pipeline (§3.3): propose → evaluate → select over a
     changeset, returning the selected rules sorted by support, unnumbered
-    ([id = ""], [after = []] — the M2 tier loop in [summarize] assigns
-    both). Tier 1 runs this on the raw changeset; tier n+1 re-runs it on
-    the (intermediate, after) pairs the earlier tiers leave unexplained
-    (design §4.4 recursive clustering). *)
+    ([id = ""], [after = []] — the M2 tier loop in [summarize] assigns both).
+    Tier 1 runs this on the raw changeset; tier n+1 re-runs it on the
+    (intermediate, after) pairs the earlier tiers leave unexplained (design §4.4
+    recursive clustering). *)
 let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
   let site_db = build_site_db ~ctx cs in
   (* Evaluation of a candidate pattern at one site, memoized on
@@ -2116,14 +2079,17 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
       else if n <= 160 then 5
       else 6
     in
-    List.iter (fun c ->
-      let s = edit_size c.pattern in
-      buckets.(bucket_of s) <- buckets.(bucket_of s) + 1)
+    List.iter
+      (fun c ->
+        let s = edit_size c.pattern in
+        buckets.(bucket_of s) <- buckets.(bucket_of s) + 1)
       initial;
     Printf.eprintf
-      "size hist (edit_size before+after): <=5:%d <=10:%d <=20:%d <=40:%d <=80:%d <=160:%d >160:%d\n%!"
-      buckets.(0) buckets.(1) buckets.(2) buckets.(3) buckets.(4)
-      buckets.(5) buckets.(6)
+      "size hist (edit_size before+after): <=5:%d <=10:%d <=20:%d <=40:%d \
+       <=80:%d <=160:%d >160:%d\n\
+       %!"
+      buckets.(0) buckets.(1) buckets.(2) buckets.(3) buckets.(4) buckets.(5)
+      buckets.(6)
   end;
   let all_files =
     Hashtbl.fold (fun k _ acc -> k :: acc) site_db []
@@ -2149,29 +2115,27 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
         end
         else []
     | _ ->
-      let root = build_dendrogram initial in
-      if Sys.getenv_opt "CS_TRACE" <> None then
-        Printf.eprintf "dendrogram built\n%!";
-      let clusters, _singletons = cut_dendrogram ~safe_instances 2 root in
-      if Sys.getenv_opt "CS_TRACE" <> None then begin
-        Printf.eprintf "clusters after safety cut: %d\n%!"
-          (List.length clusters);
-        List.iter
-          (fun c ->
-            let intended =
-              match c.pattern.before with
-              | Hole _ -> "<hole>"
-              | Leaf { node_type; _ } -> node_type
-              | PNode { node_type; _ } -> node_type
-            in
-            let text = render_pat_node c.pattern.before in
-            Printf.eprintf "  safe cluster: intended=%s insts=%d text=%S\n%!"
-              intended
-              (List.length c.instances)
-              text)
-          clusters
-      end;
-      List.map respecialize clusters
+        let root = build_dendrogram initial in
+        if Sys.getenv_opt "CS_TRACE" <> None then
+          Printf.eprintf "dendrogram built\n%!";
+        let clusters, _singletons = cut_dendrogram ~safe_instances 2 root in
+        if Sys.getenv_opt "CS_TRACE" <> None then begin
+          Printf.eprintf "clusters after safety cut: %d\n%!"
+            (List.length clusters);
+          List.iter
+            (fun c ->
+              let intended =
+                match c.pattern.before with
+                | Hole _ -> "<hole>"
+                | Leaf { node_type; _ } -> node_type
+                | PNode { node_type; _ } -> node_type
+              in
+              let text = render_pat_node c.pattern.before in
+              Printf.eprintf "  safe cluster: intended=%s insts=%d text=%S\n%!"
+                intended (List.length c.instances) text)
+            clusters
+        end;
+        List.map respecialize clusters
   in
   let candidates =
     collect_one_sided_candidates ?on_file:(on_file_for "one-sided") ~ctx cs
@@ -2280,16 +2244,12 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
      selection arbitrates between them on coverage. *)
   List.iter
     (fun (c : cluster) ->
-      let language =
-        match c.instances with i :: _ -> i.language | [] -> ""
-      in
+      let language = match c.instances with i :: _ -> i.language | [] -> "" in
       add_candidate ~language (render_pattern_body c.pattern))
     fusion_inputs;
   List.iter
     (fun (ep, (insts : one_sided_instance list)) ->
-      let language =
-        match insts with i :: _ -> i.os_language | [] -> ""
-      in
+      let language = match insts with i :: _ -> i.os_language | [] -> "" in
       add_candidate ~language (render_pattern_body ep))
     swap_pairs;
   (* Removal-only clusters that did not pair with an Added cluster in
@@ -2299,8 +2259,7 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
   let used_removeds = List.map fst pairs in
   List.iter
     (fun c ->
-      if c.os_cluster_side = Before_side && not (List.memq c used_removeds)
-      then
+      if c.os_cluster_side = Before_side && not (List.memq c used_removeds) then
         List.iter
           (fun (pattern_text, (insts : one_sided_instance list)) ->
             let language =
@@ -2381,7 +2340,8 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
                rest to a residual. Then higher support, then shorter
                pattern text, then text. *)
             let clean =
-              List.length (List.filter (fun (_, e) -> e.ev_clean) sc.sc_extension)
+              List.length
+                (List.filter (fun (_, e) -> e.ev_clean) sc.sc_extension)
             in
             let key =
               ( m,
@@ -2402,14 +2362,11 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
         remaining := List.filter (fun x -> x != sc) !remaining;
         List.iter
           (fun (f, e) ->
-            List.iter
-              (fun i -> Hashtbl.replace covered (f, i) ())
-              e.ev_resolved)
+            List.iter (fun i -> Hashtbl.replace covered (f, i) ()) e.ev_resolved)
           sc.sc_extension;
         if Sys.getenv_opt "CS_TRACE" <> None then
           Printf.eprintf "  selected: support=%d %S\n%!" sc.sc_support
-            (String.sub sc.sc_pattern 0
-               (min 60 (String.length sc.sc_pattern)))
+            (String.sub sc.sc_pattern 0 (min 60 (String.length sc.sc_pattern)))
   done;
   List.rev !selected
   |> List.map (fun sc ->
@@ -2498,8 +2455,7 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
       (fun (r : rule) -> Hashtbl.mem fired (r.pattern_text, r.language))
       tier
   in
-  let rec tier_loop tier_idx (cur : changeset) (acc : rule list) : rule list
-      =
+  let rec tier_loop tier_idx (cur : changeset) (acc : rule list) : rule list =
     let tier = prune_dead acc (tier_rules ~on_file_for ~ctx cur) in
     if tier = [] then acc
     else
@@ -2512,9 +2468,7 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
               List.filter_map
                 (fun site ->
                   match
-                    List.filter
-                      (fun (p : rule) -> List.mem site p.sites)
-                      acc
+                    List.filter (fun (p : rule) -> List.mem site p.sites) acc
                   with
                   | [] -> None
                   | preds -> Some (site, List.map (fun p -> p.id) preds))
@@ -2530,9 +2484,7 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
           List.filter_map
             (function
               | Modified { path; language; before_source; after_source } ->
-                  let inter =
-                    apply_claiming acc path ~language before_source
-                  in
+                  let inter = apply_claiming acc path ~language before_source in
                   if
                     inter = after_source
                     || ws_collapse inter = ws_collapse after_source
@@ -2540,20 +2492,13 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
                   else
                     Some
                       (Modified
-                         {
-                           path;
-                           language;
-                           before_source = inter;
-                           after_source;
-                         })
+                         { path; language; before_source = inter; after_source })
               | Added _ | Deleted _ -> None)
             cs.files
         in
         let next = { files = next_files } in
-        if
-          next_files = []
-          || intermediate_key next = intermediate_key cur
-        then acc
+        if next_files = [] || intermediate_key next = intermediate_key cur then
+          acc
         else tier_loop (tier_idx + 1) next acc
   in
   let combined = tier_loop 1 cs [] in
@@ -2626,9 +2571,7 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
                 if not (List.mem site sites) then None
                 else
                   match
-                    List.filter
-                      (fun pid -> Hashtbl.mem fires (pid, site))
-                      preds
+                    List.filter (fun pid -> Hashtbl.mem fires (pid, site)) preds
                   with
                   | [] -> None
                   | preds -> Some (site, preds))
@@ -2734,14 +2677,14 @@ let format_summary (s : summary) : string =
         | [] -> None
         | first :: rest -> (
             match after_of first with
-            | Some preds when List.for_all (fun x -> after_of x = Some preds) rest
-              ->
+            | Some preds
+              when List.for_all (fun x -> after_of x = Some preds) rest ->
                 Some preds
             | _ -> None)
       in
       Buffer.add_string buf
-        (Printf.sprintf "# rule %s  support=%d  language=%s%s\n" r.id
-           r.support r.language
+        (Printf.sprintf "# rule %s  support=%d  language=%s%s\n" r.id r.support
+           r.language
            (match uniform with
            | Some preds -> "  after=" ^ String.concat "," preds
            | None -> ""));
@@ -2779,9 +2722,7 @@ let default_ext_language = [ (".tsx", "tsx"); (".ts", "typescript") ]
 
 let language_of_file path ~default ~ext_language =
   match
-    List.find_opt
-      (fun (ext, _) -> Filename.check_suffix path ext)
-      ext_language
+    List.find_opt (fun (ext, _) -> Filename.check_suffix path ext) ext_language
   with
   | Some (_, lang) -> lang
   | None -> default
@@ -2805,7 +2746,7 @@ let rec walk ~exclude_dirs ~pred root acc =
   Array.fold_left
     (fun acc entry ->
       let path = Filename.concat root entry in
-      if (try Sys.is_directory path with Sys_error _ -> false) then
+      if try Sys.is_directory path with Sys_error _ -> false then
         if List.mem entry exclude_dirs then acc
         else walk ~exclude_dirs ~pred path acc
       else if pred path then path :: acc
@@ -2825,31 +2766,23 @@ let load_from_dirs ~before_dir ~after_dir ?(include_glob = None)
   let after_files = walk ~exclude_dirs ~pred after_dir [] in
   let rel_of root path =
     let rlen = String.length root in
-    let rlen = if String.length path > rlen && path.[rlen] = '/' then rlen + 1
-      else rlen
+    let rlen =
+      if String.length path > rlen && path.[rlen] = '/' then rlen + 1 else rlen
     in
     String.sub path rlen (String.length path - rlen)
   in
-  let before_rel =
-    List.map (fun p -> (rel_of before_dir p, p)) before_files
-  in
+  let before_rel = List.map (fun p -> (rel_of before_dir p, p)) before_files in
   let after_rel = List.map (fun p -> (rel_of after_dir p, p)) after_files in
   let after_map = Hashtbl.create 32 in
   List.iter (fun (r, p) -> Hashtbl.replace after_map r p) after_rel;
   let files = ref [] in
   List.iter
     (fun (rel, bpath) ->
-      let lang =
-        language_of_file rel ~default:default_language ~ext_language
-      in
+      let lang = language_of_file rel ~default:default_language ~ext_language in
       match Hashtbl.find_opt after_map rel with
       | Some apath ->
-          let bsrc =
-            In_channel.with_open_bin bpath In_channel.input_all
-          in
-          let asrc =
-            In_channel.with_open_bin apath In_channel.input_all
-          in
+          let bsrc = In_channel.with_open_bin bpath In_channel.input_all in
+          let asrc = In_channel.with_open_bin apath In_channel.input_all in
           Hashtbl.remove after_map rel;
           if bsrc <> asrc then
             files :=
@@ -2862,18 +2795,14 @@ let load_from_dirs ~before_dir ~after_dir ?(include_glob = None)
                 }
               :: !files
       | None ->
-          let bsrc =
-            In_channel.with_open_bin bpath In_channel.input_all
-          in
+          let bsrc = In_channel.with_open_bin bpath In_channel.input_all in
           files :=
             Deleted { path = rel; language = lang; before_source = bsrc }
             :: !files)
     before_rel;
   Hashtbl.iter
     (fun rel apath ->
-      let lang =
-        language_of_file rel ~default:default_language ~ext_language
-      in
+      let lang = language_of_file rel ~default:default_language ~ext_language in
       let asrc = In_channel.with_open_bin apath In_channel.input_all in
       files :=
         Added { path = rel; language = lang; after_source = asrc } :: !files)

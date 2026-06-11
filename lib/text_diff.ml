@@ -7,8 +7,8 @@
 
 type diff_op = DKeep of string | DRemove of string | DAdd of string
 
-let generate_diff ?(context = 3) ?keep_hunk ~file_path ~original ~transformed
-    () =
+let generate_diff ?(context = 3) ?keep_hunk ~file_path ~original ~transformed ()
+    =
   if original = transformed then ""
   else
     let orig_lines = String.split_on_char '\n' original in

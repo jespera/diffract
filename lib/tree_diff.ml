@@ -347,8 +347,7 @@ let rec derive_change mapping ~before_source ~after_source
         let pairwise_equal =
           same_length
           && List.for_all2
-               (fun b a ->
-                 Tree.equal before_source b after_source a)
+               (fun b a -> Tree.equal before_source b after_source a)
                before_children after_children
         in
         if pairwise_equal then Replaced else Unchanged

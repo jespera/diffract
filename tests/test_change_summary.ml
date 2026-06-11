@@ -2,9 +2,9 @@
 
     Each case lives under [tests/change_summary_cases/<name>/] with [before/],
     [after/], and an [expected.summary] file. Comparison is alpha-equivalent
-    over metavar names — the canonical form renames $identifier → $_N by
-    order of first occurrence in the rule body. Whitespace in the pattern
-    body and metavar name choice do not cause churn; structural drift does. *)
+    over metavar names — the canonical form renames $identifier → $_N by order
+    of first occurrence in the rule body. Whitespace in the pattern body and
+    metavar name choice do not cause churn; structural drift does. *)
 
 open Diffract
 
@@ -13,12 +13,14 @@ let cases_dir = "change_summary_cases"
 (* ── Alpha-canonicalization ───────────────────────────────────────── *)
 
 let is_ident_char c =
-  (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
-  || (c >= '0' && c <= '9') || c = '_'
+  (c >= 'a' && c <= 'z')
+  || (c >= 'A' && c <= 'Z')
+  || (c >= '0' && c <= '9')
+  || c = '_'
 
 (** Names declared by [metavar <name>: ...] lines in a rule body. The
-    universal-tokenizer matcher is sigil-free: a metavar is recognised by
-    its declared name, not a [$] prefix, so we identify metavars from the
+    universal-tokenizer matcher is sigil-free: a metavar is recognised by its
+    declared name, not a [$] prefix, so we identify metavars from the
     declarations rather than by scanning for a sigil. *)
 let declared_metavars (text : string) : (string, unit) Hashtbl.t =
   let tbl = Hashtbl.create 8 in
@@ -38,11 +40,11 @@ let declared_metavars (text : string) : (string, unit) Hashtbl.t =
     (String.split_on_char '\n' text);
   tbl
 
-(** Rename every whole-identifier occurrence of a declared metavar to
-    [_M<N>], where N is the first-seen index in [text], so the generated
-    metavar names do not cause test churn. A literal [$] adjacent to a
-    metavar (PHP's variable delimiter, e.g. [$_H0]) is preserved — only the
-    identifier part is renamed. Non-metavar identifiers pass through. *)
+(** Rename every whole-identifier occurrence of a declared metavar to [_M<N>],
+    where N is the first-seen index in [text], so the generated metavar names do
+    not cause test churn. A literal [$] adjacent to a metavar (PHP's variable
+    delimiter, e.g. [$_H0]) is preserved — only the identifier part is renamed.
+    Non-metavar identifiers pass through. *)
 let alpha_canonicalize (text : string) : string =
   let declared = declared_metavars text in
   let buf = Buffer.create (String.length text) in
@@ -59,18 +61,18 @@ let alpha_canonicalize (text : string) : string =
         incr j
       done;
       let tok = String.sub text !i (!j - !i) in
-      (if Hashtbl.mem declared tok then
-         let idx =
-           match Hashtbl.find_opt mapping tok with
-           | Some k -> k
-           | None ->
-               let k = !next in
-               incr next;
-               Hashtbl.add mapping tok k;
-               k
-         in
-         Buffer.add_string buf (Printf.sprintf "_M%d" idx)
-       else Buffer.add_string buf tok);
+      if Hashtbl.mem declared tok then
+        let idx =
+          match Hashtbl.find_opt mapping tok with
+          | Some k -> k
+          | None ->
+              let k = !next in
+              incr next;
+              Hashtbl.add mapping tok k;
+              k
+        in
+        Buffer.add_string buf (Printf.sprintf "_M%d" idx)
+      else Buffer.add_string buf tok;
       i := !j
     end
     else begin
@@ -114,12 +116,12 @@ let split_sections (text : string) : section list =
     (fun line ->
       if String.length line >= 2 && line.[0] = '#' && line.[1] = ' ' then begin
         flush ();
-        current_header := Some (String.trim (String.sub line 2 (String.length line - 2)));
+        current_header :=
+          Some (String.trim (String.sub line 2 (String.length line - 2)));
         current_body := []
       end
-      else if !current_header <> None then
-        current_body := line :: !current_body
-      (* Lines before any header are ignored (allows for comments) *))
+      else if !current_header <> None then current_body := line :: !current_body
+        (* Lines before any header are ignored (allows for comments) *))
     lines;
   flush ();
   List.rev !sections
@@ -143,28 +145,26 @@ let canonicalize_section (s : section) : string =
   in
   Printf.sprintf "%s\n%s" s.header (String.concat "\n" lines)
 
-(** Renumber rule IDs so [R1] names the rule whose canonicalized body
-    sorts first lexicographically, [R2] the next, and so on. Without this
-    the comparison is fragile to ordering choices in the summariser: two
+(** Renumber rule IDs so [R1] names the rule whose canonicalized body sorts
+    first lexicographically, [R2] the next, and so on. Without this the
+    comparison is fragile to ordering choices in the summariser: two
     semantically equivalent outputs that swap [R1] and [R2] would fail.
 
-    Walks sections in two passes: the first pass scans [# rule Rk ...]
-    headers in body-sorted order and builds a renaming [old_id ->
-    new_id]. The second pass substitutes every occurrence of each old id
-    (in [rule Rk], [sites Rk], and [rule=Rk] attribution on residuals). *)
+    Walks sections in two passes: the first pass scans [# rule Rk ...] headers
+    in body-sorted order and builds a renaming [old_id -> new_id]. The second
+    pass substitutes every occurrence of each old id (in [rule Rk], [sites Rk],
+    and [rule=Rk] attribution on residuals). *)
 let canonicalize_rule_ids (canon : string list) : string list =
-  let is_rule_section s =
-    String.length s >= 5 && String.sub s 0 5 = "rule "
-  in
+  let is_rule_section s = String.length s >= 5 && String.sub s 0 5 = "rule " in
   let split_rule_section s =
     match String.index_opt s '\n' with
     | None -> None
-    | Some nl ->
+    | Some nl -> (
         let first_line = String.sub s 0 nl in
         let body = String.sub s (nl + 1) (String.length s - nl - 1) in
-        (match String.split_on_char ' ' first_line with
-         | "rule" :: id :: _ -> Some (id, body)
-         | _ -> None)
+        match String.split_on_char ' ' first_line with
+        | "rule" :: id :: _ -> Some (id, body)
+        | _ -> None)
   in
   let rule_sections_with_body_sort =
     canon
@@ -185,8 +185,10 @@ let canonicalize_rule_ids (canon : string list) : string list =
       Hashtbl.replace mapping old_id (Printf.sprintf "R%d" (i + 1)))
     rule_sections_with_body_sort;
   let is_alnum c =
-    (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
-    || (c >= '0' && c <= '9') || c = '_'
+    (c >= 'a' && c <= 'z')
+    || (c >= 'A' && c <= 'Z')
+    || (c >= '0' && c <= '9')
+    || c = '_'
   in
   let rename s =
     let buf = Buffer.create (String.length s) in
@@ -194,16 +196,21 @@ let canonicalize_rule_ids (canon : string list) : string list =
     let i = ref 0 in
     while !i < n do
       let c = s.[!i] in
-      if c = 'R' && !i + 1 < n
-         && s.[!i + 1] >= '0' && s.[!i + 1] <= '9'
-         && (!i = 0 || not (is_alnum s.[!i - 1]))
+      if
+        c = 'R'
+        && !i + 1 < n
+        && s.[!i + 1] >= '0'
+        && s.[!i + 1] <= '9'
+        && (!i = 0 || not (is_alnum s.[!i - 1]))
       then begin
         let j = ref (!i + 1) in
-        while !j < n && s.[!j] >= '0' && s.[!j] <= '9' do incr j done;
+        while !j < n && s.[!j] >= '0' && s.[!j] <= '9' do
+          incr j
+        done;
         let token = String.sub s !i (!j - !i) in
         (match Hashtbl.find_opt mapping token with
-         | Some new_id -> Buffer.add_string buf new_id
-         | None -> Buffer.add_string buf token);
+        | Some new_id -> Buffer.add_string buf new_id
+        | None -> Buffer.add_string buf token);
         i := !j
       end
       else begin
@@ -233,11 +240,11 @@ let list_subdirs dir =
     Array.sort compare entries;
     Array.to_list entries
     |> List.filter (fun e ->
-           try Sys.is_directory (Filename.concat dir e) with _ -> false)
+        try Sys.is_directory (Filename.concat dir e) with _ -> false)
 
 (** Read the required [language] file in a case directory. Its contents (a
-    single language name, e.g. "typescript") is used as the default for
-    files whose extension is not in the extension→language map. *)
+    single language name, e.g. "typescript") is used as the default for files
+    whose extension is not in the extension→language map. *)
 let case_language case_dir =
   let p = Filename.concat case_dir "language" in
   if not (Sys.file_exists p) then
@@ -253,8 +260,7 @@ let run_case case_name () =
   let default_language = case_language case_dir in
   let ctx = Context.create () in
   let changeset =
-    Change_summary.load_from_dirs ~before_dir ~after_dir
-      ~default_language ()
+    Change_summary.load_from_dirs ~before_dir ~after_dir ~default_language ()
   in
   let summary = Change_summary.summarize ~ctx changeset in
   let actual = Change_summary.format_summary summary in
@@ -337,11 +343,11 @@ let roundtrip_case case_name () =
     (fun (fc : Change_summary.file_change) ->
       match fc with
       | Change_summary.Modified { path; language; before_source; after_source }
-        ->
+        -> (
           let claiming =
             summary.rules
             |> List.filter (fun (r : Change_summary.rule) ->
-                   List.mem path r.sites)
+                List.mem path r.sites)
             |> List.sort (fun a b -> compare (rule_id_num a) (rule_id_num b))
           in
           let applied =
@@ -353,7 +359,7 @@ let roundtrip_case case_name () =
                 with _ -> src)
               before_source claiming
           in
-          (match residual_for path with
+          match residual_for path with
           | None ->
               let t1 = Tree.parse ~ctx ~language applied in
               let t2 = Tree.parse ~ctx ~language after_source in
@@ -374,8 +380,8 @@ let roundtrip_case case_name () =
                   ~original:applied ~transformed:after_source ()
               in
               Alcotest.(check string)
-                (Printf.sprintf "%s: %s residual bridges rules->after"
-                   case_name path)
+                (Printf.sprintf "%s: %s residual bridges rules->after" case_name
+                   path)
                 res.res_diff regen)
       | Change_summary.Added _ | Change_summary.Deleted _ -> ())
     changeset.files
@@ -389,8 +395,7 @@ let test_one_sided_extraction () =
   let default_language = case_language case_dir in
   let ctx = Context.create () in
   let changeset =
-    Change_summary.load_from_dirs ~before_dir ~after_dir
-      ~default_language ()
+    Change_summary.load_from_dirs ~before_dir ~after_dir ~default_language ()
   in
   let candidates = Change_summary.collect_one_sided_candidates ~ctx changeset in
   let instances =
@@ -420,8 +425,7 @@ let test_one_sided_extraction () =
   Alcotest.(check int)
     "three import-removal candidates collected" 3
     (List.length import_removeds);
-  Alcotest.(check (list string))
-    "one per file" [ "a.ts"; "b.ts"; "c.ts" ] files
+  Alcotest.(check (list string)) "one per file" [ "a.ts"; "b.ts"; "c.ts" ] files
 
 let tests =
   let cases = list_subdirs cases_dir in
@@ -439,8 +443,7 @@ let tests =
   let roundtrip_tests =
     List.map
       (fun case ->
-        Alcotest.test_case (case ^ " (round-trip)") `Quick
-          (roundtrip_case case))
+        Alcotest.test_case (case ^ " (round-trip)") `Quick (roundtrip_case case))
       cases
   in
   case_tests @ roundtrip_tests
@@ -453,8 +456,7 @@ let tests =
          are structurally rare (aligned ones are caught at tier 1,
          unanchored ones cannot rule-ify; see tsx_tier_unanchored_factor),
          so no golden fixture produces this shape. *)
-      Alcotest.test_case "tiered format: mixed per-site after" `Quick
-        (fun () ->
+      Alcotest.test_case "tiered format: mixed per-site after" `Quick (fun () ->
           let r =
             {
               Change_summary.id = "R3";
@@ -477,15 +479,14 @@ let tests =
                    String.length l >= 6
                    && String.sub l 0 6 = "# rule"
                    && String.length l
-                      > String.length "# rule R3  support=2  language=typescript"
-                  )));
+                      > String.length
+                          "# rule R3  support=2  language=typescript")));
           Alcotest.(check bool)
             "site lines annotated" true
             (String.split_on_char '\n' out
-            |> List.exists (fun l -> l = "x.ts  after=R1")
-            &&
-            String.split_on_char '\n' out
-            |> List.exists (fun l -> l = "y.ts  after=R2")));
+             |> List.exists (fun l -> l = "x.ts  after=R1")
+            && String.split_on_char '\n' out
+               |> List.exists (fun l -> l = "y.ts  after=R2")));
       (* Uniform per-site after= lifts to the rule header. *)
       Alcotest.test_case "tiered format: uniform after in header" `Quick
         (fun () ->
@@ -510,6 +511,5 @@ let tests =
                 l = "# rule R2  support=2  language=typescript  after=R1"));
           Alcotest.(check bool)
             "site lines unannotated" true
-            (String.split_on_char '\n' out
-            |> List.exists (fun l -> l = "x.ts")));
+            (String.split_on_char '\n' out |> List.exists (fun l -> l = "x.ts")));
     ]

@@ -1,5 +1,5 @@
-(** Dump every child including unnamed tokens. Used to diagnose what the
-    grammar actually exposes as nodes versus what is consumed silently. *)
+(** Dump every child including unnamed tokens. Used to diagnose what the grammar
+    actually exposes as nodes versus what is consumed silently. *)
 
 let rec dump indent (node : Diffract.Tree.src Diffract.Tree.t) source =
   let pad = String.make indent ' ' in

@@ -269,7 +269,9 @@ let test_transform_edits_spans () =
         ^ ed.replacement
         ^ String.sub src ed.end_byte (String.length src - ed.end_byte))
       source
-      (List.sort (fun (a : Matcher.edit) b -> compare b.start_byte a.start_byte) edits)
+      (List.sort
+         (fun (a : Matcher.edit) b -> compare b.start_byte a.start_byte)
+         edits)
   in
   Alcotest.(check string)
     "splicing the edits equals transform's output"
@@ -1812,14 +1814,7 @@ let test_siblings_kotlin_import_position () =
    there too. Own-line blanking fixes it identically. *)
 let test_siblings_kotlin_class_body_position () =
   let pattern =
-    "@@\n\
-     match: strict\n\
-     @@\n\
-     class C {\n\
-    \    ...\n\
-     -     fun b() {}\n\
-    \    ...\n\
-     }"
+    "@@\nmatch: strict\n@@\nclass C {\n    ...\n-     fun b() {}\n    ...\n}"
   in
   let src = "class C {\n    fun a() {}\n    fun b() {}\n    fun c() {}\n}\n" in
   Alcotest.(check string)
@@ -1831,14 +1826,7 @@ let test_siblings_kotlin_class_body_position () =
    case clauses in its body. *)
 let test_siblings_scala_match_position () =
   let pattern =
-    "@@\n\
-     match: strict\n\
-     @@\n\
-     x match {\n\
-    \  ...\n\
-     -     case 2 => b\n\
-    \  ...\n\
-     }"
+    "@@\nmatch: strict\n@@\nx match {\n  ...\n-     case 2 => b\n  ...\n}"
   in
   let src =
     "object O {\n\

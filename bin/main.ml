@@ -536,8 +536,8 @@ let run_diff before_path after_path language =
 
 (* ── summarize subcommand ──────────────────────────────────────────── *)
 
-let run_summarize before_dir after_dir language include_pattern
-    exclude_patterns verbose =
+let run_summarize before_dir after_dir language include_pattern exclude_patterns
+    verbose =
   let ctx = Diffract.Context.create () in
   let exclude_dirs =
     if exclude_patterns = [] then default_excludes else exclude_patterns
@@ -581,9 +581,10 @@ let run_summarize before_dir after_dir language include_pattern
       end;
       let progress =
         if verbose then
-          Some (fun ~stage ~idx ~total ~path ->
-              Printf.eprintf "[summarize] (%s %d/%d) %s\n%!"
-                stage idx total path)
+          Some
+            (fun ~stage ~idx ~total ~path ->
+              Printf.eprintf "[summarize] (%s %d/%d) %s\n%!" stage idx total
+                path)
         else None
       in
       let summary =
@@ -591,8 +592,7 @@ let run_summarize before_dir after_dir language include_pattern
             Diffract.Change_summary.summarize ?progress ~ctx changeset)
       in
       if verbose then
-        Printf.eprintf "[summarize] %d rule(s)\n%!"
-          (List.length summary.rules);
+        Printf.eprintf "[summarize] %d rule(s)\n%!" (List.length summary.rules);
       if verbose then begin
         let module SS = Set.Make (String) in
         let modified_paths =
@@ -613,7 +613,9 @@ let run_summarize before_dir after_dir language include_pattern
         let total = SS.cardinal modified_paths in
         let cov = SS.cardinal (SS.inter modified_paths covered_paths) in
         Printf.eprintf
-          "[summary] file coverage: %d/%d modified files have at least one rule firing\n%!"
+          "[summary] file coverage: %d/%d modified files have at least one \
+           rule firing\n\
+           %!"
           cov total;
         if not (SS.is_empty uncovered) then begin
           Printf.eprintf "[summary] uncovered files (%d):\n%!"
@@ -622,7 +624,8 @@ let run_summarize before_dir after_dir language include_pattern
         end
       end;
       let output =
-        phase "format" (fun () -> Diffract.Change_summary.format_summary summary)
+        phase "format" (fun () ->
+            Diffract.Change_summary.format_summary summary)
       in
       print_string output;
       `Ok ()
@@ -635,15 +638,18 @@ let summarize_cmd =
   let doc = "Cluster systematic edits across a changeset into spatch rules." in
   let before_dir =
     Arg.(
-      required & pos 0 (some string) None
+      required
+      & pos 0 (some string) None
       & info [] ~docv:"BEFORE_DIR" ~doc:"Directory containing the before state.")
   in
   let after_dir =
     Arg.(
-      required & pos 1 (some string) None
+      required
+      & pos 1 (some string) None
       & info [] ~docv:"AFTER_DIR" ~doc:"Directory containing the after state.")
   in
-  Cmd.v (Cmd.info "summarize" ~doc)
+  Cmd.v
+    (Cmd.info "summarize" ~doc)
     Term.(
       ret
         (const run_summarize $ before_dir $ after_dir $ language

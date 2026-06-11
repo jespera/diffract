@@ -18,6 +18,6 @@ val generate_diff :
     [keep_hunk], when given, filters hunks: it receives each hunk's
     original-side position ([orig_start] — 0-based line index; [orig_len] —
     number of original lines the hunk spans, 0 for a pure insertion) and the
-    hunk is omitted when it returns [false]. Returns the empty string when
-    every hunk is filtered out. Change-summary uses this to drop layout-only
-    hunks (hunks touching no tree-level changed region). *)
+    hunk is omitted when it returns [false]. Returns the empty string when every
+    hunk is filtered out. Change-summary uses this to drop layout-only hunks
+    (hunks touching no tree-level changed region). *)

@@ -49,9 +49,9 @@ let included ~eq ~sub ~sup =
     match (ps, ts) with
     | [], _ -> true
     | _ :: _, [] -> false
-    | p :: ps', t :: ts' ->
+    | p :: ps', t :: ts' -> (
         let k = (key p, key t) in
-        (match Hashtbl.find_opt memo k with
+        match Hashtbl.find_opt memo k with
         | Some b -> b
         | None ->
             let b =
