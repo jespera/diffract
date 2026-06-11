@@ -87,6 +87,24 @@ val collect_one_sided_candidates :
     [on_file], if provided, is called once per [Modified] file just before
     parsing it. *)
 
+val residual_diff :
+  ctx:Context.t ->
+  language:string ->
+  file_path:string ->
+  original:string ->
+  transformed:string ->
+  unit ->
+  string
+(** Residual diff from a post-rule intermediate ([original]) to the real
+    after-source ([transformed]): a zero-context unified diff with
+    layout-only hunks dropped — a hunk is kept only when it touches a
+    tree-level changed region of the (original, transformed) diff, since
+    layout (re-indentation, spacing, line splits) is invisible to the
+    parse tree and states nothing about the change. Returns [""] when
+    the gap is entirely layout. This is the renderer [summarize] uses
+    for residuals; exposed so tests can recompute a residual the same
+    way. *)
+
 val summarize :
   ?progress:(stage:string -> idx:int -> total:int -> path:string -> unit) ->
   ctx:Context.t ->

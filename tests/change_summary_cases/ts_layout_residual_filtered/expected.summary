@@ -1,0 +1,16 @@
+# rule R1  support=2  language=typescript
+@@
+match: strict
+@@
+- oldName
++ newName
+# sites R1
+a.ts
+b.ts
+
+# residual  rule=R1
+--- a/a.ts
++++ b/a.ts
+@@ ... @@
+-const v = cfg("v1");
++const v = cfg("v2");

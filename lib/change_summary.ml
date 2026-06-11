@@ -732,6 +732,73 @@ let string_mem ~sub s =
   let rec at i = i + n <= m && (String.sub s i n = sub || at (i + 1)) in
   at 0
 
+(** Residual diff from a post-rule intermediate to the real after-source,
+    with layout-only hunks dropped (§9.1): a hunk is kept only when it
+    touches a tree-level changed region of the (intermediate, after)
+    diff. Layout — re-indentation, [{ }] vs [{}], line splits — is
+    invisible to the parse tree, so a hunk over lines no changed region
+    touches states nothing about the change; the summary's reconstruction
+    guarantee is already modulo layout (the whole-file gap check, the
+    gate's tree-level re-diff). Returns [""] when the gap is entirely
+    layout. Conservative in the keep direction: hunk and region line
+    spans are each widened by one line before intersecting, and an
+    unparseable side falls back to the unfiltered diff. *)
+let residual_diff ~ctx ~language ~file_path ~original ~transformed () =
+  if original = transformed then ""
+  else
+    let keep_hunk =
+      try
+        let bt = Tree.parse ~ctx ~language original in
+        let at = Tree.parse ~ctx ~language transformed in
+        let d = Tree_diff.diff ~before:bt ~after:at in
+        let regions = changed_regions d in
+        let line_starts =
+          let acc = ref [ 0 ] in
+          String.iteri
+            (fun i c -> if c = '\n' then acc := (i + 1) :: !acc)
+            original;
+          Array.of_list (List.rev !acc)
+        in
+        let line_of byte =
+          let lo = ref 0 and hi = ref (Array.length line_starts - 1) in
+          while !lo < !hi do
+            let mid = (!lo + !hi + 1) / 2 in
+            if line_starts.(mid) <= byte then lo := mid else hi := mid - 1
+          done;
+          !lo
+        in
+        let region_spans =
+          (* Exact line spans; only zero-width insertion regions get a
+             one-line widening (the insertion point sits between lines,
+             and the textual diff may render the added lines on either
+             side of it). Symmetric widening of every span would bridge
+             one-line gaps between a real change and an adjacent
+             layout-only hunk. *)
+          List.map
+            (fun (s, e, _) ->
+              if e <= s then (line_of s - 1, line_of s)
+              else (line_of s, line_of (e - 1)))
+            regions
+        in
+        Some
+          (fun ~orig_start ~orig_len ->
+            let h_lo = if orig_len = 0 then orig_start - 1 else orig_start in
+            let h_hi =
+              if orig_len = 0 then orig_start else orig_start + orig_len - 1
+            in
+            List.exists
+              (fun (lo, hi) -> max lo h_lo <= min hi h_hi)
+              region_spans)
+      with _ -> None
+    in
+    match keep_hunk with
+    | None ->
+        Text_diff.generate_diff ~context:0 ~file_path ~original ~transformed
+          ()
+    | Some keep_hunk ->
+        Text_diff.generate_diff ~context:0 ~keep_hunk ~file_path ~original
+          ~transformed ()
+
 (** [path → site_info] for every [Modified] file in the changeset. The
     safety gate evaluates rules against these. *)
 let build_site_db ~ctx (cs : changeset) : (string, site_info) Hashtbl.t =
@@ -2610,7 +2677,7 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
     List.filter_map
       (fun fc ->
         match fc with
-        | Modified { path; language = _; before_source; after_source } ->
+        | Modified { path; language; before_source; after_source } ->
             let claiming = rules_at path in
             let inter =
               match Hashtbl.find_opt inters path with
@@ -2623,8 +2690,8 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
             then None
             else
               let d =
-                Text_diff.generate_diff ~context:0 ~file_path:path
-                  ~original:inter ~transformed:after_source ()
+                residual_diff ~ctx ~language ~file_path:path ~original:inter
+                  ~transformed:after_source ()
               in
               if d = "" then None
               else
