@@ -70,7 +70,10 @@ src/b.kt
 ...
 ```
 
-- `support` is the number of times the rule fires across its sites.
+- `support` is the number of times the rule fires across its sites — counted
+  in the *applied chain*, not against the original source: if an earlier rule
+  consumes a later rule's matches at some file, that file is not listed in
+  the later rule's sites and contributes nothing to its support.
 - Metavariables are rendered `_H0, _H1, …` (valid identifiers in every
   supported grammar; diffract metavars are sigil-free).
 - `after=R1` marks a **tiered** rule: its pattern matches the intermediate

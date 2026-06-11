@@ -17,11 +17,17 @@ type changeset = { files : file_change list }
 type rule = {
   id : string;  (** e.g. "R1", "R2" *)
   pattern_text : string;  (** .pat-style body (match + replace) *)
-  support : int;  (** number of sites this rule fires at *)
+  support : int;
+      (** number of edits the rule makes in the applied chain, summed
+          over [sites] *)
   language : string;
       (** grammar the rule's pattern body is written in; all instances share *)
   sites : string list;
-      (** distinct files where the rule fires, sorted lexicographically *)
+      (** distinct files where the rule actually edits something when the
+          summary's rules are applied in id order, sorted
+          lexicographically — not merely where its pattern matches the
+          original source (an earlier rule may consume its matches at
+          some files; those are not listed) *)
   after : (string * string list) list;
       (** M2 per-site tier attribution: [(site, earlier rule ids)] — at
           that site the rule's pattern matches the intermediate produced
