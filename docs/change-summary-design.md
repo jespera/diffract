@@ -1406,11 +1406,18 @@ expression is not `return expression`), so a token-level criterion
 could hide real changes. Second, the tool has no oracle beyond the
 parse: tree-sitter-kotlin reshapes its tree when a property's
 `get() = …` moves onto its own line (the getter goes from
-`property_declaration` child to `class_body` sibling) even though both
-forms are semantically identical Kotlin — a grammar artifact, but one
-the filter cannot distinguish from a real restructure, so such hunks
-are conservatively kept (noise may survive; nothing real is ever
-dropped). Test: `ts_layout_residual_filtered` (a layout-only gap emits
+`property_declaration` child to `class_body` sibling — a documented
+ASI workaround in that grammar; real Kotlin attaches accessors across
+newlines) even though both forms are semantically identical — a
+grammar artifact, but one the filter cannot distinguish from a real
+restructure, so such hunks are conservatively kept (noise may survive;
+nothing real is ever dropped). An equal-hash same-place-reparent
+heuristic cannot fix this: `return ⏎ x` → `return x` produces the
+*identical* signature (an equal-hash `x` reparented one level at the
+same spot) and is a genuine behavioral change — discriminating the two
+requires per-language spec knowledge, i.e. a benign-reparent whitelist,
+which this project deliberately avoids. The durable fix is upstream
+grammar precision. Test: `ts_layout_residual_filtered` (a layout-only gap emits
 nothing; a mixed gap keeps only its real hunk).
 
 **Section-delimiter safety: the column-0 role-indicator contract.** The
