@@ -1,0 +1,76 @@
+#!/bin/sh
+# pre-push: build and test the pushed commit as a clean checkout would see
+# it. Building the working tree is not enough — untracked files can satisfy
+# dune and mask a commit that does not build on its own (a dune file
+# referencing never-committed modules, for instance). A detached worktree of
+# the pushed sha contains only committed content.
+#
+# Grammar archives (grammars/lib/*.a) are build artifacts, deliberately NOT
+# borrowed from the main checkout: an uncommitted grammar experiment there
+# could mask a commit whose own grammars/ doesn't produce them. They are
+# built from the committed grammars/ content and cached keyed on its tree
+# hash — same committed inputs, same archives — so pushes that don't touch
+# grammars/ skip the npm/cc work entirely. The regenerated metadata/*.json
+# are cached alongside for the same reason (build-grammars.sh overwrites
+# them on a clean clone).
+#
+# Activated once per clone with:
+#   git config core.hooksPath .githooks
+# (setup.sh does this.)
+
+set -e
+
+ROOT=$(git rev-parse --show-toplevel)
+ZERO=0000000000000000000000000000000000000000
+GRAMMAR_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/diffract/grammar-archives"
+
+# The shared dune cache keeps the cold-worktree build cheap after the
+# first run.
+export DUNE_CACHE=enabled
+
+# Ensure the worktree at $1 has grammar archives matching its committed
+# grammars/ tree ($2): reuse the cache or build from the committed script.
+provision_grammars() {
+    wt=$1
+    gkey=$2
+    gdir="$GRAMMAR_CACHE/$gkey"
+    if [ -d "$gdir" ]; then
+        mkdir -p "$wt/grammars/lib"
+        cp "$gdir"/lib/*.a "$wt/grammars/lib/"
+        cp "$gdir"/metadata/*.json "$wt/grammars/metadata/"
+    else
+        echo "pre-push: grammars/ changed; building archives from the committed script..." >&2
+        (cd "$wt/grammars" && ./build-grammars.sh) >&2
+        staged=$(mktemp -d "$GRAMMAR_CACHE/staging.XXXXXX")
+        mkdir -p "$staged/lib" "$staged/metadata"
+        cp "$wt"/grammars/lib/*.a "$staged/lib/"
+        cp "$wt"/grammars/metadata/*.json "$staged/metadata/"
+        mv "$staged" "$gdir" 2>/dev/null || rm -rf "$staged"
+    fi
+}
+
+mkdir -p "$GRAMMAR_CACHE"
+
+checked=""
+while read -r _local_ref local_sha _remote_ref _remote_sha; do
+    [ "$local_sha" = "$ZERO" ] && continue # deleting a remote ref
+    case " $checked " in *" $local_sha "*) continue ;; esac
+    checked="$checked $local_sha"
+
+    short=$(git rev-parse --short "$local_sha")
+    tmp=$(mktemp -d)/wt
+    echo "pre-push: verifying $short builds from a clean checkout..." >&2
+    git worktree add --detach --quiet "$tmp" "$local_sha"
+    provision_grammars "$tmp" "$(git rev-parse "$local_sha:grammars")"
+    if ! (cd "$tmp" && dune build && dune test); then
+        git worktree remove --force "$tmp"
+        rm -rf "$(dirname "$tmp")"
+        echo "pre-push: $short does not build/test from a clean checkout; push rejected." >&2
+        exit 1
+    fi
+    git worktree remove --force "$tmp"
+    rm -rf "$(dirname "$tmp")"
+    echo "pre-push: $short OK" >&2
+done
+
+exit 0

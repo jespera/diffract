@@ -56,6 +56,10 @@ dune test
 
 # Format code (requires ocamlformat: opam install ocamlformat)
 dune fmt
+
+# Enable the pre-push hook (builds & tests the pushed commit in a clean
+# worktree, so untracked files can't mask a broken commit)
+git config core.hooksPath .githooks
 ```
 
 Formatting is managed via [ocamlformat](https://github.com/ocaml-pp/ocamlformat).

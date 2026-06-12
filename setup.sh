@@ -28,6 +28,11 @@ echo "Installing tree-sitter grammar packages..."
 echo "Building grammar shared libraries..."
 ./grammars/build-grammars.sh
 
+# Enable the repo's git hooks (pre-push builds & tests the pushed commit
+# in a clean worktree, so untracked files can't mask a broken commit)
+echo "Enabling git hooks (.githooks)..."
+git config core.hooksPath .githooks
+
 echo ""
 echo "=== Setup complete ==="
 echo "Build the project with: dune build"
