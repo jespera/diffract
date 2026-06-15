@@ -1,0 +1,23 @@
+# rule R1  support=2  language=tsx
+@@
+match: strict
+metavar _H0: sequence
+@@
+- import React, { _H0 } from "react";
++ import React, { useCallback, _H0 } from "react";
+# sites R1
+UserList.tsx
+UserPanel.tsx
+
+# residual
+--- a/WidgetView.tsx
++++ b/WidgetView.tsx
+@@ ... @@
+-import React, { ReactNode, useEffect, useMemo, useState } from "react";
++import React, {
++  ReactNode,
++  useCallback,
++  useEffect,
++  useMemo,
++  useState,
++} from "react";

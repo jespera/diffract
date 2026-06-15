@@ -1,0 +1,21 @@
+# residual
+--- a/QueriesA.ts
++++ b/QueriesA.ts
+@@ ... @@
+-  const depoBanks = useMemo(() => identities.map(([id]) => id), [identities]);
++  const depoBanks = useMemo(() => {
++    const listed = identities.map(([id]) => id);
++    return listed.filter((x) => x.length > 0);
++  }, [identities]);
+
+# residual
+--- a/QueriesB.ts
++++ b/QueriesB.ts
+@@ ... @@
+-  const names = useMemo(() => records.map((r) => r.name), [records]);
++  const names = useMemo(() => {
++    const active = records.filter((r) => r.active);
++    const sorted = active.map((r) => r.name);
++    sorted.sort();
++    return sorted;
++  }, [records]);

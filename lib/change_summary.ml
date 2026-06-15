@@ -301,6 +301,50 @@ let render_pattern_body (ep : edit_pat) : string =
     (String.split_on_char '\n' after_text);
   Buffer.contents buf
 
+(** Surgical render (§3.2 anchored realisations): lines common to both sides
+    become context lines, so the transform's edit spans only the changed lines.
+    With the whole-construct [-]/[+] render, the rule's landing zone covers the
+    entire matched construct — including holed arguments whose interior carries
+    *other* changes at the site, which the content gate then rejects ("remaining
+    change overlapping the landing zone"). Context lines shrink the zone to the
+    delta's own lines. Alignment is longest-common-prefix/suffix over rendered
+    lines — exact for single-delta anchored variants; falls back to the full
+    [-]/[+] render when nothing aligns. *)
+let render_pattern_body_surgical (ep : edit_pat) : string =
+  let b_lines = String.split_on_char '\n' (render_pat_node ep.before) in
+  let a_lines = String.split_on_char '\n' (render_pat_node ep.after) in
+  let rec common_prefix acc = function
+    | b :: bs, a :: as_ when b = a -> common_prefix (b :: acc) (bs, as_)
+    | rest -> (List.rev acc, rest)
+  in
+  let prefix, (b_rest, a_rest) = common_prefix [] (b_lines, a_lines) in
+  let suffix, (b_mid_rev, a_mid_rev) =
+    common_prefix [] (List.rev b_rest, List.rev a_rest)
+  in
+  let suffix = List.rev suffix in
+  let b_mid = List.rev b_mid_rev and a_mid = List.rev a_mid_rev in
+  if prefix = [] && suffix = [] then render_pattern_body ep
+  else begin
+    let holes = edit_hole_list ep in
+    let buf = Buffer.create 128 in
+    Buffer.add_string buf "@@\nmatch: strict\n";
+    List.iter
+      (fun h ->
+        Buffer.add_string buf
+          (Printf.sprintf "metavar %s: single\n" (hole_name h)))
+      holes;
+    Buffer.add_string buf "@@\n";
+    List.iter
+      (fun l -> Buffer.add_string buf (Printf.sprintf "  %s\n" l))
+      prefix;
+    List.iter (fun l -> Buffer.add_string buf (Printf.sprintf "- %s\n" l)) b_mid;
+    List.iter (fun l -> Buffer.add_string buf (Printf.sprintf "+ %s\n" l)) a_mid;
+    List.iter
+      (fun l -> Buffer.add_string buf (Printf.sprintf "  %s\n" l))
+      suffix;
+    Buffer.contents buf
+  end
+
 (** Render a removal-only pattern as a .pat-style block body containing only [-]
     lines. Used for unpaired Before_side one-sided clusters that survive M1.6
     fusion as bare removals. *)
@@ -479,24 +523,55 @@ let root_sig (ep : edit_pat) =
 let build_dendrogram initial =
   let trace = Sys.getenv_opt "CS_TRACE" <> None in
   let initial_n = List.length initial in
+  let merge_patterns pi pj =
+    let offset = max_hole pi + 1 in
+    anti_unify_edits pi (shift_holes offset pj)
+  in
+  (* Each node carries a stable id so a merge's anti-unification score is
+     memoised on the unordered node pair. A merge removes its two nodes (whose
+     cache entries are never queried again) and adds O(current) new pairs, so
+     each distinct pair is anti-unified at most once over the whole build —
+     O(m²) anti-unifications rather than the O(m³) of recomputing every
+     surviving pair on every iteration. [merge_score] is symmetric in its
+     arguments (identical hole count, size, and before/after hole alignment
+     regardless of order — only hole *numbering*, which the score ignores,
+     differs), so the unordered key is sound and each cached score is
+     bit-identical to a fresh computation. Selection (the (0,1) default, the
+     strict-< scan-order tie-break) and the chosen merge's pattern are
+     therefore byte-identical to the unmemoised build. *)
+  let next_id = ref 0 in
+  let fresh () =
+    let i = !next_id in
+    incr next_id;
+    i
+  in
   let nodes =
-    ref (List.map (fun c -> DLeaf (c.instances, c.pattern)) initial)
+    ref (List.map (fun c -> (fresh (), DLeaf (c.instances, c.pattern))) initial)
+  in
+  let score_cache : (int * int, float) Hashtbl.t = Hashtbl.create 256 in
+  let total_antiunifies = ref 0 in
+  let score (ida, nda) (idb, ndb) =
+    let key = if ida <= idb then (ida, idb) else (idb, ida) in
+    match Hashtbl.find_opt score_cache key with
+    | Some f -> f
+    | None ->
+        incr total_antiunifies;
+        let f =
+          merge_score (merge_patterns (dnode_pattern nda) (dnode_pattern ndb))
+        in
+        Hashtbl.add score_cache key f;
+        f
   in
   let t_start = Unix.gettimeofday () in
   let last_tick = ref t_start in
   let iter_no = ref 0 in
-  let cur_n = ref initial_n in
-  let cur_antiunifies = ref 0 in
-  let heartbeat_interval = 2.0 in
   let heartbeat () =
     if trace then begin
       let now = Unix.gettimeofday () in
-      if now -. !last_tick >= heartbeat_interval then begin
+      if now -. !last_tick >= 2.0 then begin
         Printf.eprintf
-          "  dendrogram: iter %d/%d, n=%d, %d anti-unifies in iter, elapsed \
-           %.1fs\n\
-           %!"
-          !iter_no (initial_n - 1) !cur_n !cur_antiunifies (now -. t_start);
+          "  dendrogram: iter %d/%d, %d anti-unifies so far, elapsed %.1fs\n%!"
+          !iter_no (initial_n - 1) !total_antiunifies (now -. t_start);
         last_tick := now
       end
     end
@@ -507,57 +582,45 @@ let build_dendrogram initial =
   while List.length !nodes > 1 do
     let arr = Array.of_list !nodes in
     let n = Array.length arr in
-    let sigs = Array.map (fun nd -> root_sig (dnode_pattern nd)) arr in
+    let sigs = Array.map (fun (_, nd) -> root_sig (dnode_pattern nd)) arr in
     incr iter_no;
-    cur_n := n;
-    cur_antiunifies := 0;
-    let merge_patterns pi pj =
-      let offset = max_hole pi + 1 in
-      anti_unify_edits pi (shift_holes offset pj)
-    in
     let bi = ref 0 and bj = ref 1 in
-    let bp =
-      ref (merge_patterns (dnode_pattern arr.(0)) (dnode_pattern arr.(1)))
-    in
-    let bfrac = ref (merge_score !bp) in
+    let bfrac = ref (score arr.(0) arr.(1)) in
     for i = 0 to n - 2 do
       for j = i + 1 to n - 1 do
         if (not (i = 0 && j = 1)) && sigs.(i) = sigs.(j) then begin
-          incr cur_antiunifies;
-          if !cur_antiunifies mod 1000 = 0 then heartbeat ();
-          let p =
-            merge_patterns (dnode_pattern arr.(i)) (dnode_pattern arr.(j))
-          in
-          let frac = merge_score p in
+          let frac = score arr.(i) arr.(j) in
           if frac < !bfrac then begin
             bi := i;
             bj := j;
-            bp := p;
             bfrac := frac
           end
         end
-      done
+      done;
+      heartbeat ()
     done;
-    heartbeat ();
     let i = !bi and j = !bj in
+    let _, ndi = arr.(i) and _, ndj = arr.(j) in
     let merged =
-      DMerge
-        {
-          pattern = !bp;
-          instances = dnode_instances arr.(i) @ dnode_instances arr.(j);
-          left = arr.(i);
-          right = arr.(j);
-        }
+      ( fresh (),
+        DMerge
+          {
+            pattern = merge_patterns (dnode_pattern ndi) (dnode_pattern ndj);
+            instances = dnode_instances ndi @ dnode_instances ndj;
+            left = ndi;
+            right = ndj;
+          } )
     in
     let rest = ref [ merged ] in
     Array.iteri (fun k nd -> if k <> i && k <> j then rest := nd :: !rest) arr;
     nodes := !rest
   done;
   if trace then
-    Printf.eprintf "  dendrogram: done in %.2fs after %d iterations\n%!"
+    Printf.eprintf
+      "  dendrogram: done in %.2fs after %d iterations (%d anti-unifies)\n%!"
       (Unix.gettimeofday () -. t_start)
-      !iter_no;
-  List.hd !nodes
+      !iter_no !total_antiunifies;
+  match !nodes with (_, nd) :: _ -> nd | [] -> invalid_arg "build_dendrogram"
 
 (** A pattern is "concrete" iff it contains at least one named [Leaf] or a
     keyword-shaped unnamed token (one whose text contains an alphabetic
@@ -961,10 +1024,9 @@ let site_eval ~ctx ~language ~pattern_text (si : site_info) : site_evaluation =
             edits;
           match !result with Some q -> q | None -> p + !delta
         in
-        let t'' =
-          Matcher.transform ~ctx ~language ~pattern_text
-            ~source_text:si.si_before
-        in
+        (* Same result as [Matcher.transform], without re-running the
+           parse + match: the edits are already in hand. *)
+        let t'' = Matcher.apply_edits si.si_before edits in
         let bt = Tree.parse ~ctx ~language t'' in
         let at = Tree.parse ~ctx ~language si.si_after in
         (* Well-formedness: a transform must produce parseable code. A
@@ -1685,12 +1747,549 @@ let lookahead_one_sided (d : Tree_diff.diff) : (side * Tree.src Tree.t) list =
 
 (* ── Pipeline ────────────────────────────────────────────────────── *)
 
-let collect_initial_clusters ?on_file ~ctx (cs : changeset) : cluster list =
+(* ── Delta-keyed pair variant (§3.2) ─────────────────────────────── *)
+
+(** Scope-holed variant of a change pair: the pair's preserved children (equal
+    structural hash on both sides) become shared holes — the same metavar bound
+    on before and after — while the changed children stay concrete. This keys
+    clustering on the delta itself instead of on whatever surrounding shape the
+    dendrogram's merge order happens to anti-unify first, pooling one delta's
+    support across heterogeneous anchors. It also evades the rendered-pattern
+    re-parse mismatch: a scope name kept concrete re-parses with a
+    neutral-context node type ([simple_identifier] where the source position has
+    [type_identifier]) and the gate then finds zero fires; a hole is
+    node-type-agnostic, and the delta's own leaves keep their grammatical role.
+    See design §3.2 "Diagnosis".
+
+    Returns [None] when the variant would be useless: a leaf-shaped node
+    (mirrors [of_src]'s leaf rules), no preserved child (the variant equals the
+    concrete pair), no changed child, or an incoherent result the dendrogram cut
+    would reject anyway. *)
+let delta_keyed_pair (cp : Tree_diff.change_pair) : edit_pat option =
+  let b = cp.before_node and a = cp.after_node in
+  let pnode_shaped source (n : Tree.src Tree.t) =
+    n.children <> []
+    && (not (has_silent_concrete_delimiters ~source ~node:n))
+    && not (has_quote_delim_children ~source ~node:n)
+  in
+  if
+    not
+      (pnode_shaped cp.before_source b
+      && pnode_shaped cp.after_source a
+      && b.node_type = a.node_type)
+  then None
+  else begin
+    let kept (n : Tree.src Tree.t) =
+      List.filter
+        (fun (c : Tree.src Tree.child) -> not c.node.is_extra)
+        n.children
+    in
+    let bks = kept b and aks = kept a in
+    let aks_arr = Array.of_list aks in
+    let used = Array.make (Array.length aks_arr) false in
+    (* Greedy in-order hash matching: a before-child is preserved iff an
+       unconsumed after-child has the same structural hash. Only NAMED
+       preserved children become holes — an anonymous token (operator,
+       punctuation) is structure, not content, and holing it produces
+       nonsense patterns like [holder _H0 null]; matched anonymous
+       children stay concrete (their text is identical anyway). *)
+    let next_hole = ref 0 in
+    let b_assign =
+      List.map
+        (fun (c : Tree.src Tree.child) ->
+          let m = ref None in
+          Array.iteri
+            (fun i (ac : Tree.src Tree.child) ->
+              if !m = None && (not used.(i)) && ac.node.hash = c.node.hash then begin
+                used.(i) <- true;
+                m := Some i
+              end)
+            aks_arr;
+          match !m with
+          | Some i when c.node.is_named ->
+              let h = !next_hole in
+              incr next_hole;
+              (c, `Holed (i, h))
+          | Some _ -> (c, `Matched)
+          | None -> (c, `Delta))
+        bks
+    in
+    let n_holes =
+      List.length
+        (List.filter
+           (fun (_, m) -> match m with `Holed _ -> true | _ -> false)
+           b_assign)
+    in
+    let n_matched_b =
+      List.length
+        (List.filter
+           (fun (_, m) -> match m with `Delta -> false | _ -> true)
+           b_assign)
+    in
+    let n_delta_b = List.length bks - n_matched_b in
+    let n_delta_a =
+      List.length aks
+      - Array.fold_left (fun n u -> if u then n + 1 else n) 0 used
+    in
+    if n_holes = 0 || (n_delta_b = 0 && n_delta_a = 0) then None
+    else begin
+      let hole_of_a = Array.make (Array.length aks_arr) None in
+      List.iter
+        (fun ((_ : Tree.src Tree.child), m) ->
+          match m with `Holed (i, h) -> hole_of_a.(i) <- Some h | _ -> ())
+        b_assign;
+      let keep (n : Tree.src Tree.t) = not n.is_extra in
+      let before =
+        PNode
+          {
+            node_type = b.node_type;
+            is_named = b.is_named;
+            children =
+              List.map
+                (fun ((c : Tree.src Tree.child), m) ->
+                  {
+                    field_name = c.field_name;
+                    child =
+                      (match m with
+                      | `Holed (_, h) -> Hole h
+                      | `Matched | `Delta -> of_src cp.before_source c.node);
+                  })
+                b_assign;
+            template = build_template ~source:cp.before_source ~node:b ~keep ();
+          }
+      in
+      let after =
+        PNode
+          {
+            node_type = a.node_type;
+            is_named = a.is_named;
+            children =
+              List.mapi
+                (fun i (c : Tree.src Tree.child) ->
+                  {
+                    field_name = c.field_name;
+                    child =
+                      (match hole_of_a.(i) with
+                      | Some h -> Hole h
+                      | None -> of_src cp.after_source c.node);
+                  })
+                aks;
+            template = build_template ~source:cp.after_source ~node:a ~keep ();
+          }
+      in
+      let ep = { before; after } in
+      if
+        has_concrete ep.before && has_concrete_edit ep
+        && no_orphan_after_holes ep
+        && hole_frac ep < 0.35
+      then Some ep
+      else None
+    end
+  end
+
+(* ── Anchored variant (§3.2 lattice descent) ─────────────────────── *)
+
+(** The dual of [delta_keyed_pair]: the pair's own preserved children stay
+    CONCRETE — they are the anchor that discriminates a context-dependent change
+    — while preserved content *inside* the changed-child chain becomes shared
+    holes, recursively along the single-changed-child path. For a rename applied
+    at [state = X(args)] this yields [state = X(_H0) ⤳ state = Y(_H0)]: the
+    [state =] anchor literal, the site-specific args holed.
+
+    Each variant carries a *delta key* — the changed leaves' source text on both
+    sides — so that support can be pooled on the delta across sites whose
+    anchors differ (design §3.2: support and min_support are counted on the
+    delta cluster; the anchored variants are its site-local realisations).
+    Variants with no holes are kept only when the change is leaf-level (the
+    [::X ⤳ ::Y] case, where the anchor is pure structure); deeper hole-free
+    variants are just the concrete base pair again. *)
+let anchored_variants (cp : Tree_diff.change_pair) :
+    (edit_pat * string * (int * int)) list =
+  let pnode_shaped source (n : Tree.src Tree.t) =
+    n.children <> []
+    && (not (has_silent_concrete_delimiters ~source ~node:n))
+    && not (has_quote_delim_children ~source ~node:n)
+  in
+  let next_hole = ref 0 in
+  (* Hole a preserved subtree. A node whose surface carries its own
+     delimiters as unnamed children (the parens of an argument list,
+     the angle brackets of type arguments) cannot be replaced by a bare
+     hole — the render would glue [_H0] to the preceding token
+     ([WorkflowState_H0]). Keep such a shell concrete and hole its
+     named children. Quote-delimited and silently-delimited tokens
+     (string literals) hole whole: a metavar inside the quotes would be
+     read as string content. *)
+  let rec hole_subtree source (n : Tree.src Tree.t) : pat_node =
+    let fresh () =
+      let h = !next_hole in
+      incr next_hole;
+      Hole h
+    in
+    if n.children = [] then fresh ()
+    else if
+      has_silent_concrete_delimiters ~source ~node:n
+      || has_quote_delim_children ~source ~node:n
+    then fresh ()
+    else if
+      List.exists
+        (fun (c : Tree.src Tree.child) -> not c.node.is_named)
+        n.children
+    then
+      let keep (c : Tree.src Tree.t) = not c.is_extra in
+      PNode
+        {
+          node_type = n.node_type;
+          is_named = n.is_named;
+          children =
+            List.filter_map
+              (fun (c : Tree.src Tree.child) ->
+                if not (keep c.node) then None
+                else if c.node.is_named then
+                  Some { field_name = c.field_name; child = fresh () }
+                else
+                  Some
+                    { field_name = c.field_name; child = of_src source c.node })
+              n.children;
+          template = build_template ~source ~node:n ~keep ();
+        }
+    else if List.length n.children = 1 then
+      (* All-named single-child wrapper (e.g. [call_suffix] around
+         [value_arguments]): descend — the delimiter shell, if any,
+         lives below. *)
+      let keep (c : Tree.src Tree.t) = not c.is_extra in
+      PNode
+        {
+          node_type = n.node_type;
+          is_named = n.is_named;
+          children =
+            List.map
+              (fun (c : Tree.src Tree.child) ->
+                {
+                  field_name = c.field_name;
+                  child = hole_subtree source c.node;
+                })
+              n.children;
+          template = build_template ~source ~node:n ~keep ();
+        }
+    else fresh ()
+  in
+  (* Match the kept children of [bn]/[an] by structural hash (greedy,
+     in order). *)
+  let match_children (bn : Tree.src Tree.t) (an : Tree.src Tree.t) =
+    let kept (n : Tree.src Tree.t) =
+      List.filter
+        (fun (c : Tree.src Tree.child) -> not c.node.is_extra)
+        n.children
+    in
+    let bks = kept bn and aks = kept an in
+    let aks_arr = Array.of_list aks in
+    let used = Array.make (Array.length aks_arr) false in
+    let b_assign =
+      List.map
+        (fun (c : Tree.src Tree.child) ->
+          let m = ref None in
+          Array.iteri
+            (fun i (ac : Tree.src Tree.child) ->
+              if !m = None && (not used.(i)) && ac.node.hash = c.node.hash then begin
+                used.(i) <- true;
+                m := Some i
+              end)
+            aks_arr;
+          (c, !m))
+        bks
+    in
+    (b_assign, aks, used)
+  in
+  let recursable (cb : Tree.src Tree.child) (ca : Tree.src Tree.child) =
+    cb.node.node_type = ca.node.node_type
+    && pnode_shaped cp.before_source cb.node
+    && pnode_shaped cp.after_source ca.node
+  in
+  (* The changed-children pairing at a level: when before- and
+     after-side unmatched counts are equal, zip them in order. *)
+  let zipped_unmatched b_assign aks used =
+    let unmatched_b =
+      List.filter_map (fun (c, m) -> if m = None then Some c else None) b_assign
+    in
+    let unmatched_a_idx = ref [] in
+    List.iteri
+      (fun i (c : Tree.src Tree.child) ->
+        if not used.(i) then unmatched_a_idx := (i, c) :: !unmatched_a_idx)
+      aks;
+    let unmatched_a_idx = List.rev !unmatched_a_idx in
+    if
+      List.length unmatched_b = List.length unmatched_a_idx && unmatched_b <> []
+    then Some (List.combine unmatched_b unmatched_a_idx)
+    else None
+  in
+  (* Enumerate path selectors: at each MULTI-pair branch point the
+     selector names the zipped pair to descend ([] = stop there with a
+     compound delta); single recursable pairs descend automatically.
+     Depth- and width-capped — variants beyond the cap are simply not
+     proposed (coverage falls to residuals, never to wrong output). *)
+  let rec enum_selectors (bn : Tree.src Tree.t) (an : Tree.src Tree.t) depth :
+      int list list =
+    if depth > 5 then [ [] ]
+    else
+      let b_assign, aks, used = match_children bn an in
+      match zipped_unmatched b_assign aks used with
+      | None -> [ [] ]
+      | Some [ (cb, (_, ca)) ] ->
+          if recursable cb ca then enum_selectors cb.node ca.node (depth + 1)
+          else [ [] ]
+      | Some zipped ->
+          (* At a branch point each zipped pair is a possible path:
+             recursable pairs descend (deeper selectors), the others
+             terminate as the chosen delta with siblings holed. [] =
+             stop here with the compound delta. *)
+          []
+          :: List.concat
+               (List.mapi
+                  (fun j (cb, ((_ : int), ca)) ->
+                    if recursable cb ca then
+                      List.map
+                        (fun s -> j :: s)
+                        (enum_selectors cb.node ca.node (depth + 1))
+                    else [ [ j ] ])
+                  zipped)
+  in
+  (* Build one variant for a given selector. Mutable per-run state. *)
+  let build selector0 =
+    next_hole := 0;
+    let sel = ref selector0 in
+    let b_delta = ref [] and a_delta = ref [] in
+    let all_leaves = ref true in
+    (* Byte span of the delta — the identity of the CHANGE itself,
+       shared by this change's anchored variants at every ancestor
+       level (the pair spans differ per level and would overcount one
+       change as several pool sites). *)
+    let d_start = ref max_int and d_end = ref 0 in
+    let record_delta side (source : string) (n : Tree.src Tree.t) =
+      let t = Tree.text source n in
+      (match side with
+      | `B ->
+          b_delta := t :: !b_delta;
+          d_start := min !d_start n.start_byte;
+          d_end := max !d_end n.end_byte
+      | `A -> a_delta := t :: !a_delta);
+      if n.children <> [] then all_leaves := false
+    in
+    (* Build both sides at one level. [holed_preserved] says whether
+       preserved named children become holes (Inner mode) or stay
+       concrete (Anchor mode, top level only). *)
+    let rec level ~holed_preserved (bn : Tree.src Tree.t) (an : Tree.src Tree.t)
+        : pat_node * pat_node =
+      let b_assign, aks, used = match_children bn an in
+      let zipped = zipped_unmatched b_assign aks used in
+      (* Which zipped pair continues the chain? Single recursable pairs
+         descend automatically; multi-pair branch points consult the
+         selector; everything else is a compound delta. *)
+      (* [`Descend] continues the chain into pair j; [`DeltaPair]
+         terminates at pair j (a leaf or non-recursable pair chosen as
+         THE delta), holing the sibling pairs. *)
+      let chosen =
+        match zipped with
+        | Some [ (cb, (ai, ca)) ] when recursable cb ca ->
+            Some (`Descend (cb.node, ai, ca.node))
+        | Some zs when List.length zs > 1 -> (
+            match !sel with
+            | j :: rest when j >= 0 && j < List.length zs ->
+                let cb, (ai, ca) = List.nth zs j in
+                sel := rest;
+                if recursable cb ca then Some (`Descend (cb.node, ai, ca.node))
+                else Some (`DeltaPair (cb.node, ai, ca.node))
+            | _ -> None)
+        | _ -> None
+      in
+      let descend =
+        match chosen with Some (`Descend d) -> Some d | _ -> None
+      in
+      (* Sibling changed pairs at a descended branch point become
+         SHARED holes: identical on both sides, they render as context
+         lines, so the rule does not claim those changes — they stay
+         with other rules or residuals. *)
+      let sibling_hole : (int, pat_node) Hashtbl.t = Hashtbl.create 4 in
+      let b_sibling : (Tree.src Tree.t, pat_node) Hashtbl.t =
+        Hashtbl.create 4
+      in
+      (match (chosen, zipped) with
+      | Some (`Descend (ub, _, _) | `DeltaPair (ub, _, _)), Some zs -> (
+          List.iter
+            (fun ((cb : Tree.src Tree.child), ((ai : int), _)) ->
+              if cb.node != ub then begin
+                (* Built from the before side and shared verbatim with
+                   the after side: identical on both sides, the holed
+                   sibling renders as context lines — the rule does not
+                   claim that change. [hole_subtree] keeps delimiter
+                   shells concrete so the render cannot glue. *)
+                let hp = hole_subtree cp.before_source cb.node in
+                Hashtbl.replace sibling_hole ai hp;
+                Hashtbl.replace b_sibling cb.node hp
+              end)
+            zs;
+          match chosen with
+          | Some (`DeltaPair (ub, _, ua)) ->
+              record_delta `B cp.before_source ub;
+              record_delta `A cp.after_source ua
+          | _ -> ())
+      | None, _ -> (
+          (* Compound delta: every unmatched child is delta content. *)
+          match zipped with
+          | Some zs ->
+              List.iter
+                (fun ( (cb : Tree.src Tree.child),
+                       (_, (ca : Tree.src Tree.child)) ) ->
+                  record_delta `B cp.before_source cb.node;
+                  record_delta `A cp.after_source ca.node)
+                zs
+          | None ->
+              List.iter
+                (fun ((c : Tree.src Tree.child), m) ->
+                  if m = None then record_delta `B cp.before_source c.node)
+                b_assign;
+              List.iteri
+                (fun i (c : Tree.src Tree.child) ->
+                  if not used.(i) then record_delta `A cp.after_source c.node)
+                aks)
+      | Some _, None -> ());
+      let hole_of_a = Array.make (List.length aks) None in
+      let inner_ap = ref None in
+      let b_children =
+        List.map
+          (fun ((c : Tree.src Tree.child), m) ->
+            let child =
+              match m with
+              | Some i when c.node.is_named && holed_preserved ->
+                  (* Shared structure: the after side reuses the same
+                     pat_node, so its holes carry the same indices. *)
+                  let hp = hole_subtree cp.before_source c.node in
+                  hole_of_a.(i) <- Some hp;
+                  hp
+              | Some i ->
+                  let ac = List.nth aks i in
+                  hole_of_a.(i) <- Some (of_src cp.after_source ac.node);
+                  of_src cp.before_source c.node
+              | None -> (
+                  match descend with
+                  | Some (ub, ai, ua) when ub == c.node ->
+                      let bp, ap = level ~holed_preserved:true ub ua in
+                      inner_ap := Some ap;
+                      hole_of_a.(ai) <- None;
+                      bp
+                  | _ -> (
+                      match Hashtbl.find_opt b_sibling c.node with
+                      | Some hp -> hp
+                      | None -> of_src cp.before_source c.node))
+            in
+            { field_name = c.field_name; child })
+          b_assign
+      in
+      let a_children =
+        List.mapi
+          (fun i (c : Tree.src Tree.child) ->
+            let child =
+              match descend with
+              | Some (_, ai, ua) when ai = i && ua == c.node -> (
+                  match !inner_ap with
+                  | Some ap -> ap
+                  | None -> of_src cp.after_source c.node)
+              | _ -> (
+                  match hole_of_a.(i) with
+                  | Some p -> p
+                  | None -> (
+                      match Hashtbl.find_opt sibling_hole i with
+                      | Some hp -> hp
+                      | None -> of_src cp.after_source c.node))
+            in
+            { field_name = c.field_name; child })
+          aks
+      in
+      let keep (n : Tree.src Tree.t) = not n.is_extra in
+      ( PNode
+          {
+            node_type = bn.node_type;
+            is_named = bn.is_named;
+            children = b_children;
+            template = build_template ~source:cp.before_source ~node:bn ~keep ();
+          },
+        PNode
+          {
+            node_type = an.node_type;
+            is_named = an.is_named;
+            children = a_children;
+            template = build_template ~source:cp.after_source ~node:an ~keep ();
+          } )
+    in
+    let before, after =
+      level ~holed_preserved:false cp.before_node cp.after_node
+    in
+    let ep = { before; after } in
+    let holes = edit_holes ep in
+    (* A pure-insertion delta (empty before side) is un-anchorable: an
+       anchored realisation would claim a one-site insertion with a
+       support-1 rule, which states the change worse than its residual
+       (the §5.5 pure-additions philosophy). *)
+    if !b_delta = [] then None
+    else if holes = 0 && not !all_leaves then None
+    else if
+      has_concrete ep.before && has_concrete_edit ep && no_orphan_after_holes ep
+      && hole_frac ep < 0.35
+    then
+      let key =
+        String.concat "\x00" (List.rev !b_delta)
+        ^ "\x01"
+        ^ String.concat "\x00" (List.rev !a_delta)
+      in
+      Some (ep, key, (!d_start, !d_end))
+    else None
+  in
+  let b = cp.before_node and a = cp.after_node in
+  if
+    not
+      (pnode_shaped cp.before_source b
+      && pnode_shaped cp.after_source a
+      && b.node_type = a.node_type
+      (* Anchored realisations are site-local statements of a change;
+         a pair spanning more than ~a statement produces huge patterns
+         whose gate evaluations dominate runtime and which the
+         least-concrete tie-break would never pick anyway. *)
+      && b.end_byte - b.start_byte <= 1500
+      && a.end_byte - a.start_byte <= 1500)
+  then []
+  else begin
+    let sels = enum_selectors b a 0 in
+    let sels = List.filteri (fun i _ -> i < 8) sels in
+    let seen = Hashtbl.create 8 in
+    List.filter_map
+      (fun s ->
+        match build s with
+        | Some ((ep, _, _) as v) ->
+            if Hashtbl.mem seen ep then None
+            else begin
+              Hashtbl.add seen ep ();
+              Some v
+            end
+        | None -> None)
+      sels
+  end
+
+(* Returns (base clusters, delta-keyed clusters, anchored variants).
+   The base clusters feed the dendrogram as before; the delta-keyed and
+   anchored variants deliberately stay OUT of it — adding them as
+   dendrogram inputs changes its merge geometry for everyone (observed:
+   displaced extraction and call-level rules on the golden cases). The
+   delta-keyed variants pool by exact pattern identity; the anchored
+   variants pool by DELTA key, so a context-dependent change whose
+   anchors differ per site still accumulates delta-level support. *)
+let collect_initial_clusters ?on_file ~ctx (cs : changeset) :
+    cluster list * cluster list * (string * (int * int) * cluster) list =
   let modified =
     List.filter (function Modified _ -> true | _ -> false) cs.files
   in
   let total = List.length modified in
   let initial = ref [] in
+  let delta = ref [] in
+  let anchored = ref [] in
   List.iteri
     (fun i fc ->
       match fc with
@@ -1725,12 +2324,43 @@ let collect_initial_clusters ?on_file ~ctx (cs : changeset) : cluster list =
                     ipat = ep;
                   }
                 in
-                initial := { pattern = ep; instances = [ inst ] } :: !initial)
+                initial := { pattern = ep; instances = [ inst ] } :: !initial;
+                (* §3.2 delta-keyed variant: same site, scope-holed
+                   pattern, collected on its own channel. *)
+                (match delta_keyed_pair cp with
+                | Some dep ->
+                    delta :=
+                      {
+                        pattern = dep;
+                        instances = [ { inst with ipat = dep } ];
+                      }
+                      :: !delta
+                | None -> ());
+                (* §3.2 anchored variants: preserved siblings literal,
+                   changed-chain interior holed, keyed by the delta —
+                   one per path choice at branching levels. *)
+                match anchored_variants cp with
+                | vs ->
+                    List.iter
+                      (fun (aep, key, span) ->
+                        anchored :=
+                          ( key,
+                            span,
+                            {
+                              pattern = aep;
+                              instances = [ { inst with ipat = aep } ];
+                            } )
+                          :: !anchored)
+                      vs
+                | exception e ->
+                    if Sys.getenv_opt "CS_TRACE" <> None then
+                      Printf.eprintf "anchored_variants exn at %s:%d: %s\n%!"
+                        path inst.line (Printexc.to_string e))
               (collect_change_pairs_multi d)
           with _ -> ())
       | Added _ | Deleted _ -> ())
     modified;
-  !initial
+  (!initial, !delta, !anchored)
 
 (** Collect one-sided candidates (M1.5) across a changeset's [Modified] files.
     Each candidate carries its pat_node shape and site metadata. Used internally
@@ -2062,7 +2692,7 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
         pattern_safe_at ~language:i.language ~pattern_text i.file)
       insts
   in
-  let raw =
+  let raw, delta_raw, anchored_raw =
     collect_initial_clusters ?on_file:(on_file_for "two-sided") ~ctx cs
   in
   let initial = pre_group_identical raw in
@@ -2095,7 +2725,7 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
     Hashtbl.fold (fun k _ acc -> k :: acc) site_db []
     |> List.sort String.compare
   in
-  let two_sided_clusters =
+  let base_two_sided =
     match initial with
     | [] -> []
     | [ c ] ->
@@ -2115,28 +2745,152 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
         end
         else []
     | _ ->
-        let root = build_dendrogram initial in
-        if Sys.getenv_opt "CS_TRACE" <> None then
-          Printf.eprintf "dendrogram built\n%!";
-        let clusters, _singletons = cut_dendrogram ~safe_instances 2 root in
-        if Sys.getenv_opt "CS_TRACE" <> None then begin
-          Printf.eprintf "clusters after safety cut: %d\n%!"
-            (List.length clusters);
-          List.iter
-            (fun c ->
-              let intended =
-                match c.pattern.before with
-                | Hole _ -> "<hole>"
-                | Leaf { node_type; _ } -> node_type
-                | PNode { node_type; _ } -> node_type
-              in
-              let text = render_pat_node c.pattern.before in
-              Printf.eprintf "  safe cluster: intended=%s insts=%d text=%S\n%!"
-                intended (List.length c.instances) text)
-            clusters
-        end;
-        List.map respecialize clusters
+        (* Build a dendrogram per LHS (before-side) root node-type rather than
+           one global tree (a forest). Anti-unification recurses on the before
+           side, so two pairs can only merge coherently when their before-roots
+           share a node-type; a before-root mismatch collapses to a root hole
+           the cut discards. The AFTER side may differ freely — the shared hole
+           binding reconciles it (this is exactly the extraction case,
+           [box(foo()).get()⤳foo()] ∧ [box(42).get()⤳42] → [box(_H0).get()⤳_H0],
+           where the varying extracted value becomes the hole), so we must NOT
+           split on it. Grouping by before-root keeps those together while
+           avoiding re-anti-unifying every group on every global merge step. *)
+        let process_bucket bucket =
+          let root = build_dendrogram bucket in
+          let clusters, _singletons = cut_dendrogram ~safe_instances 2 root in
+          List.map respecialize clusters
+        in
+        let tbl = Hashtbl.create 16 in
+        let order = ref [] in
+        List.iter
+          (fun c ->
+            let s =
+              fst (root_sig c.pattern)
+              (* LHS root node-type only *)
+            in
+            match Hashtbl.find_opt tbl s with
+            | Some l -> l := c :: !l
+            | None ->
+                Hashtbl.add tbl s (ref [ c ]);
+                order := s :: !order)
+          initial;
+        List.rev !order
+        |> List.concat_map (fun s ->
+            process_bucket (List.rev !(Hashtbl.find tbl s)))
   in
+  (* §3.2 delta-keyed candidates: pooled by exact pattern identity only
+     (no dendrogram participation), gated like any cluster. A pool of
+     ≥ 2 identical scope-holed pairs is a delta whose support spans
+     anchors; evaluation later extends it to every file it fires in. *)
+  let delta_clusters =
+    pre_group_identical delta_raw
+    |> List.filter (fun c -> List.length c.instances >= 2)
+    |> List.filter_map (fun c ->
+        let safe = safe_instances c.pattern c.instances in
+        if List.length safe >= 2 then Some { c with instances = safe } else None)
+  in
+  if Sys.getenv_opt "CS_TRACE" <> None then
+    Printf.eprintf "delta-keyed: %d raw, %d pooled+safe\n%!"
+      (List.length delta_raw)
+      (List.length delta_clusters);
+  (* §3.2 anchored variants: support pools on the DELTA. A delta whose
+     distinct sites number ≥ 2 may realise as per-site anchored rules
+     of support 1 — they are exempted from the min-support thresholds
+     in EVALUATE and SELECT below (the pool carries the support, the
+     anchors are its site-local realisations). Selection's greedy
+     set-cover provides the lattice-descent pruning: a general
+     candidate that already covers a region wins it first (higher
+     marginal, shorter pattern), so an anchored rule is only ever
+     selected for regions no more-general safe candidate claims. *)
+  (* (pattern_text, language) → (concrete node count, delta needle).
+     Membership = min-support exemption; the count is round 2's
+     generality tie-break; the needle (the delta's first before-side
+     text) prefilters evaluation — an anchored realisation cannot fire
+     in a file that does not even contain its delta text. *)
+  let exempt : (string * string, int * string) Hashtbl.t = Hashtbl.create 16 in
+  let anchored_clusters =
+    let lang_of (c : cluster) =
+      match c.instances with i :: _ -> i.language | [] -> ""
+    in
+    (* Distinct change sites per (language, delta key). *)
+    let pool_sites : (string * string, (string * int * int) list ref) Hashtbl.t
+        =
+      Hashtbl.create 32
+    in
+    List.iter
+      (fun (key, (ds, de), c) ->
+        List.iter
+          (fun (i : instance) ->
+            let pk = (i.language, key) in
+            let site = (i.file, ds, de) in
+            match Hashtbl.find_opt pool_sites pk with
+            | Some l -> if not (List.mem site !l) then l := site :: !l
+            | None -> Hashtbl.add pool_sites pk (ref [ site ]))
+          c.instances)
+      anchored_raw;
+    let pooled =
+      List.filter
+        (fun (key, _, c) ->
+          match Hashtbl.find_opt pool_sites (lang_of c, key) with
+          | Some l -> List.length !l >= 2
+          | None -> false)
+        anchored_raw
+    in
+    (* Identical patterns carry identical delta keys; remember the key
+       so the needle survives pre-grouping. *)
+    let key_of_pat : (edit_pat, string) Hashtbl.t = Hashtbl.create 32 in
+    List.iter
+      (fun (key, _, c) -> Hashtbl.replace key_of_pat c.pattern key)
+      pooled;
+    let needle_of_pat p =
+      match Hashtbl.find_opt key_of_pat p with
+      | None -> ""
+      | Some key -> (
+          match String.index_opt key '\x00' with
+          | Some i -> String.sub key 0 i
+          | None -> (
+              match String.index_opt key '\x01' with
+              | Some i -> String.sub key 0 i
+              | None -> ""))
+    in
+    pre_group_identical (List.map (fun (_, _, c) -> c) pooled)
+    |> List.filter_map (fun c ->
+        (* Surgical render: shared lines as context, so the rule's
+           landing zone covers only the delta's lines — other changes
+           inside the holed/anchored parts no longer block the gate. *)
+        let pattern_text = render_pattern_body_surgical c.pattern in
+        let safe =
+          List.filter
+            (fun (i : instance) ->
+              pattern_safe_at ~language:i.language ~pattern_text i.file)
+            c.instances
+        in
+        if Sys.getenv_opt "CS_TRACE" <> None then
+          Printf.eprintf "  anchored cand (safe=%d/%d): %s\n%!"
+            (List.length safe) (List.length c.instances)
+            (String.concat " \\n " (String.split_on_char '\n' pattern_text));
+        if safe <> [] then begin
+          (* Value = concrete node count: round 2 prefers the anchored
+             realisation carrying the LEAST concrete content beyond the
+             delta — the most general safe anchor, with no site junk. *)
+          Hashtbl.replace exempt
+            (pattern_text, lang_of c)
+            (edit_size c.pattern - edit_holes c.pattern, needle_of_pat c.pattern);
+          Some (pattern_text, { c with instances = safe })
+        end
+        else None)
+  in
+  if Sys.getenv_opt "CS_TRACE" <> None then
+    Printf.eprintf "anchored: %d raw, %d pooled+safe (exempt)\n%!"
+      (List.length anchored_raw)
+      (List.length anchored_clusters);
+  (* Anchored clusters are NOT part of [two_sided_clusters]: in
+     fusion-input arbitration they would claim regions and knock the
+     general rules out of candidacy, and in Jaccard grouping they would
+     fuse into spurious conjunctives. They are added as bare candidates
+     below and only become eligible in selection's second round, over
+     regions the general candidates left uncovered. *)
+  let two_sided_clusters = base_two_sided @ delta_clusters in
   let candidates =
     collect_one_sided_candidates ?on_file:(on_file_for "one-sided") ~ctx cs
   in
@@ -2268,6 +3022,13 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
             add_candidate ~language pattern_text)
           (safe_removal_groups ~ctx ~site_db c))
     os_clusters;
+  (* §3.2 anchored realisations of pooled deltas: proposed as plain
+     candidates (deduped), eligible only in selection round 2. *)
+  List.iter
+    (fun ((pattern_text, c) : string * cluster) ->
+      let language = match c.instances with i :: _ -> i.language | [] -> "" in
+      add_candidate ~language pattern_text)
+    anchored_clusters;
   let cands = List.rev !cand_order in
   if Sys.getenv_opt "CS_TRACE" <> None then
     Printf.eprintf "candidates proposed: %d\n%!" (List.length cands);
@@ -2275,22 +3036,46 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
   let evaluated =
     List.filter_map
       (fun (pattern_text, language) ->
+        (* Needle prefilter for anchored realisations: skip files that
+           do not contain the delta's before text — the pattern cannot
+           fire there, and exempt candidates are numerous enough that
+           evaluating them everywhere dominates runtime. *)
+        let needle =
+          match Hashtbl.find_opt exempt (pattern_text, language) with
+          | Some (_, n) when n <> "" -> Some n
+          | _ -> None
+        in
+        let file_plausible f =
+          match needle with
+          | None -> true
+          | Some n -> (
+              match Hashtbl.find_opt site_db f with
+              | Some si -> string_mem ~sub:n si.si_before
+              | None -> true)
+        in
         let extension =
           List.filter_map
             (fun f ->
-              let e = eval_at ~language ~pattern_text f in
-              (* M1.9b: a decomposable site fires safely (geodesic) and
+              if not (file_plausible f) then None
+              else
+                let e = eval_at ~language ~pattern_text f in
+                (* M1.9b: a decomposable site fires safely (geodesic) and
                  counts toward support; its in-zone gap becomes a
                  [rule=]-attributed residual. *)
-              if (e.ev_exact || e.ev_decomposable) && e.ev_fires > 0 then
-                Some (f, e)
-              else None)
+                if (e.ev_exact || e.ev_decomposable) && e.ev_fires > 0 then
+                  Some (f, e)
+                else None)
             all_files
         in
         let support =
           List.fold_left (fun a (_, e) -> a + e.ev_fires) 0 extension
         in
-        if support < 2 then None
+        (* Anchored realisations of a pooled delta carry the pool's
+           support; their own floor is 1 (§3.2 lattice descent). *)
+        let floor =
+          if Hashtbl.mem exempt (pattern_text, language) then 1 else 2
+        in
+        if support < floor then None
         else
           Some
             {
@@ -2323,51 +3108,77 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
                e.ev_resolved))
       0 sc.sc_extension
   in
-  let remaining = ref evaluated in
   let selected = ref [] in
-  let picking = ref true in
-  while !picking do
-    let best =
-      List.fold_left
-        (fun acc sc ->
-          let m = marginal sc in
-          if m < 2 then acc
-          else
-            (* Among candidates covering the same marginal regions, prefer
-               the one that reconstructs its sites with no residual
-               (clean) — e.g. an extraction [box($H).get() ⤳ $H] over a
-               bare removal [box($H).get()] that deletes and defers the
-               rest to a residual. Then higher support, then shorter
-               pattern text, then text. *)
-            let clean =
-              List.length
-                (List.filter (fun (_, e) -> e.ev_clean) sc.sc_extension)
-            in
-            let key =
-              ( m,
-                clean,
-                sc.sc_support,
-                -String.length sc.sc_pattern,
-                sc.sc_pattern )
-            in
-            match acc with
-            | Some (bkey, _) when bkey >= key -> acc
-            | _ -> Some (key, sc))
-        None !remaining
-    in
-    match best with
-    | None -> picking := false
-    | Some (_, sc) ->
-        selected := sc :: !selected;
-        remaining := List.filter (fun x -> x != sc) !remaining;
-        List.iter
-          (fun (f, e) ->
-            List.iter (fun i -> Hashtbl.replace covered (f, i) ()) e.ev_resolved)
-          sc.sc_extension;
-        if Sys.getenv_opt "CS_TRACE" <> None then
-          Printf.eprintf "  selected: support=%d %S\n%!" sc.sc_support
-            (String.sub sc.sc_pattern 0 (min 60 (String.length sc.sc_pattern)))
-  done;
+  let select_round pool floor =
+    let remaining = ref pool in
+    let picking = ref true in
+    while !picking do
+      let best =
+        List.fold_left
+          (fun acc sc ->
+            let m = marginal sc in
+            if m < floor then acc
+            else
+              (* Among candidates covering the same marginal regions, prefer
+                 the one that reconstructs its sites with no residual
+                 (clean) — e.g. an extraction [box($H).get() ⤳ $H] over a
+                 bare removal [box($H).get()] that deletes and defers the
+                 rest to a residual. Then higher support, then shorter
+                 pattern text, then text. *)
+              let clean =
+                List.length
+                  (List.filter (fun (_, e) -> e.ev_clean) sc.sc_extension)
+              in
+              (* Generality tie-break (round 2): among anchored
+                 realisations with equal coverage, prefer the one with
+                 the FEWEST concrete nodes — the most general safe
+                 anchor, no site junk. Non-exempt candidates score 0
+                 (the best), so round 1 is unaffected. *)
+              let concrete =
+                match
+                  Hashtbl.find_opt exempt (sc.sc_pattern, sc.sc_language)
+                with
+                | Some (c, _) -> c
+                | None -> 0
+              in
+              let key =
+                ( m,
+                  clean,
+                  sc.sc_support,
+                  -concrete,
+                  -String.length sc.sc_pattern,
+                  sc.sc_pattern )
+              in
+              match acc with
+              | Some (bkey, _) when bkey >= key -> acc
+              | _ -> Some (key, sc))
+          None !remaining
+      in
+      match best with
+      | None -> picking := false
+      | Some (_, sc) ->
+          selected := sc :: !selected;
+          remaining := List.filter (fun x -> x != sc) !remaining;
+          List.iter
+            (fun (f, e) ->
+              List.iter
+                (fun i -> Hashtbl.replace covered (f, i) ())
+                e.ev_resolved)
+            sc.sc_extension;
+          if Sys.getenv_opt "CS_TRACE" <> None then
+            Printf.eprintf "  selected: support=%d %S\n%!" sc.sc_support
+              (String.sub sc.sc_pattern 0
+                 (min 60 (String.length sc.sc_pattern)))
+    done
+  in
+  let is_exempt sc = Hashtbl.mem exempt (sc.sc_pattern, sc.sc_language) in
+  (* Round 1: the general candidates, exactly as before §3.2 descent. *)
+  select_round (List.filter (fun sc -> not (is_exempt sc)) evaluated) 2;
+  (* Round 2 (§3.2 lattice descent): anchored realisations of pooled
+     deltas, floor 1, over the regions round 1 left uncovered. An
+     anchored rule can only ever claim what no more-general safe
+     candidate did — the descent's pruning, by construction. *)
+  select_round (List.filter is_exempt evaluated) 1;
   List.rev !selected
   |> List.map (fun sc ->
       {

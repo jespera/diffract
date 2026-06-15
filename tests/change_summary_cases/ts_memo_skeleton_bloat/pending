@@ -1,0 +1,9 @@
+Anti-bloat (MDL) — a coarsened empty-skeleton rule narrates a detour. Current
+head emits `() => _H0.map((_H1) => _H2) ⤳ () => {}` (support 2, via M1.9c
+varying-arity orphan coarsening) and each site's residual re-adds the whole
+new body: delete-then-readd. The net-progress guard passes because `explained`
+counts before+after extents of the touched region while the gap is only the
+after body. The honest summary is no rule and two plain residuals (observed
+live in the ts soak: a useMemo expression-body → statement-body migration).
+Fix direction: the rule's claim must shrink the total description (rule +
+residual) versus the raw hunk, not merely make byte progress.

@@ -1,0 +1,7 @@
+§3.2 contextual emission — insertion into a specifier sequence (from the tsx
+soak: useCallback added to React named imports; sibling specifiers vary per
+file). Needs sequence-delta emission: scope = the import clause, delta = the
+inserted specifier, remaining specifiers as a sequence metavar. The WidgetView
+site inserts at alphabetical mid-position with a prettier multi-line reflow —
+its t'' would differ from the after in specifier order, so it stays an honest
+residual.
