@@ -2807,42 +2807,48 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
      generality tie-break; the needle (the delta's first before-side
      text) prefilters evaluation — an anchored realisation cannot fire
      in a file that does not even contain its delta text. *)
+  (* §3.2 anchored realisations are gated and evaluated LAZILY: only after
+     round 1, and only for delta pools where round 1 left a site uncovered
+     (the descent's pruning, made cheap — an anchored rule can never be
+     selected over a region a general rule already covered, so there is no
+     point safety-checking or evaluating it there). Here we only do the
+     cheap bookkeeping — the pool's distinct sites, and the exempt marking
+     that lowers a pooled delta's min-support to 1 — and defer the gating
+     below to [live_pooled]. *)
   let exempt : (string * string, int * string) Hashtbl.t = Hashtbl.create 16 in
-  let anchored_clusters =
-    let lang_of (c : cluster) =
-      match c.instances with i :: _ -> i.language | [] -> ""
-    in
-    (* Distinct change sites per (language, delta key). *)
-    let pool_sites : (string * string, (string * int * int) list ref) Hashtbl.t
-        =
-      Hashtbl.create 32
-    in
-    List.iter
-      (fun (key, (ds, de), c) ->
-        List.iter
-          (fun (i : instance) ->
-            let pk = (i.language, key) in
-            let site = (i.file, ds, de) in
-            match Hashtbl.find_opt pool_sites pk with
-            | Some l -> if not (List.mem site !l) then l := site :: !l
-            | None -> Hashtbl.add pool_sites pk (ref [ site ]))
-          c.instances)
-      anchored_raw;
-    let pooled =
-      List.filter
-        (fun (key, _, c) ->
-          match Hashtbl.find_opt pool_sites (lang_of c, key) with
-          | Some l -> List.length !l >= 2
-          | None -> false)
-        anchored_raw
-    in
-    (* Identical patterns carry identical delta keys; remember the key
-       so the needle survives pre-grouping. *)
+  let lang_of (c : cluster) =
+    match c.instances with i :: _ -> i.language | [] -> ""
+  in
+  let pool_sites : (string * string, (string * int * int) list ref) Hashtbl.t =
+    Hashtbl.create 32
+  in
+  List.iter
+    (fun (key, (ds, de), c) ->
+      List.iter
+        (fun (i : instance) ->
+          let pk = (i.language, key) in
+          let site = (i.file, ds, de) in
+          match Hashtbl.find_opt pool_sites pk with
+          | Some l -> if not (List.mem site !l) then l := site :: !l
+          | None -> Hashtbl.add pool_sites pk (ref [ site ]))
+        c.instances)
+    anchored_raw;
+  let anchored_pooled =
+    List.filter
+      (fun (key, _, c) ->
+        match Hashtbl.find_opt pool_sites (lang_of c, key) with
+        | Some l -> List.length !l >= 2
+        | None -> false)
+      anchored_raw
+  in
+  let needle_of_pat =
+    (* Identical patterns carry identical delta keys; the needle (the
+       delta's first before-side text) prefilters evaluation. *)
     let key_of_pat : (edit_pat, string) Hashtbl.t = Hashtbl.create 32 in
     List.iter
       (fun (key, _, c) -> Hashtbl.replace key_of_pat c.pattern key)
-      pooled;
-    let needle_of_pat p =
+      anchored_pooled;
+    fun p ->
       match Hashtbl.find_opt key_of_pat p with
       | None -> ""
       | Some key -> (
@@ -2852,38 +2858,22 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
               match String.index_opt key '\x01' with
               | Some i -> String.sub key 0 i
               | None -> ""))
-    in
-    pre_group_identical (List.map (fun (_, _, c) -> c) pooled)
-    |> List.filter_map (fun c ->
-        (* Surgical render: shared lines as context, so the rule's
-           landing zone covers only the delta's lines — other changes
-           inside the holed/anchored parts no longer block the gate. *)
-        let pattern_text = render_pattern_body_surgical c.pattern in
-        let safe =
-          List.filter
-            (fun (i : instance) ->
-              pattern_safe_at ~language:i.language ~pattern_text i.file)
-            c.instances
-        in
-        if Sys.getenv_opt "CS_TRACE" <> None then
-          Printf.eprintf "  anchored cand (safe=%d/%d): %s\n%!"
-            (List.length safe) (List.length c.instances)
-            (String.concat " \\n " (String.split_on_char '\n' pattern_text));
-        if safe <> [] then begin
-          (* Value = concrete node count: round 2 prefers the anchored
-             realisation carrying the LEAST concrete content beyond the
-             delta — the most general safe anchor, with no site junk. *)
-          Hashtbl.replace exempt
-            (pattern_text, lang_of c)
-            (edit_size c.pattern - edit_holes c.pattern, needle_of_pat c.pattern);
-          Some (pattern_text, { c with instances = safe })
-        end
-        else None)
   in
-  if Sys.getenv_opt "CS_TRACE" <> None then
-    Printf.eprintf "anchored: %d raw, %d pooled+safe (exempt)\n%!"
-      (List.length anchored_raw)
-      (List.length anchored_clusters);
+  (* The grouped anchored clusters (surgical-rendered) and their exempt
+     marks. Computed without gating — gating is deferred to [live_pooled]
+     below — but the exempt marks are populated now so that a general
+     candidate textually coinciding with an anchored realisation is treated
+     as exempt (round 2) exactly as before. *)
+  let anchored_grouped =
+    pre_group_identical (List.map (fun (_, _, c) -> c) anchored_pooled)
+    |> List.map (fun c -> (render_pattern_body_surgical c.pattern, c))
+  in
+  List.iter
+    (fun (pattern_text, c) ->
+      Hashtbl.replace exempt
+        (pattern_text, lang_of c)
+        (edit_size c.pattern - edit_holes c.pattern, needle_of_pat c.pattern))
+    anchored_grouped;
   (* Anchored clusters are NOT part of [two_sided_clusters]: in
      fusion-input arbitration they would claim regions and knock the
      general rules out of candidacy, and in Jaccard grouping they would
@@ -3022,73 +3012,63 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
             add_candidate ~language pattern_text)
           (safe_removal_groups ~ctx ~site_db c))
     os_clusters;
-  (* §3.2 anchored realisations of pooled deltas: proposed as plain
-     candidates (deduped), eligible only in selection round 2. *)
-  List.iter
-    (fun ((pattern_text, c) : string * cluster) ->
-      let language = match c.instances with i :: _ -> i.language | [] -> "" in
-      add_candidate ~language pattern_text)
-    anchored_clusters;
-  let cands = List.rev !cand_order in
+  (* §3.2 anchored realisations are NOT proposed here — they are gated and
+     evaluated after round 1, restricted to uncovered delta pools (below). *)
+  let general_cands = List.rev !cand_order in
   if Sys.getenv_opt "CS_TRACE" <> None then
-    Printf.eprintf "candidates proposed: %d\n%!" (List.length cands);
+    Printf.eprintf "general candidates proposed: %d\n%!"
+      (List.length general_cands);
   (* ── EVALUATE (§3.3): each candidate's true extension ──────────── *)
-  let evaluated =
-    List.filter_map
-      (fun (pattern_text, language) ->
-        (* Needle prefilter for anchored realisations: skip files that
+  let eval_cand (pattern_text, language) =
+    (* Needle prefilter for anchored realisations: skip files that
            do not contain the delta's before text — the pattern cannot
            fire there, and exempt candidates are numerous enough that
            evaluating them everywhere dominates runtime. *)
-        let needle =
-          match Hashtbl.find_opt exempt (pattern_text, language) with
-          | Some (_, n) when n <> "" -> Some n
-          | _ -> None
-        in
-        let file_plausible f =
-          match needle with
-          | None -> true
-          | Some n -> (
-              match Hashtbl.find_opt site_db f with
-              | Some si -> string_mem ~sub:n si.si_before
-              | None -> true)
-        in
-        let extension =
-          List.filter_map
-            (fun f ->
-              if not (file_plausible f) then None
-              else
-                let e = eval_at ~language ~pattern_text f in
-                (* M1.9b: a decomposable site fires safely (geodesic) and
+    let needle =
+      match Hashtbl.find_opt exempt (pattern_text, language) with
+      | Some (_, n) when n <> "" -> Some n
+      | _ -> None
+    in
+    let file_plausible f =
+      match needle with
+      | None -> true
+      | Some n -> (
+          match Hashtbl.find_opt site_db f with
+          | Some si -> string_mem ~sub:n si.si_before
+          | None -> true)
+    in
+    let extension =
+      List.filter_map
+        (fun f ->
+          if not (file_plausible f) then None
+          else
+            let e = eval_at ~language ~pattern_text f in
+            (* M1.9b: a decomposable site fires safely (geodesic) and
                  counts toward support; its in-zone gap becomes a
                  [rule=]-attributed residual. *)
-                if (e.ev_exact || e.ev_decomposable) && e.ev_fires > 0 then
-                  Some (f, e)
-                else None)
-            all_files
-        in
-        let support =
-          List.fold_left (fun a (_, e) -> a + e.ev_fires) 0 extension
-        in
-        (* Anchored realisations of a pooled delta carry the pool's
+            if (e.ev_exact || e.ev_decomposable) && e.ev_fires > 0 then
+              Some (f, e)
+            else None)
+        all_files
+    in
+    let support = List.fold_left (fun a (_, e) -> a + e.ev_fires) 0 extension in
+    (* Anchored realisations of a pooled delta carry the pool's
            support; their own floor is 1 (§3.2 lattice descent). *)
-        let floor =
-          if Hashtbl.mem exempt (pattern_text, language) then 1 else 2
-        in
-        if support < floor then None
-        else
-          Some
-            {
-              sc_pattern = pattern_text;
-              sc_language = language;
-              sc_support = support;
-              sc_extension = extension;
-            })
-      cands
+    let floor = if Hashtbl.mem exempt (pattern_text, language) then 1 else 2 in
+    if support < floor then None
+    else
+      Some
+        {
+          sc_pattern = pattern_text;
+          sc_language = language;
+          sc_support = support;
+          sc_extension = extension;
+        }
   in
+  let evaluated_general = List.filter_map eval_cand general_cands in
   if Sys.getenv_opt "CS_TRACE" <> None then
-    Printf.eprintf "candidates with viable extensions: %d\n%!"
-      (List.length evaluated);
+    Printf.eprintf "general candidates with viable extensions: %d\n%!"
+      (List.length evaluated_general);
   (* ── SELECT (§3.3): greedy set-cover over changed regions ────────
      A candidate's marginal value is the number of still-uncovered
      (file, region) pairs it resolves; it is eligible while that
@@ -3172,13 +3152,83 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
     done
   in
   let is_exempt sc = Hashtbl.mem exempt (sc.sc_pattern, sc.sc_language) in
-  (* Round 1: the general candidates, exactly as before §3.2 descent. *)
-  select_round (List.filter (fun sc -> not (is_exempt sc)) evaluated) 2;
-  (* Round 2 (§3.2 lattice descent): anchored realisations of pooled
-     deltas, floor 1, over the regions round 1 left uncovered. An
-     anchored rule can only ever claim what no more-general safe
-     candidate did — the descent's pruning, by construction. *)
-  select_round (List.filter is_exempt evaluated) 1;
+  (* Round 1: the general candidates. (A general candidate that textually
+     coincides with an anchored realisation is exempt — marked above — and
+     waits for round 2, exactly as before.) *)
+  select_round (List.filter (fun sc -> not (is_exempt sc)) evaluated_general) 2;
+  (* ── lazy descent ── Round 1 has marked the regions it covers. Now gate
+     and evaluate anchored realisations, but ONLY for delta pools where some
+     home site is still uncovered: an anchored rule whose every site is
+     already covered would have marginal 0 and never be selected, so
+     safety-checking and evaluating it would be wasted work. *)
+  let region_covered file ds de =
+    match Hashtbl.find_opt site_db file with
+    | None -> false
+    | Some si ->
+        let idx = ref (-1) in
+        List.iteri
+          (fun i (rs, re, _) ->
+            if !idx < 0 && rs <= ds && de <= re then idx := i)
+          si.si_regions;
+        if !idx < 0 then
+          List.iteri
+            (fun i (rs, re, _) ->
+              if !idx < 0 && spans_overlap ds de rs re then idx := i)
+            si.si_regions;
+        !idx >= 0 && Hashtbl.mem covered (file, !idx)
+  in
+  let pool_live key lang =
+    match Hashtbl.find_opt pool_sites (lang, key) with
+    | Some l -> List.exists (fun (f, ds, de) -> not (region_covered f ds de)) !l
+    | None -> false
+  in
+  let live_pats =
+    (* surgical pattern texts whose pool round 1 left partly uncovered *)
+    let live = Hashtbl.create 32 in
+    List.iter
+      (fun (key, _, c) ->
+        if pool_live key (lang_of c) then
+          Hashtbl.replace live (render_pattern_body_surgical c.pattern) ())
+      anchored_pooled;
+    live
+  in
+  let anchored_clusters =
+    List.filter_map
+      (fun (pattern_text, c) ->
+        if not (Hashtbl.mem live_pats pattern_text) then None
+        else
+          let safe =
+            List.filter
+              (fun (i : instance) ->
+                pattern_safe_at ~language:i.language ~pattern_text i.file)
+              c.instances
+          in
+          if safe = [] then None
+          else Some (pattern_text, { c with instances = safe }))
+      anchored_grouped
+  in
+  if Sys.getenv_opt "CS_TRACE" <> None then
+    Printf.eprintf "anchored: %d pooled, %d live+safe (gated lazily)\n%!"
+      (List.length anchored_grouped)
+      (List.length anchored_clusters);
+  (* Anchored realisations as candidates, deduped against the general ones
+     already proposed; evaluate them (floor 1, via the exempt table). *)
+  let anchored_cands =
+    List.filter_map
+      (fun ((pattern_text, c) : string * cluster) ->
+        let language = lang_of c in
+        if language <> "" && not (Hashtbl.mem cand_tbl (pattern_text, language))
+        then begin
+          Hashtbl.add cand_tbl (pattern_text, language) ();
+          Some (pattern_text, language)
+        end
+        else None)
+      anchored_clusters
+  in
+  let evaluated_anchored = List.filter_map eval_cand anchored_cands in
+  (* Round 2: the anchored realisations, plus any general candidate that was
+     exempt (a textual coincidence), over the regions round 1 left open. *)
+  select_round (List.filter is_exempt evaluated_general @ evaluated_anchored) 1;
   List.rev !selected
   |> List.map (fun sc ->
       {
