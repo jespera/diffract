@@ -15,9 +15,11 @@ a.ts
 b.ts
 c.ts
 
-# residual
---- a/d.ts
-+++ b/d.ts
-@@ ... @@
--  return cache.read(key);
-+  return cache.get(key);
+# rule R2  support=1  language=typescript
+@@
+match: strict
+@@
+- cache.read
++ cache.get
+# sites R2
+d.ts

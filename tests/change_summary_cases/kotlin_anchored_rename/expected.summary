@@ -1,0 +1,20 @@
+# rule R1  support=1  language=kotlin
+@@
+match: strict
+@@
+- ::WorkflowState
++ ::ExternalWorkflowState
+# sites R1
+ServiceB.kt
+
+# rule R2  support=1  language=kotlin
+@@
+match: strict
+metavar _H0: single
+@@
+- state = WorkflowState(
++ state = ExternalWorkflowState(
+              _H0,
+          )
+# sites R2
+ServiceA.kt

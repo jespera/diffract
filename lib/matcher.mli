@@ -227,3 +227,10 @@ val transform_edits :
     transform's effect against other information about the source (e.g. the
     change-summary safety gate comparing edits against a diff's changed regions)
     rather than the rewritten text. *)
+
+val apply_edits : string -> edit list -> string
+(** Apply an edit list to a source text.
+    [apply_edits src (transform_edits ... src)] equals [transform ... src] —
+    callers that already hold the edits (the safety gate inspects them first)
+    can apply them without re-running the match. Edits are deduplicated and must
+    be non-overlapping; a nested or conflicting pair raises [Failure]. *)
