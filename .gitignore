@@ -22,3 +22,9 @@ grammars/**/*.a
 # OS
 .DS_Store
 Thumbs.db
+
+# tmp, these will eventually go away
+changeset
+changeset2
+deon
+deon2
