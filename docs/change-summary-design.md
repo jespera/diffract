@@ -302,13 +302,13 @@ is a single localized edit embedded in a larger scope:
 - **Parent too wide.** The parent's other siblings appear as
   `$H0..$Hn` placeholders. Across files those siblings differ, so
   anti-unification keeps them parameterized rather than collapsing the
-  change. The actual delta is buried in scaffolding. The
-  `kotlin_common_import_drop` fixture is a minimal instance: three
-  files each drop the same single import line out of a longer block,
-  where the *useful* rule is the one-line removal alone, but the
-  current emission produces no rule (or, on larger real-world inputs,
-  multiple block-level rules differing only in their surrounding
-  imports).
+  change. The actual delta is buried in scaffolding.
+
+(The flat-sequence removal case originally motivating this section —
+`kotlin_common_import_drop`, three files dropping the same import line —
+has since been covered by the removal-only standalone-rule path and
+passes at head. The remaining frontier was re-derived from real soak
+residuals; see the taxonomy below.)
 
 The generalization is to treat a change pair as **scope + ellipses +
 delta** rather than scope + holes + delta. The parent is kept as the
@@ -334,6 +334,217 @@ ellipsed) and the "removal-only standalone rule" case (empty context).
 It gives a uniform mechanism for emitting change pairs at the right
 granularity without per-grammar tuning of which ancestor levels to
 prefer.
+
+#### Residual taxonomy from the real soaks (phase 0, 2026-06-12)
+
+Classifying every residual hunk of the four real soaks at head, the
+recurring-but-unexplained changes fall into these classes (one-offs and
+sub-support repeats excluded — those are correctly residual):
+
+1. **Shared delta, heterogeneous anchors** — the dominant class on both
+   kotlin corpora. One conceptual change (a type rename, a
+   type-parameter drop) recurs across many sites, but each site embeds
+   it under a different syntactic anchor: `state = X(...)` vs `::X` for
+   a rename; class header vs `fun <T>` signature vs extension receiver
+   vs field type for a `<T>` drop. The uniform-anchor instances already
+   emit (the type-param corpus' top rule, support 108, is exactly the
+   anchored form `_H0<UserId> ⤳ _H0`); the heterogeneous leftovers each
+   have support 1 under their own anchor, while the *delta* has support
+   ≥ 2. A bare-delta rule fails the placement gate at unchanged
+   occurrences (the rename/drop is context-dependent). What's needed is
+   delta-level clustering with per-site anchor specialisation, support
+   counted on the delta cluster. Pinned: `kotlin_anchored_rename`
+   (pending).
+
+   **Mechanism: partial-order descent of the anchor lattice** (the
+   pruning idea of Generic Patch Inference adapted to the per-site
+   gate). For a delta cluster, candidate patterns form a lattice
+   ordered by added context: bare delta at the top, per-site anchored
+   specialisations below, ordered by fire-set inclusion (more context
+   ⇒ fires at a subset of sites). Search top-down: evaluate the bare
+   delta first; if the gate passes everywhere, every specialisation is
+   dominated and is never evaluated. Only at sites where it over-fires
+   (placement failure at unchanged occurrences) descend that site's own
+   anchor chain — one enclosing level at a time — until the gate
+   passes. This is simultaneously the emission strategy and the
+   evaluation-pruning rule: candidates below a safe pattern are skipped
+   by construction, and the candidate explosion of per-site anchors is
+   paid only along failing chains. Support and `min_support` are
+   counted on the delta cluster; the anchored variants are its
+   site-local realisations. Pruning rests only on the pointwise
+   fire-set implication, never on the selection preference order — a
+   broader pattern being safe does not make a tighter one wrong (cf.
+   the arbitration history in §4.3), it makes it redundant.
+
+   **As built (`anchored_variants` + two-round selection).** For every
+   emitted change pair, anchored variants are constructed by walking
+   the changed-child chain: the pair's own preserved children stay
+   concrete (the anchor), preserved content *inside* the chain becomes
+   shared holes, and the chain's end is the concrete delta. Where a
+   level has several changed children (counts equal, zipped in order),
+   a *path selector* enumerates one variant per choice: descend a
+   recursable pair, or terminate at a leaf pair as the chosen delta —
+   the sibling changed pairs become shared holes on both sides, so
+   they render as context lines and the rule does not claim them.
+   Holes never replace a delimiter-carrying shell (`hole_subtree`
+   keeps `(...)`/`<...>` shells concrete and holes their named
+   children — a bare hole would render glued, `WorkflowState_H0`).
+   Variants are rendered **surgically**
+   (`render_pattern_body_surgical`): lines common to both sides become
+   context lines, so the rule's landing zone covers only the delta's
+   lines, and co-located changes inside holed parts no longer fail the
+   content gate.
+
+   Pooling: variants carry a delta key (the delta's source texts) and
+   the delta's before-side byte span as the site identity (pair spans
+   differ per level and would self-pool one change). A pool needs ≥ 2
+   distinct sites; pure-insertion deltas (empty before side) are
+   excluded — un-anchorable, per the §5.5 pure-additions philosophy.
+   Pooled variants do NOT enter the dendrogram (merge-geometry
+   pollution) nor fusion arbitration (they would claim regions from
+   general rules); they are proposed as bare candidates, exempt from
+   the min-support floors, and become eligible only in selection's
+   second round, over regions round 1 left uncovered — the greedy
+   set-cover thereby implements the descent's pruning. Round-2 ties
+   prefer the realisation with the fewest concrete nodes (the most
+   general safe anchor, no site junk).
+
+   Cost containment: pairs larger than ~a statement (1500 bytes) emit
+   no variants, ≤ 8 selectors per pair, and exempt candidates are
+   evaluated only against files containing the delta's before text.
+
+   Live results: `kotlin_anchored_rename` (two anchored rules sharing
+   one delta, support 1 each); the kotlin soak's context-dependent
+   rename family fully claimed (`::X`, the `X(` construction site,
+   plus two type-parameter-list renames discovered by the same
+   mechanism); `partial_overlap_fusion`'s leftover half-overlap site
+   claimed at support 1 instead of falling to a residual.
+
+2. **Sequence-delta insertion** — a specifier inserted into a varying
+   named-import list (3 sites on the tsx soak). Scope = the import
+   clause, delta = the inserted element, siblings as a sequence
+   metavar. Sites where the insertion lands mid-sequence with a
+   formatter reflow cannot be claimed byte-exactly and stay residual.
+   Pinned: `tsx_import_specifier_insert` (pending).
+
+3. **Per-site computed content** — a recurring shape whose replacement
+   embeds a value derivable only from the site (a concrete return type,
+   a lambda's free variables). Rule + decomposable residual is the
+   right form and mostly works already; not a §3.2 target.
+
+4. **Heterogeneous reshape** — the hook-reshape family (~17 files on
+   the tsx soak): hook, body, and binding all vary simultaneously, so
+   no cluster forms. Behind the abstract-clustering frontier, out of
+   §3.2 scope.
+
+5. **Skeleton-bloat detour** (selection quality, not emission): an
+   M1.9c-coarsened empty-skeleton rule (`() => {}`) claims sites whose
+   residual then re-adds the entire body — byte-reproducing but a
+   delete-then-readd narrative worse than the raw hunk. The
+   net-progress guard passes because `explained` counts before+after
+   extents while the gap is only the after body. Pinned:
+   `ts_memo_skeleton_bloat` (pending). The fix is MDL-shaped: a claim
+   must shrink rule + residual versus the raw hunk.
+
+Classes 1 and 2 are the §3.2 implementation targets; class 5 is an
+independent selection fix discoverable in the same area.
+
+#### Matcher pre-flight (phase 1, 2026-06-12)
+
+Hand-written rules for both target classes were run against the real
+soak before-files; every needed form is expressible with the matcher as
+is. Results that shape the emission templates:
+
+- **In-scope replacement: emit the surgical form.** Marking the head
+  line `-`/`+` with the scope's tail as `...` + closing-delimiter
+  context lines fires once at the anchored site and preserves the
+  scope's content verbatim. The whole-construct form
+  (`- state = X(ARGS)` / `+ state = Y(ARGS)` with `ARGS: sequence`)
+  also fires correctly but the identity sequence splice renders
+  elements with the default empty join, dropping the inter-element
+  source (`,` separators, layout) — broken output. Until identity
+  splice preserves the source span between first and last element,
+  emission must prefer the surgical form for replacements.
+- **Sequence insertion: emit with a `join` directive.**
+  `- import React, { SPECS } ⤳ + import React, { useCallback, SPECS }`
+  with `join SPECS by ", "` is byte-exact on the real single-line
+  import sites. The reflowed alphabetical-mid-position site produces a
+  different specifier order (different tree), so the gate correctly
+  leaves it residual.
+- **A bare delta covers heterogeneous anchors for type-arg drops.**
+  `H0<User> ⤳ H0` (single hole) fires at declaration type-parameters,
+  `fun <T>` signatures, and usage-site type arguments alike — one
+  pattern, all anchor shapes (a single metavar will even bind the `fun`
+  keyword leaf). So the type-param corpus' residual family needs no
+  anchor descent at all; its blocker is purely proposal-side. The
+  anchored-rename family is the one that genuinely needs the lattice
+  descent (its bare delta over-fires: verified 2 extra edits on the
+  real file beside the 1 real change).
+
+#### Diagnosis: why the delta rule never emits today (phase 1, 2026-06-12)
+
+A minimal reproduction (three kotlin files, each containing one
+textually identical `Notification<User> ⤳ Notification` drop under a
+different anchor shape, nothing else changed) emits **no rule** —
+pure residuals. Tracing the pipeline:
+
+1. The tight pair *is* emitted in every file (multi-level emission
+   produces the `user_type`-level pair as designed), and the identical
+   instances pre-group into a cluster of size ≥ 2.
+2. The cluster dies at the safety cut: the rendered pattern body
+   `- Notification<User> + Notification` re-parses in a neutral
+   context where `Notification` tokenizes as `simple_identifier`,
+   while the source's type positions have it as `type_identifier`.
+   Concrete-leaf matching compares text *and* node type, so the
+   pattern finds zero fires in the very file its instance came from;
+   every instance is shed and the cluster dissolves.
+3. The over-anchored rules that *do* emit on the type-param corpus
+   are survivors of this re-parse filter, not preferred shapes:
+   `_H0<UserId> ⤳ _H0` survives because the scope name is holed
+   (metavars are node-type-agnostic) and the remaining concrete leaf
+   happens to re-parse as `type_identifier`; `<Name<_H0>> ⤳ <Name>`
+   survives because the outer angle brackets make the fragment
+   re-parse as `type_arguments`; the parameter-list anchors survive
+   by re-parsing in declaration context. One delta's support is
+   thereby shattered across whatever anchor shapes happen to re-parse
+   compatibly (observed: 5 rules for the `X<T>` drop, 5 for the
+   `User → UserId` rename), and the leftover anchor shapes go
+   residual.
+
+Consequence: delta-keyed emission with the scope holed (`_H0<User>`)
+is not just the support-pooling fix — it is also the form that evades
+the re-parse mismatch, because the delta's own leaves keep their
+grammatical role while the varying scope is absorbed by node-type-
+agnostic holes. A matcher-side robustness layer (identifier-kind leaf
+equivalence derived from grammar metadata) would widen the safe set
+further but is not a prerequisite.
+
+**As built (`delta_keyed_pair`).** For every emitted change pair whose
+node is `PNode`-shaped on both sides with equal node type, a second
+candidate is emitted: preserved children (equal structural hash on
+both sides, greedy in-order matching) become shared holes — the same
+metavar on the before and after side — and changed children stay
+concrete. Only *named* children are holed: a matched anonymous token
+(operator, punctuation) is structure, not content, and holing it
+produces nonsense (`holder _H0 null`); it stays concrete. Variants
+that would be useless (no hole, no delta, or incoherent by the
+dendrogram-cut's own criteria) are dropped at construction.
+
+Crucially, the variants do NOT enter the dendrogram: adding them as
+clustering inputs changes the merge geometry for everyone and was
+observed to displace extraction and call-level rules on the golden
+cases. They travel on their own channel — pooled by exact pattern
+identity, kept at ≥ 2 instances, safety-gated — and join the
+candidate set after the cut. Exact pooling suffices because
+evaluation (§3.3) extends any candidate to every file it fires in
+safely; a pool formed from two anchors claims the rest behaviourally.
+The `<String>`-instantiation drops on the type-param corpus stay with
+the surviving anchored rules, correctly: `_H0<String>` over-fires at
+generic uses the change does not touch, the placement gate sheds
+those files, and the pool dies — the gate, not the emission, decides.
+Fixture: `kotlin_delta_pooled_drop` (three files, one
+`Notification<User>` drop each under different anchors → one rule,
+support 3). All other soaks byte-identical.
 
 ### 3.3 Evaluation-based semantics
 
