@@ -1,6 +1,3 @@
 (executables
- (names
-  traverse
-  kotlin_advanced_example
-  dump_full_ast)
+ (names traverse kotlin_advanced_example dump_full_ast)
  (libraries diffract))
