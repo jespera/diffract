@@ -2243,8 +2243,8 @@ let test_text_only_finds_role_mismatch () =
   Alcotest.(check int)
     "text-only finds the role-mismatched occurrence" 1
     (List.length
-       (Matcher.text_only_find_in_tree ~ctx ~language:"tsx" ~pattern_text:pattern
-          tree))
+       (Matcher.text_only_find_in_tree ~ctx ~language:"tsx"
+          ~pattern_text:pattern tree))
 
 let test_text_only_scoped_to_single_strict () =
   (* The hint is scoped to a single global strict section; a partial pattern

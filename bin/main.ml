@@ -52,10 +52,10 @@ let verbose_flag =
 
 let explain_flag =
   let doc =
-    "On a search that finds nothing, explain why: report locations whose tokens \
-     occur as text but in a different syntactic role than the pattern (a \
-     strict, structural matcher rejects those). Off by default — it does a \
-     second, text-only pass, so it only runs when asked and only when there \
+    "On a search that finds nothing, explain why: report locations whose \
+     tokens occur as text but in a different syntactic role than the pattern \
+     (a strict, structural matcher rejects those). Off by default. Adding does \
+     a second, text-only pass, so it only runs when asked and only when there \
      were no matches."
   in
   Arg.(value & flag & info [ "explain" ] ~doc)
@@ -276,17 +276,17 @@ let format_search_match ~file_path ~source_text
    locations whose tokens match as text but whose syntactic role differs from
    the pattern. Empty unless the pattern is a single strict section (see
    {!Diffract.Matcher.text_only_find_in_tree}). *)
-let text_only_locations ~ctx ~language ~pattern_text ~file_path ~source_text tree
-    =
+let text_only_locations ~ctx ~language ~pattern_text ~file_path ~source_text
+    tree =
   Diffract.Matcher.text_only_find_in_tree ~ctx ~language ~pattern_text tree
   |> List.filter_map (fun (c : Diffract.Matcher.composite_match) ->
-         match c.sections with
-         | r :: _ ->
-             let line, col =
-               line_col_of_byte source_text r.Diffract.Matcher.M.start_byte
-             in
-             Some (file_path, line, col)
-         | [] -> None)
+      match c.sections with
+      | r :: _ ->
+          let line, col =
+            line_col_of_byte source_text r.Diffract.Matcher.M.start_byte
+          in
+          Some (file_path, line, col)
+      | [] -> None)
 
 (* Print the [--explain] hint to stderr for a search that found nothing. *)
 let print_no_match_hint locations =
@@ -296,8 +296,8 @@ let print_no_match_hint locations =
       let n = List.length locations in
       Printf.eprintf
         "\n\
-         No structural matches, but %d location(s) contain the pattern's tokens \
-         as text\n\
+         No structural matches, but %d location(s) contain the pattern's \
+         tokens as text\n\
          in a different syntactic role (diffract matches on structure, not \
          text). E.g.:\n"
         n;
@@ -308,8 +308,7 @@ let print_no_match_hint locations =
       Printf.eprintf
         "Hint: for a plain text search, ripgrep is simpler; to match \
          structurally,\n\
-         write the pattern in that context (e.g. as a type, not an \
-         expression).\n"
+         write the pattern in that context (e.g. as a type, not an expression).\n"
 
 let search_file ~ctx ~language ~pattern_text file_path =
   try
