@@ -2228,6 +2228,36 @@ let test_scala_transform_smoke () =
           + logger.info($x)"
        ~source:"def f() = { println(\"hi\") }")
 
+(* text_only_find_in_tree — backs the `search --explain` hint: locations whose
+   tokens match as text but in a different syntactic role than the pattern. *)
+let test_text_only_finds_role_mismatch () =
+  let src = "const C: React.FC = x;" in
+  let pattern = "@@\nmatch: strict\n@@\nReact.FC" in
+  (* Strict (structural) search finds nothing: standalone, React.FC's FC is a
+     property_identifier, but in the source it's a type_identifier. *)
+  Alcotest.(check int)
+    "strict structural search finds nothing" 0
+    (List.length (find ~language:"tsx" ~pattern ~source:src));
+  (* Text-only locates the type-position occurrence — what the hint reports. *)
+  let tree = Tree.parse ~ctx ~language:"tsx" src in
+  Alcotest.(check int)
+    "text-only finds the role-mismatched occurrence" 1
+    (List.length
+       (Matcher.text_only_find_in_tree ~ctx ~language:"tsx" ~pattern_text:pattern
+          tree))
+
+let test_text_only_scoped_to_single_strict () =
+  (* The hint is scoped to a single global strict section; a partial pattern
+     (or multi-section / on / foreach) yields no hint locations. *)
+  let src = "const o = {a: 1};" in
+  let tree = Tree.parse ~ctx ~language:"typescript" src in
+  Alcotest.(check int)
+    "partial pattern is out of hint scope" 0
+    (List.length
+       (Matcher.text_only_find_in_tree ~ctx ~language:"typescript"
+          ~pattern_text:"@@\nmatch: partial\nmetavar $x: single\n@@\n{a: $x}"
+          tree))
+
 let tests =
   let open Alcotest in
   [
@@ -2423,4 +2453,8 @@ let tests =
       test_siblings_kotlin_class_body_position;
     test_case "siblings: own-line ellipsis in Scala match" `Quick
       test_siblings_scala_match_position;
+    test_case "explain: text-only finds role-mismatched occurrence" `Quick
+      test_text_only_finds_role_mismatch;
+    test_case "explain: hint scoped to single strict section" `Quick
+      test_text_only_scoped_to_single_strict;
   ]

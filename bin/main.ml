@@ -50,6 +50,16 @@ let verbose_flag =
   let doc = "Print phase progress and timing to stderr." in
   Arg.(value & flag & info [ "v"; "verbose" ] ~doc)
 
+let explain_flag =
+  let doc =
+    "On a search that finds nothing, explain why: report locations whose tokens \
+     occur as text but in a different syntactic role than the pattern (a \
+     strict, structural matcher rejects those). Off by default — it does a \
+     second, text-only pass, so it only runs when asked and only when there \
+     were no matches."
+  in
+  Arg.(value & flag & info [ "explain" ] ~doc)
+
 (* ── File utilities ─────────────────────────────────────────────────── *)
 
 let default_excludes =
@@ -262,6 +272,45 @@ let format_search_match ~file_path ~source_text
         sections;
       Buffer.contents buf
 
+(* [--explain] support: the (file, line, col) of each text-only match's start —
+   locations whose tokens match as text but whose syntactic role differs from
+   the pattern. Empty unless the pattern is a single strict section (see
+   {!Diffract.Matcher.text_only_find_in_tree}). *)
+let text_only_locations ~ctx ~language ~pattern_text ~file_path ~source_text tree
+    =
+  Diffract.Matcher.text_only_find_in_tree ~ctx ~language ~pattern_text tree
+  |> List.filter_map (fun (c : Diffract.Matcher.composite_match) ->
+         match c.sections with
+         | r :: _ ->
+             let line, col =
+               line_col_of_byte source_text r.Diffract.Matcher.M.start_byte
+             in
+             Some (file_path, line, col)
+         | [] -> None)
+
+(* Print the [--explain] hint to stderr for a search that found nothing. *)
+let print_no_match_hint locations =
+  match locations with
+  | [] -> ()
+  | _ ->
+      let n = List.length locations in
+      Printf.eprintf
+        "\n\
+         No structural matches, but %d location(s) contain the pattern's tokens \
+         as text\n\
+         in a different syntactic role (diffract matches on structure, not \
+         text). E.g.:\n"
+        n;
+      List.iteri
+        (fun i (f, l, c) -> if i < 3 then Printf.eprintf "  %s:%d:%d\n" f l c)
+        locations;
+      if n > 3 then Printf.eprintf "  ... and %d more\n" (n - 3);
+      Printf.eprintf
+        "Hint: for a plain text search, ripgrep is simpler; to match \
+         structurally,\n\
+         write the pattern in that context (e.g. as a type, not an \
+         expression).\n"
+
 let search_file ~ctx ~language ~pattern_text file_path =
   try
     let source_text =
@@ -276,7 +325,7 @@ let search_file ~ctx ~language ~pattern_text file_path =
   with Failure msg | Sys_error msg -> Error msg
 
 let scan_directory_search ~ctx ~language ~pattern_text ~include_pattern
-    ~exclude_dirs dir_path =
+    ~exclude_dirs ~explain dir_path =
   let files = find_files ~pattern:include_pattern ~exclude_dirs dir_path in
   let total_files = List.length files in
   let total_matches = ref 0 in
@@ -317,10 +366,24 @@ let scan_directory_search ~ctx ~language ~pattern_text ~include_pattern
     List.iter
       (fun (path, msg) -> Printf.printf "  %s: %s\n" path msg)
       (List.rev !errors)
-  end
+  end;
+  (* --explain: only when the whole scan found nothing, make a second,
+     text-only pass to locate tokens that match as text but in a different
+     syntactic role. Re-parses the files, so it runs only on this empty case. *)
+  if explain && !total_matches = 0 then
+    print_no_match_hint
+      (List.concat_map
+         (fun file_path ->
+           match In_channel.with_open_text file_path In_channel.input_all with
+           | exception Sys_error _ -> []
+           | source_text ->
+               let tree = Diffract.Tree.parse ~ctx ~language source_text in
+               text_only_locations ~ctx ~language ~pattern_text ~file_path
+                 ~source_text tree)
+         files)
 
 let run_search pattern_path target language include_pattern exclude_patterns
-    debug_tokens =
+    debug_tokens explain =
   let ctx = Diffract.Context.create () in
   let exclude_dirs =
     if exclude_patterns = [] then default_excludes else exclude_patterns
@@ -341,7 +404,7 @@ let run_search pattern_path target language include_pattern exclude_patterns
               )
         | Some glob ->
             scan_directory_search ~ctx ~language ~pattern_text
-              ~include_pattern:glob ~exclude_dirs target;
+              ~include_pattern:glob ~exclude_dirs ~explain target;
             `Ok ())
       else begin
         let source_text =
@@ -351,7 +414,13 @@ let run_search pattern_path target language include_pattern exclude_patterns
         let results =
           Diffract.Matcher.find_in_tree ~ctx ~language ~pattern_text tree
         in
-        if results = [] then print_endline "No matches found"
+        if results = [] then begin
+          print_endline "No matches found";
+          if explain then
+            print_no_match_hint
+              (text_only_locations ~ctx ~language ~pattern_text
+                 ~file_path:target ~source_text tree)
+        end
         else begin
           Printf.printf "Found %d match(es):\n\n" (List.length results);
           List.iter
@@ -395,7 +464,7 @@ let search_cmd =
     Term.(
       ret
         (const run_search $ pattern $ target $ language $ include_pattern
-       $ exclude_patterns $ debug_tokens_flag))
+       $ exclude_patterns $ debug_tokens_flag $ explain_flag))
 
 (* ── apply subcommand ───────────────────────────────────────────────── *)
 

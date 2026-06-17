@@ -152,6 +152,19 @@ val find_in_tree :
     caller also wants parse diagnostics ({!Tree.error_count}) from the same
     parse, avoiding a second parse of the source. *)
 
+val text_only_find_in_tree :
+  ctx:Context.t ->
+  language:string ->
+  pattern_text:string ->
+  Tree.src Tree.tree ->
+  composite_match list
+(** Matches of a {b single-section strict} pattern comparing [Concrete] leaves
+    on text alone (ignoring node-type). Backs the [search --explain] hint: when
+    a strict search finds nothing, these are the locations whose tokens occur as
+    text but in a different syntactic role (why strict rejected them). Returns
+    [[]] for anything but a single global strict section — the hint is scoped to
+    where that context-sensitivity bites, not partial/field/multi-section. *)
+
 val find :
   ctx:Context.t ->
   language:string ->

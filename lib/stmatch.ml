@@ -738,8 +738,8 @@ module Make (C : Cursor.S) = struct
   let advance_one cursor =
     C.move_first_child cursor || C.move_next_subtree cursor
 
-  let find_matches_iter ?(overlapping = false) ?(initial_bindings = []) pattern
-      source_cursor =
+  let find_matches_iter ?(overlapping = false) ?(initial_bindings = [])
+      ?(ignore_node_type = false) pattern source_cursor =
     (* Walk the tree pre-order. At each position, drive enumerates every
        valid binding configuration; we yield each, with span dedup in
        overlapping mode.
@@ -782,7 +782,8 @@ module Make (C : Cursor.S) = struct
             let start_byte, _ = C.byte_range !cursor in
             let configurations =
               match
-                drive ~mode:Drive_match_at_all ~initial_bindings pattern attempt
+                drive ~mode:Drive_match_at_all ~initial_bindings
+                  ~ignore_node_type pattern attempt
               with
               | Drive_enumerated lst -> lst
               | _ ->
@@ -817,7 +818,8 @@ module Make (C : Cursor.S) = struct
                   let spans = Array.make (max 1 n) (-1, -1) in
                   (match
                      drive ~mode:Drive_match_at ~initial_bindings
-                       ~spans:(Some spans) pattern (C.clone !cursor)
+                       ~ignore_node_type ~spans:(Some spans) pattern
+                       (C.clone !cursor)
                    with
                   | _ -> ());
                   pending :=
@@ -832,10 +834,11 @@ module Make (C : Cursor.S) = struct
     in
     next
 
-  let find_matches ?(overlapping = false) ?(initial_bindings = []) pattern
-      source_cursor =
+  let find_matches ?(overlapping = false) ?(initial_bindings = [])
+      ?(ignore_node_type = false) pattern source_cursor =
     List.of_seq
-      (find_matches_iter ~overlapping ~initial_bindings pattern source_cursor)
+      (find_matches_iter ~overlapping ~initial_bindings ~ignore_node_type
+         pattern source_cursor)
 
   let find_partial_matches_iter ?(initial_bindings = []) pattern source_cursor =
     (* Walk the tree pre-order; at each node attempt [match_partial_at] (the
