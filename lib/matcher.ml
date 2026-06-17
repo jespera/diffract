@@ -948,7 +948,7 @@ let text_only_find_in_tree ~ctx ~language ~pattern_text
       let cursor = Tree_sitter_cursor.of_tree tree in
       M.find_matches ~overlapping:true ~ignore_node_type:true tokens cursor
       |> List.map (fun (m : M.match_result) ->
-             ({ sections = [ m ] } : composite_match))
+          ({ sections = [ m ] } : composite_match))
   | _ -> []
 
 let find ~ctx ~language ~pattern_text ~source_text =
