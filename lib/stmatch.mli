@@ -275,6 +275,7 @@ module Make (C : Cursor.S) : sig
   val find_matches :
     ?overlapping:bool ->
     ?initial_bindings:binding list ->
+    ?ignore_node_type:bool ->
     pattern_token list ->
     C.t ->
     match_result list
@@ -282,6 +283,11 @@ module Make (C : Cursor.S) : sig
       tree accessible via [source_cursor], in document order. Walks the source
       tree in pre-order, attempting [match_at]. The caller's cursor is not
       mutated.
+
+      [ignore_node_type] (default [false]) compares [Concrete] leaves on text
+      only, skipping the node-type check. The text-only matches are a superset
+      of the type-checked ones; the [search --explain] hint uses this to detect
+      patterns whose tokens occur as text but in a different syntactic role.
 
       [overlapping] (default [false]) selects the resume behaviour after a
       match:
@@ -301,6 +307,7 @@ module Make (C : Cursor.S) : sig
   val find_matches_iter :
     ?overlapping:bool ->
     ?initial_bindings:binding list ->
+    ?ignore_node_type:bool ->
     pattern_token list ->
     C.t ->
     match_result Seq.t

@@ -931,6 +931,26 @@ let find_in_tree ~ctx ~language ~pattern_text (tree : Tree.src Tree.tree) =
   eval_ir ~ctx ~language ~source:tree.source ir root_cursor []
   |> List.map (fun (matches, _) -> ({ sections = matches } : composite_match))
 
+(* Text-only matches of a {b single-section strict} pattern: the same search
+   but comparing [Concrete] leaves on text alone, ignoring node-type. Backs the
+   [search --explain] hint — when a strict search finds nothing, these are the
+   locations whose tokens occur as text but in a different syntactic role (the
+   reason strict rejected them, e.g. [React.FC] written as an expression vs.
+   used as a type). Returns [[]] for anything but a single global strict
+   section (partial/field/multi-section/[on]/[foreach]): the hint is scoped to
+   the case where this context-sensitivity actually bites. *)
+let text_only_find_in_tree ~ctx ~language ~pattern_text
+    (tree : Tree.src Tree.tree) =
+  let p = parse_pattern pattern_text in
+  let ir, _foreaches = compile_to_ir ~ctx ~language p in
+  match ir with
+  | StrictSeq { tokens; _ } ->
+      let cursor = Tree_sitter_cursor.of_tree tree in
+      M.find_matches ~overlapping:true ~ignore_node_type:true tokens cursor
+      |> List.map (fun (m : M.match_result) ->
+             ({ sections = [ m ] } : composite_match))
+  | _ -> []
+
 let find ~ctx ~language ~pattern_text ~source_text =
   let tree = Tree.parse ~ctx ~language source_text in
   find_in_tree ~ctx ~language ~pattern_text tree
