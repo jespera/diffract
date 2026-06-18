@@ -32,13 +32,19 @@ Two properties make the output trustworthy rather than approximate:
 ## Invocation
 
 ```
-diffract summarize [-l LANG] [-i GLOB] [-e DIR]... [-v] BEFORE_DIR AFTER_DIR
+diffract summarize -l LANG -i GLOB [-e DIR]... [-v] BEFORE_DIR AFTER_DIR
 ```
+
+`-l`/`--language` and `-i`/`--include` are both **required**: `summarize` walks
+directories, so it must be told which grammar to use and which files to scan
+rather than silently parsing every walked file with a default grammar. Run it
+once per language/extension set (e.g. `-l kotlin -i '*.kt'`, then
+`-l tsx -i '*.tsx'`).
 
 | Flag | Meaning |
 |------|---------|
-| `-l`, `--language` | Grammar for the files (default `typescript`); `.ts`/`.tsx` are auto-detected by extension |
-| `-i`, `--include` | Glob for files to scan (e.g. `'*.kt'`) — required when scanning directories |
+| `-l`, `--language` | **Required.** Grammar for files whose extension isn't auto-detected; `.ts`/`.tsx` are always auto-detected by extension |
+| `-i`, `--include` | **Required.** Glob for files to scan (e.g. `'*.kt'`) |
 | `-e`, `--exclude` | Directory names to skip (repeatable; sensible defaults) |
 | `-v` | Progress and phase timing on stderr |
 
