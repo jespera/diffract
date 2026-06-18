@@ -1,0 +1,17 @@
+# rule R1  support=4  language=tsx
+@@
+match: strict
+@@
+- import { OldUserId, prettyCapability } from "domain/user";
++ import { NewUserId } from "api/transformers";
+
+@@
+match: strict
+metavar _H0: single
+metavar _H1: single
+@@
+- <_H0, _H1, OldUserId>
++ <_H0, _H1, NewUserId>
+# sites R1
+a.tsx
+b.tsx
