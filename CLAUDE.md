@@ -55,7 +55,19 @@ diffract is an OCaml library and CLI for parsing source files with tree-sitter a
 **Diff / change summaries (`lib/`)**
 - `tree_diff.ml` - AST-level diff (GumTree-style node mapping); used by `diff` and as `summarize`'s change-pair source
 - `tree_inclusion.ml` - Ordered tree embedding (Kilpeläinen–Mannila); the summary safety gate's residual-leg test
-- `change_summary.ml` - The `summarize` pipeline: cluster change pairs into rules (propose/evaluate/select), tier the residuals, emit rules + residuals that reproduce the changeset exactly. Golden tests in `tests/change_summary_cases/`
+- `change_summary.ml` - Thin facade: re-exports the public surface (`summarize`, `format_summary`, `load_from_dirs`, types). The `summarize` pipeline (propose → evaluate → select, tiered) is split across `cs_*.ml` modules, one per phase:
+  - `cs_types.ml` - shared types (public API + internal pattern representation)
+  - `cs_config.ml` - tuning constants (one documented home; internal, no CLI)
+  - `cs_trace.ml` - diagnostics gated on the `CS_TRACE` env var
+  - `cs_pattern.ml` - tree→`pat_node`, rendering, anti-unification, coherence predicates
+  - `cs_propose.ml` - change-pair extraction + candidate channels (multi-level, content-extraction, delta-keyed, anchored lattice-descent)
+  - `cs_cluster.ml` - anti-unification dendrogram, orphan coarsening, one-sided clustering
+  - `cs_evaluate.ml` - the per-site safety gate that *defines* a rule's meaning (§3.3)
+  - `cs_fusion.ml` - conjunctive multi-section fusion of co-occurring changes
+  - `cs_select.ml` - one tier: propose → evaluate → greedy set-cover over changed regions
+  - `cs_tier.ml` - tiered loop, chain-effect accounting, residual emission
+  - `cs_io.ml` - `.summary` formatting and the directory-pair loader
+  - Golden + round-trip tests in `tests/change_summary_cases/`. Design: `docs/change-summary-design.md` (§6 Milestones is historical changelog; §1–§5 describe the current design).
 
 **Tree-sitter Integration Flow:**
 1. C helper layer wraps TSNode/TSTree in OCaml custom blocks with finalizers

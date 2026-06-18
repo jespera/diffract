@@ -120,6 +120,43 @@ and conjunctive rule fusion.
 > definitions; §3.1 describes the proposer's extraction, which is
 > unchanged.
 
+### 3.0 Module map (implementation)
+
+The pipeline lives in `lib/`, one module per phase, behind the thin
+`change_summary.ml` facade (which re-exports only the public surface:
+`summarize`, `format_summary`, `load_from_dirs`, and the types). The phases
+form a DAG: `cs_types` ← `cs_pattern` ← {`cs_propose`, `cs_cluster`,
+`cs_fusion`} → `cs_select` → `cs_tier`; `cs_evaluate` is depended on by
+`cs_cluster`, `cs_select`, and `cs_tier`.
+
+| module | phase |
+|---|---|
+| `cs_types` | shared types (public API + internal pattern representation) |
+| `cs_config` | tuning constants — one documented home; internal, no CLI flags |
+| `cs_trace` | diagnostics gated on the `CS_TRACE` env var |
+| `cs_pattern` | tree→`pat_node`, rendering, anti-unification, coherence predicates |
+| `cs_propose` | change-pair extraction + candidate channels (§3.1, §3.2) |
+| `cs_cluster` | anti-unification dendrogram, orphan coarsening, one-sided clustering (§4.1) |
+| `cs_evaluate` | the per-site safety gate that *defines* a rule's meaning (§3.1, §3.3) |
+| `cs_fusion` | conjunctive multi-section fusion (§4.2) |
+| `cs_select` | one tier: propose → evaluate → greedy set-cover (§3.3) |
+| `cs_tier` | tiered loop, chain-effect accounting, residual emission (§4.4) |
+| `cs_io` | `.summary` formatting and the directory-pair loader (§9) |
+
+The proposer offers four candidate channels (design §3.1–§3.2):
+multi-level extraction, cross-side content-extraction pairs (§4.3),
+delta-keyed scope-holed pairs (§3.2), and anchored lattice-descent
+variants (§3.2). (A 2026-06-18 attempt to retire the delta-keyed channel
+was reverted: it changed *no* golden fixture, but on the real soak corpora
+it materially shapes the type-parameter rename family — a reminder that
+channel-retirement must be measured on the real corpora, not the fixtures
+alone. See §3.2's note.)
+
+> **Reading guide.** §1–§5 describe the design as it now stands. §6
+> (Milestones) is a *historical changelog* of how it was built —
+> M1.8a → … → M2.5 — kept for provenance; read it for *why* a decision
+> was made, not *what the code does today*.
+
 ```
 changeset
    │
@@ -519,7 +556,19 @@ agnostic holes. A matcher-side robustness layer (identifier-kind leaf
 equivalence derived from grammar metadata) would widen the safe set
 further but is not a prerequisite.
 
-**As built (`delta_keyed_pair`).** For every emitted change pair whose
+**As built (`delta_keyed_pair`).** A 2026-06-18 attempt to retire this
+channel was **reverted**: disabling it changed *zero* of the 42 golden
+cases (its fixture `kotlin_delta_pooled_drop` is also covered by the
+anchored channel), so it looked dormant — but on the real `gen3` soak
+removing it changed ~390 lines, materially altering the type-parameter
+rename family it was built for (`<…, HedebyUserId> ⤳ <…, HedebyUserIdServer>`).
+The old fixture suite did not isolate that family the way real corpora
+exercise it; the `ts_typearg_rename_delta` fixture (a type-argument rename
+co-occurring with an import rewrite) was added as a guard — disabling this
+channel makes it fall back to a coarse whole-block rewrite and the golden test
+fails. Lesson: a channel that costs only recall (§3.3) can still be
+load-bearing on real input; measure retirement on the soak corpora, not the
+fixtures alone. The mechanism: for every emitted change pair whose
 node is `PNode`-shaped on both sides with equal node type, a second
 candidate is emitted: preserved children (equal structural hash on
 both sides, greedy in-order matching) become shared holes — the same
@@ -1204,6 +1253,13 @@ File add/delete uses the standard unified-diff idiom of `/dev/null` on the
 absent side. No dedicated `file_ops` section — the format is uniform.
 
 ## 6. Milestones
+
+> **Historical changelog — not a description of the current code.** This
+> section records *how* the feature was built and *why* each decision was
+> made (M1.8a → … → M2.5), retained for provenance. For *what the code does
+> today*, read §1–§5 (and the module map in §3.0). Where a milestone's "as
+> built" note has since been superseded — e.g. the `delta_keyed_pair`
+> channel removed in §3.2 — the current design wins.
 
 Ordered for early end-to-end usability. Each milestone is testable in
 isolation against a synthetic fixture and leaves the tool in a usable state.
