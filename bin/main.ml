@@ -3,9 +3,14 @@ open Cmdliner
 (* ── Shared arguments ───────────────────────────────────────────────── *)
 
 let language =
-  let doc = "Language grammar to use (typescript, kotlin, ...)." in
+  let doc =
+    "Language grammar to use (typescript, kotlin, ...). Required - there is no \
+     default, so a file is never parsed with an unintended grammar."
+  in
   Arg.(
-    value & opt string "typescript" & info [ "l"; "language" ] ~docv:"LANG" ~doc)
+    required
+    & opt (some string) None
+    & info [ "l"; "language" ] ~docv:"LANG" ~doc)
 
 let include_pattern =
   let doc =
@@ -635,6 +640,16 @@ let run_summarize before_dir after_dir language include_pattern exclude_patterns
       `Error (false, Printf.sprintf "%s is not a directory" before_dir)
     else if not (Sys.is_directory after_dir) then
       `Error (false, Printf.sprintf "%s is not a directory" after_dir)
+    else if include_pattern = None then
+      (* summarize always walks directories, so --include is mandatory: it
+         scopes which files are parsed (with [--language] as the grammar for
+         extensions the loader does not auto-map), instead of silently feeding
+         every walked file to a fallback grammar. *)
+      `Error
+        ( true,
+          "--include is required for summarize (e.g., --include '*.kt'): it \
+           scopes which files are summarized. Run once per language/extension \
+           set." )
     else begin
       let changeset =
         phase "load" (fun () ->
