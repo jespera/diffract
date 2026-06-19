@@ -7,34 +7,10 @@ type src = unit
 type pat = unit
 type any = unit
 
-type point = { row : int; column : int }
-(** Position in source code *)
-
-type 'kind child = { field_name : string option; node : 'kind t }
-(** A child node with optional field name *)
-
-and 'kind t = {
-  node_type : string;
-  is_named : bool;
-  is_extra : bool;
-      (** True iff tree-sitter generated this node from one of the grammar's
-          [extras] rules — typically comments and (rarely) whitespace tokens.
-          Such nodes can appear anywhere between tokens without being part of
-          the syntactic structure. *)
-  hash : int;
-  start_byte : int;
-  end_byte : int;
-  start_point : point;
-  end_point : point;
-  children : 'kind child list;
-  named_children : 'kind t list;
-}
-(** A tree node with all data copied from tree-sitter. The [hash] field is a
-    precomputed structural hash that excludes positional information. *)
-
-type 'kind tree = { root : 'kind t; source : string }
-(** A complete parsed tree with source. The 'kind parameter is a phantom type -
-    it's never used at runtime. *)
+(* The record types ([point]/[child]/[t]/[tree]) live in {!Tree_types} so that
+   [Context] can name a parsed tree without a dependency cycle; re-export them
+   here so the rest of the codebase keeps using [Tree.t], [Tree.tree], etc. *)
+include Tree_types
 
 (** {1 Accessors} *)
 
@@ -313,24 +289,36 @@ let of_ts_tree source (ts_tree : Node.tree) : src tree =
 
 (** {1 Parsing} *)
 
-(** Internal parsing function that returns an untyped tree record *)
+(** Internal parsing function that returns an untyped tree record.
+
+    Memoized on [(language, source)] via the context's bounded parse cache:
+    parsing is a pure function of those two inputs and trees are immutable, so a
+    cached tree is safe to share. Callers that parse the same input repeatedly
+    (e.g. the change-summary gate re-evaluating many patterns against one file,
+    or a directory scan re-parsing the pattern per file) pay the parse once. *)
 let parse_internal ~ctx ~language source =
-  let lang = Languages.get ctx language in
-  let parser = Tree_sitter_bindings.parser_new () in
+  let key = (language, source) in
+  match Context.parse_memo_find ctx key with
+  | Some tree -> tree
+  | None ->
+      let lang = Languages.get ctx language in
+      let parser = Tree_sitter_bindings.parser_new () in
 
-  if parser = 0n then failwith "Failed to create parser";
+      if parser = 0n then failwith "Failed to create parser";
 
-  if not (Tree_sitter_bindings.parser_set_language parser lang) then begin
-    Tree_sitter_bindings.parser_delete parser;
-    failwith "Failed to set language"
-  end;
+      if not (Tree_sitter_bindings.parser_set_language parser lang) then begin
+        Tree_sitter_bindings.parser_delete parser;
+        failwith "Failed to set language"
+      end;
 
-  let ts_tree = Node.parse parser source in
-  Tree_sitter_bindings.parser_delete parser;
-  let ts_root = Node.root ts_tree in
-  let root = of_ts_node_internal source ts_root in
-  ignore (Sys.opaque_identity ts_tree);
-  { root; source }
+      let ts_tree = Node.parse parser source in
+      Tree_sitter_bindings.parser_delete parser;
+      let ts_root = Node.root ts_tree in
+      let root = of_ts_node_internal source ts_root in
+      ignore (Sys.opaque_identity ts_tree);
+      let tree = { root; source } in
+      Context.parse_memo_add ctx key tree;
+      tree
 
 (** Parse source code and return our internal tree representation *)
 let parse ~ctx ~language source : src tree =

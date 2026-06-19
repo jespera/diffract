@@ -22,16 +22,24 @@ type pat
 type any
 (** Phantom type for trees/nodes of unknown kind *)
 
-(** {1 Tree types} *)
+(** {1 Tree types}
 
-type point = { row : int; column : int }
+    The record types are defined in {!Tree_types} (so lower-level modules like
+    [Context] can name a parsed tree); re-exported here as manifest equalities,
+    so [Tree.point]/[Tree.t]/[Tree.tree] are the same types with their fields
+    visible, and a [Tree_types.tree] is interchangeable with a [Tree.tree]. *)
+
+type point = Tree_types.point = { row : int; column : int }
 (** Position in source code *)
 
-type 'kind child = { field_name : string option; node : 'kind t }
+type 'kind child = 'kind Tree_types.child = {
+  field_name : string option;
+  node : 'kind t;
+}
 (** A child node with optional field name. The ['kind] parameter matches the
     parent node's kind. *)
 
-and 'kind t = {
+and 'kind t = 'kind Tree_types.t = {
   node_type : string;
   is_named : bool;
   is_extra : bool;
@@ -51,7 +59,7 @@ and 'kind t = {
     distinguishes source nodes from pattern nodes. The [hash] field is a
     precomputed structural hash that excludes positional information. *)
 
-type 'kind tree = { root : 'kind t; source : string }
+type 'kind tree = 'kind Tree_types.tree = { root : 'kind t; source : string }
 (** A complete parsed tree with source text. The ['kind] parameter distinguishes
     source trees from pattern trees. *)
 
