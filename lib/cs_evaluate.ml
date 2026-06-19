@@ -169,6 +169,17 @@ let residual_diff ~ctx ~language ~file_path ~original ~transformed () =
 (** [path → site_info] for every [Modified] file in the changeset. The safety
     gate evaluates rules against these. *)
 let build_site_db ~ctx (cs : changeset) : (string, site_info) Hashtbl.t =
+  (* The gate re-parses each modified file's before- and after-source once per
+     candidate, so the parse cache must hold both for every modified file at
+     once or it thrashes on a large changeset. Size it to that working set
+     (plus headroom for the transformed intermediates churning through), so the
+     cache adapts to the changeset rather than a fixed cap. *)
+  let modified =
+    List.fold_left
+      (fun n -> function Modified _ -> n + 1 | _ -> n)
+      0 cs.files
+  in
+  Context.ensure_parse_cap ctx ((2 * modified) + 128);
   let tbl = Hashtbl.create 16 in
   List.iter
     (fun fc ->
