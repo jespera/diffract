@@ -1,6 +1,6 @@
 (tests
  (names test_runner)
- (libraries diffract alcotest)
+ (libraries diffract alcotest unix)
  (deps
   (glob_files ../grammars/lib/*.so)
   (source_tree change_summary_cases)))

@@ -14,6 +14,7 @@ module Tokenize = Tokenize
 module Matcher = Matcher
 module Text_diff = Text_diff
 module Change_summary = Change_summary
+module File_scan = File_scan
 
 (** {1 Parsing} *)
 

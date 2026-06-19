@@ -70,33 +70,12 @@ let explain_flag =
 let default_excludes =
   [ "node_modules"; ".git"; "_build"; "target"; "__pycache__"; ".hg"; ".svn" ]
 
-let glob_match pattern filename =
-  let basename = Filename.basename filename in
-  if String.contains pattern '*' then
-    let parts = String.split_on_char '*' pattern in
-    match parts with
-    | [ prefix; suffix ] ->
-        String.length basename >= String.length prefix + String.length suffix
-        && String.starts_with ~prefix basename
-        && String.ends_with ~suffix basename
-    | [ prefix ] when String.ends_with ~suffix:"*" pattern ->
-        String.starts_with ~prefix basename
-    | _ -> basename = pattern
-  else basename = pattern
-
+(* Sort scan results lexicographically by path so search/apply output is
+   reproducible: [File_scan.walk] returns entries in [readdir] order, which is
+   filesystem-dependent. *)
 let find_files ~pattern ~exclude_dirs root =
-  let rec traverse acc dir =
-    let entries = try Sys.readdir dir with Sys_error _ -> [||] in
-    Array.fold_left
-      (fun acc entry ->
-        let path = Filename.concat dir entry in
-        if Sys.is_directory path then
-          if List.mem entry exclude_dirs then acc else traverse acc path
-        else if glob_match pattern path then path :: acc
-        else acc)
-      acc entries
-  in
-  traverse [] root |> List.rev
+  let pred path = Diffract.File_scan.glob_match pattern path in
+  Diffract.File_scan.walk ~exclude_dirs ~pred root [] |> List.sort compare
 
 let transform_file ~ctx ~language ~pattern_text ~in_place file_path =
   let source_text = In_channel.with_open_text file_path In_channel.input_all in
