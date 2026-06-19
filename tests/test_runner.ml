@@ -3,6 +3,7 @@
 let () =
   Alcotest.run "diffract"
     [
+      ("File scan", Test_file_scan.tests);
       ("Node", Test_node.tests);
       ("Tree diff", Test_tree_diff.tests);
       ("Tree inclusion", Test_tree_inclusion.tests);

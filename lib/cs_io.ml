@@ -69,32 +69,6 @@ let language_of_file path ~default ~ext_language =
   | Some (_, lang) -> lang
   | None -> default
 
-let glob_match pattern filename =
-  let basename = Filename.basename filename in
-  if String.contains pattern '*' then
-    let parts = String.split_on_char '*' pattern in
-    match parts with
-    | [ prefix; suffix ] ->
-        String.length basename >= String.length prefix + String.length suffix
-        && String.starts_with ~prefix basename
-        && String.ends_with ~suffix basename
-    | [ prefix ] when String.ends_with ~suffix:"*" pattern ->
-        String.starts_with ~prefix basename
-    | _ -> basename = pattern
-  else basename = pattern
-
-let rec walk ~exclude_dirs ~pred root acc =
-  let entries = try Sys.readdir root with Sys_error _ -> [||] in
-  Array.fold_left
-    (fun acc entry ->
-      let path = Filename.concat root entry in
-      if try Sys.is_directory path with Sys_error _ -> false then
-        if List.mem entry exclude_dirs then acc
-        else walk ~exclude_dirs ~pred path acc
-      else if pred path then path :: acc
-      else acc)
-    acc entries
-
 let load_from_dirs ~before_dir ~after_dir ?(include_glob = None)
     ?(exclude_dirs =
       [ "node_modules"; ".git"; "_build"; "target"; "__pycache__" ])
@@ -102,10 +76,10 @@ let load_from_dirs ~before_dir ~after_dir ?(include_glob = None)
   let pred =
     match include_glob with
     | None -> fun _ -> true
-    | Some g -> fun p -> glob_match g p
+    | Some g -> fun p -> File_scan.glob_match g p
   in
-  let before_files = walk ~exclude_dirs ~pred before_dir [] in
-  let after_files = walk ~exclude_dirs ~pred after_dir [] in
+  let before_files = File_scan.walk ~exclude_dirs ~pred before_dir [] in
+  let after_files = File_scan.walk ~exclude_dirs ~pred after_dir [] in
   let rel_of root path =
     let rlen = String.length root in
     let rlen =
