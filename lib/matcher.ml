@@ -1365,8 +1365,8 @@ let edits_of_composite ir (composite : composite_match) seq_renderings source =
    overlapping bytes with different replacements) is rejected rather than
    silently corrupting the output. Nested transforms — an outer rewrite
    whose replacement should incorporate an inner one — are a later feature.
-   Edits are then applied start-descending so each splice leaves the lower
-   offsets that later edits refer to intact. *)
+   Edits are then spliced in a single forward pass: the source is copied
+   into a buffer, alternating unchanged slices with replacements. *)
 let apply_edits source edits =
   (* [sort_uniq compare] orders ascending by start_byte (the record's first
      field) and drops exact duplicates. *)
@@ -1383,12 +1383,20 @@ let apply_edits source edits =
     | _ -> ()
   in
   check_overlap edits;
-  List.fold_left
-    (fun src e ->
-      let before = String.sub src 0 e.start_byte in
-      let after = String.sub src e.end_byte (String.length src - e.end_byte) in
-      before ^ e.replacement ^ after)
-    source (List.rev edits)
+  (* Edits are sorted ascending and non-overlapping, so [pos] (the next
+     unconsumed source byte) only moves forward. For each edit, copy the
+     untouched slice up to its start, then its replacement; finally the tail. *)
+  let buf = Buffer.create (String.length source) in
+  let pos =
+    List.fold_left
+      (fun pos e ->
+        Buffer.add_substring buf source pos (e.start_byte - pos);
+        Buffer.add_string buf e.replacement;
+        e.end_byte)
+      0 edits
+  in
+  Buffer.add_substring buf source pos (String.length source - pos);
+  Buffer.contents buf
 
 (* Find the cursors a [Sequence] binding holds, by name. *)
 let lookup_sequence name bindings =
