@@ -257,6 +257,62 @@ let rec pat_size = function
 let edit_holes ep = count_holes ep.before + count_holes ep.after
 let edit_size ep = pat_size ep.before + pat_size ep.after
 
+(** A pattern is "concrete" iff it contains at least one named [Leaf] or a
+    keyword-shaped unnamed token (one whose text contains an alphabetic
+    character — [array], [function], [class] etc.). Empty [PNode]s whose
+    node_type is pure punctuation ([,], [(], [;]) don't count: the pattern is
+    structural scaffolding without a keyword anchor and matches arbitrary
+    content of the right shape. The keyword carve-out is what lets a PHP rule
+    like [array($H0) -> [$H0]] survive coherence: the [array] keyword is the
+    distinguishing concrete signal even though every named-leaf descendant
+    becomes a hole. *)
+let has_keyword_text s =
+  let n = String.length s in
+  let rec loop i =
+    if i >= n then false
+    else
+      let c = s.[i] in
+      if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') then true
+      else loop (i + 1)
+  in
+  loop 0
+
+let rec has_concrete = function
+  | Hole _ -> false
+  | Leaf _ -> true
+  | PNode { children = []; node_type; _ } -> has_keyword_text node_type
+  | PNode { children; _ } ->
+      List.exists (fun c -> has_concrete c.child) children
+
+(** [has_adjacent_holes p] is true iff rendering [p] would place two holes
+    side-by-side with no token between them — concrete or punctuation. Such a
+    fragment ([_H0_H1]) is unmatchable: the tokenizer-based matcher can't bind
+    two adjacent metavars with no anchor. Computed over the render [template] so
+    it mirrors {!render_pat_node} exactly: a [Lit] is a literal token (a
+    separator, including punctuation like [(] / [,]), a [Slot] renders a child.
+    A [(_H0)] or [_H0(_H1, _H2)] is fine — the parens/comma sit between holes —
+    but a hole directly followed by a hole-only subtree is not. *)
+let has_adjacent_holes p =
+  let rec toks acc node =
+    match node with
+    | Hole _ -> true :: acc
+    | Leaf _ -> false :: acc
+    | PNode { children = []; _ } -> false :: acc
+    | PNode { children; template; _ } ->
+        let arr = Array.of_list children in
+        List.fold_left
+          (fun a -> function
+            | Lit _ -> false :: a
+            | Slot i -> toks a arr.(i).child)
+          acc template
+  in
+  let rec adjacent = function
+    | true :: (true :: _ as rest) -> true || adjacent rest
+    | _ :: rest -> adjacent rest
+    | [] -> false
+  in
+  adjacent (List.rev (toks [] p))
+
 (* ── Anti-unification ────────────────────────────────────────────── *)
 
 (** Build a recursive anti-unifier parameterised on a [hole_for] function. When
@@ -283,7 +339,26 @@ let mk_anti_unify hole_for =
                 { field_name = None; child = Hole (hole_for c1.child c2.child) })
             n1.children n2.children
         in
-        PNode { n1 with children }
+        (* Collapse-to-single-hole: if anti-unifying a node's children leaves it
+           rendering as adjacent holes ([_H0_H1]) — two holes with no token
+           between them — the fragment is unmatchable and the safety gate rejects
+           it (safe=0), forcing the dendrogram cut down to shape-homogeneous
+           sub-clusters. Collapse the whole node to one hole: it stays anchored
+           by its surrounding context and reproduces the subtree verbatim (the
+           shared [hole_for] memo gives the before- and after-side occurrences
+           the same index, so it round-trips).
+
+           [has_adjacent_holes] (a render-order check), not "every child is a
+           [Hole]": Kotlin buries call args under a [call_suffix] wrapper, so
+           divergent args give [call_expression[Hole; call_suffix[Hole]]] —
+           rendered [_H0_H1] though the second child is a PNode, not a bare hole.
+           And not "no concrete leaf", which would wrongly collapse a
+           parens-anchored [(_H0)] (punctuation is non-concrete but a real
+           anchoring token). A single hole or a hole flanked by tokens is left
+           alone, so single-child wrappers never collapse — preserving the
+           before/after hole alignment that a re-keyed wrapper hole would break. *)
+        let node = PNode { n1 with children } in
+        if has_adjacent_holes node then Hole (hole_for p1 p2) else node
     | _ -> Hole (hole_for p1 p2)
   in
   go
@@ -347,33 +422,6 @@ let shift_holes offset ep =
 let hole_frac ep =
   let s = edit_size ep in
   if s = 0 then 0.0 else float_of_int (edit_holes ep) /. float_of_int s
-
-(** A pattern is "concrete" iff it contains at least one named [Leaf] or a
-    keyword-shaped unnamed token (one whose text contains an alphabetic
-    character — [array], [function], [class] etc.). Empty [PNode]s whose
-    node_type is pure punctuation ([,], [(], [;]) don't count: the pattern is
-    structural scaffolding without a keyword anchor and matches arbitrary
-    content of the right shape. The keyword carve-out is what lets a PHP rule
-    like [array($H0) -> [$H0]] survive coherence: the [array] keyword is the
-    distinguishing concrete signal even though every named-leaf descendant
-    becomes a hole. *)
-let has_keyword_text s =
-  let n = String.length s in
-  let rec loop i =
-    if i >= n then false
-    else
-      let c = s.[i] in
-      if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') then true
-      else loop (i + 1)
-  in
-  loop 0
-
-let rec has_concrete = function
-  | Hole _ -> false
-  | Leaf _ -> true
-  | PNode { children = []; node_type; _ } -> has_keyword_text node_type
-  | PNode { children; _ } ->
-      List.exists (fun c -> has_concrete c.child) children
 
 let rec collect_leaf_values acc = function
   | Hole _ -> acc
