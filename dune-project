@@ -1,4 +1,4 @@
-(lang dune 3.21)
+(lang dune 3.23)
 (name diffract)
 (generate_opam_files true)
 
@@ -15,8 +15,8 @@
  (description "A tool for computing structural diffs between source files, inferring transformation patterns from examples, and summarizing code changes using tree-sitter.")
  (depends
   (ocaml (>= 5.4))
-  (dune (>= 3.21))
-  (cmdliner (>= 1.2))
+  (dune (>= 3.23))
+  (cmdliner (>= 2.1.1))
   ctypes
   ctypes-foreign
   yojson
