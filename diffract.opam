@@ -11,8 +11,8 @@ homepage: "https://github.com/jespera/diffract"
 bug-reports: "https://github.com/jespera/diffract/issues"
 depends: [
   "ocaml" {>= "5.4"}
-  "dune" {>= "3.21" & >= "3.21"}
-  "cmdliner" {>= "1.2"}
+  "dune" {>= "3.23"}
+  "cmdliner" {>= "2.1.1"}
   "ctypes"
   "ctypes-foreign"
   "yojson"
