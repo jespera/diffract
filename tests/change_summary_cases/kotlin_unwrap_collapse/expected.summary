@@ -1,0 +1,11 @@
+# rule R1  support=3  language=kotlin
+@@
+match: strict
+metavar _H0: single
+@@
+- unwrap(_H0)
++ _H0.orThrow()
+# sites R1
+a.kt
+b.kt
+c.kt
