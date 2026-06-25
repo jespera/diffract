@@ -13,6 +13,10 @@ module Tokenize = Tokenize
 module Matcher = Matcher
 module Text_diff = Text_diff
 module Change_summary = Change_summary
+(* Internal change-summary modules, exposed for unit testing of the pattern
+   layer (anti-unification, rendering). Not part of the stable public API. *)
+module Cs_types = Cs_types
+module Cs_pattern = Cs_pattern
 module File_scan = File_scan
 
 (** Parse source code and return the tree representation *)

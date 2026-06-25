@@ -70,6 +70,14 @@ let ws_collapse s =
 
 type pat_node =
   | Hole of int
+  | Ellipsis
+      (** A sequence wildcard rendered as [...]. Produced by anti-unification
+          when a delimited list child (parameter/argument/type-argument list,
+          collection literal) varies in arity across instances: rather than
+          collapsing the whole bracketed node to a single [Hole] (which the
+          matcher cannot bind), the interior becomes [Ellipsis] between the
+          node's own delimiters, e.g. [(...)] / [<...>]. Never produced by
+          [of_src] — only by anti-unification. *)
   | Leaf of { node_type : string; value : string }
   | PNode of {
       node_type : string;
