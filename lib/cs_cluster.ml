@@ -58,6 +58,7 @@ let merge_score ep =
 let root_sig (ep : edit_pat) =
   let tag = function
     | Hole _ -> ("H", "")
+    | Ellipsis -> ("E", "")
     | Leaf { node_type; _ } -> ("L", node_type)
     | PNode { node_type; _ } -> ("P", node_type)
   in
@@ -208,7 +209,7 @@ let empty_container_surface (p : pat_node) : string option =
 (* Substitute [repl] for every [Hole h] in a pat_node. *)
 let rec subst_hole h repl = function
   | Hole h' when h' = h -> repl
-  | (Hole _ | Leaf _) as p -> p
+  | (Hole _ | Leaf _ | Ellipsis) as p -> p
   | PNode n ->
       PNode
         {
@@ -225,6 +226,7 @@ let rec subtree_at_hole (pat : pat_node) (con : pat_node) (h : int) :
     pat_node option =
   match pat with
   | Hole h' -> if h' = h then Some con else None
+  | Ellipsis -> None
   | Leaf _ -> None
   | PNode pn -> (
       match con with

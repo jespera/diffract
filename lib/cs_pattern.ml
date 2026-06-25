@@ -131,6 +131,7 @@ let hole_name h = Printf.sprintf "_H%d" h
 
 let rec render_pat_node = function
   | Hole h -> hole_name h
+  | Ellipsis -> "..."
   | Leaf { value; _ } -> value
   | PNode { children = []; node_type; _ } -> node_type
   | PNode { children; template; _ } ->
@@ -145,6 +146,7 @@ let rec render_pat_node = function
 
 let rec collect_holes acc = function
   | Hole h -> if List.mem h acc then acc else h :: acc
+  | Ellipsis -> acc
   | Leaf _ -> acc
   | PNode { children; _ } ->
       List.fold_left (fun a c -> collect_holes a c.child) acc children
@@ -175,6 +177,95 @@ let render_pattern_body (ep : edit_pat) : string =
     (fun line -> Buffer.add_string buf (Printf.sprintf "+ %s\n" line))
     (String.split_on_char '\n' after_text);
   Buffer.contents buf
+
+(** Field-mode render (Piece B): render a declaration-anchored [edit_pat] whose
+    change is confined to one child (e.g. a function body) as a [match: field]
+    rule. The unchanged signature children render as a context line, the changed
+    child as [-]/[+], and children selected by [omit] (presence-varying or
+    edge-positioned optionals — return type, modifiers, annotations) are dropped
+    so field mode ignores them. Falls back to {!render_pattern_body} when the
+    edit is not a single-child change of a [PNode] pair (so callers can use it
+    unconditionally). [omit] receives a child's [field_name]. *)
+let render_pattern_body_field ?(omit = fun (_ : string option) -> false)
+    (ep : edit_pat) : string =
+  match (ep.before, ep.after) with
+  | PNode b, PNode a
+    when b.node_type = a.node_type
+         && List.length b.children = List.length a.children ->
+      let bch = Array.of_list b.children in
+      let ach = Array.of_list a.children in
+      let n = Array.length bch in
+      let changed i =
+        render_pat_node bch.(i).child <> render_pat_node ach.(i).child
+      in
+      let changed_idxs = List.filter changed (List.init n (fun i -> i)) in
+      let omit_idx i =
+        (not (List.mem i changed_idxs)) && omit bch.(i).field_name
+      in
+      (match changed_idxs with
+      | [ ci ] ->
+          (* Drop omitted slots and one adjacent separator [Lit] each
+             (preceding if present — the [": "] of a return type — else the
+             following, for a leading modifier list). *)
+          let pruned =
+            let rec go acc = function
+              | [] -> List.rev acc
+              | Slot j :: rest when omit_idx j -> (
+                  match acc with
+                  | Lit _ :: acc' -> go acc' rest
+                  | _ -> (
+                      match rest with Lit _ :: r -> go acc r | r -> go acc r))
+              | p :: rest -> go (p :: acc) rest
+            in
+            go [] b.template
+          in
+          let render_parts parts =
+            let buf = Buffer.create 64 in
+            List.iter
+              (function
+                | Lit s -> Buffer.add_string buf s
+                | Slot j -> Buffer.add_string buf (render_pat_node bch.(j).child))
+              parts;
+            Buffer.contents buf
+          in
+          let rec split acc = function
+            | Slot j :: rest when j = ci -> (List.rev acc, rest)
+            | p :: rest -> split (p :: acc) rest
+            | [] -> (List.rev acc, [])
+          in
+          let pre_parts, suf_parts = split [] pruned in
+          let rstrip s =
+            let j = ref (String.length s) in
+            while !j > 0 && (s.[!j - 1] = ' ' || s.[!j - 1] = '\t') do
+              decr j
+            done;
+            String.sub s 0 !j
+          in
+          let prefix = rstrip (render_parts pre_parts) in
+          let suffix = render_parts suf_parts in
+          let minus = render_pat_node bch.(ci).child in
+          let plus = render_pat_node ach.(ci).child in
+          let holes = edit_hole_list ep in
+          let buf = Buffer.create 128 in
+          Buffer.add_string buf "@@\nmatch: field\n";
+          List.iter
+            (fun h ->
+              Buffer.add_string buf
+                (Printf.sprintf "metavar %s: single\n" (hole_name h)))
+            holes;
+          Buffer.add_string buf "@@\n";
+          let emit marker text =
+            List.iter
+              (fun l -> Buffer.add_string buf (Printf.sprintf "%s%s\n" marker l))
+              (String.split_on_char '\n' text)
+          in
+          if prefix <> "" then emit "  " prefix;
+          emit "- " minus;
+          emit "+ " plus;
+          if String.trim suffix <> "" then emit "  " suffix;
+          Buffer.contents buf
+      | _ -> render_pattern_body ep)
+  | _ -> render_pattern_body ep
 
 (** Surgical render (§3.2 anchored realisations): lines common to both sides
     become context lines, so the transform's edit spans only the changed lines.
@@ -244,12 +335,14 @@ let render_removal_only_body (p : pat_node) : string =
 
 let rec count_holes = function
   | Hole _ -> 1
+  | Ellipsis -> 0
   | Leaf _ -> 0
   | PNode { children; _ } ->
       List.fold_left (fun a c -> a + count_holes c.child) 0 children
 
 let rec pat_size = function
   | Hole _ -> 1
+  | Ellipsis -> 1
   | Leaf _ -> 1
   | PNode { children; _ } ->
       1 + List.fold_left (fun a c -> a + pat_size c.child) 0 children
@@ -279,6 +372,7 @@ let has_keyword_text s =
 
 let rec has_concrete = function
   | Hole _ -> false
+  | Ellipsis -> false
   | Leaf _ -> true
   | PNode { children = []; node_type; _ } -> has_keyword_text node_type
   | PNode { children; _ } ->
@@ -296,6 +390,7 @@ let has_adjacent_holes p =
   let rec toks acc node =
     match node with
     | Hole _ -> true :: acc
+    | Ellipsis -> true :: acc
     | Leaf _ -> false :: acc
     | PNode { children = []; _ } -> false :: acc
     | PNode { children; template; _ } ->
@@ -313,32 +408,134 @@ let has_adjacent_holes p =
   in
   adjacent (List.rev (toks [] p))
 
+(* ── Sequence (ellipsis) generalisation — Piece C ──────────────────── *)
+
+(* The first / last character a node renders to, computed by walking only the
+   left / right spine (no full render). Used to detect a bracket-delimited node
+   whether its delimiters are silent template [Lit]s (TS/Kotlin strings) or
+   unnamed child tokens (Kotlin's [(]/[)] are children, not Lits) — so detection
+   is by surface bracket shape, language-generally, not by node type. *)
+let rec first_rendered_char node =
+  match node with
+  | Hole _ -> Some '_'
+  | Ellipsis -> Some '.'
+  | Leaf { value; _ } -> if value = "" then None else Some value.[0]
+  | PNode { children = []; node_type; _ } ->
+      if node_type = "" then None else Some node_type.[0]
+  | PNode { children; template; _ } ->
+      let arr = Array.of_list children in
+      let rec go = function
+        | Lit s :: rest ->
+            let s' = String.trim s in
+            if s' <> "" then Some s'.[0] else go rest
+        | Slot i :: rest -> (
+            match first_rendered_char arr.(i).child with
+            | Some _ as r -> r
+            | None -> go rest)
+        | [] -> None
+      in
+      go template
+
+let rec last_rendered_char node =
+  match node with
+  | Hole _ -> Some '_'
+  | Ellipsis -> Some '.'
+  | Leaf { value; _ } ->
+      if value = "" then None else Some value.[String.length value - 1]
+  | PNode { children = []; node_type; _ } ->
+      if node_type = "" then None
+      else Some node_type.[String.length node_type - 1]
+  | PNode { children; template; _ } ->
+      let arr = Array.of_list children in
+      let rec go = function
+        | Lit s :: rest ->
+            let s' = String.trim s in
+            if s' <> "" then Some s'.[String.length s' - 1] else go rest
+        | Slot i :: rest -> (
+            match last_rendered_char arr.(i).child with
+            | Some _ as r -> r
+            | None -> go rest)
+        | [] -> None
+      in
+      go (List.rev template)
+
+(** A node's surrounding bracket pair if it renders as a delimited list —
+    [(...)], [[...]], [{...}], [<...>]. Returns the opening/closing chars.
+    Identifies parameter / argument / type-argument lists and collection
+    literals by bracket shape, not node type (language-general). *)
+let seq_brackets p =
+  match (first_rendered_char p, last_rendered_char p) with
+  | Some o, Some c when String.contains "([{<" o && String.contains ")]}>" c ->
+      Some (o, c)
+  | _ -> None
+
+let node_has_ellipsis = function
+  | PNode { children; _ } ->
+      List.exists
+        (function { child = Ellipsis; _ } -> true | _ -> false)
+        children
+  | _ -> false
+
+let rec contains_ellipsis = function
+  | Ellipsis -> true
+  | Hole _ | Leaf _ -> false
+  | PNode { children; _ } ->
+      List.exists (fun c -> contains_ellipsis c.child) children
+
+(** Replace a delimited node's interior with a single [Ellipsis], keeping its
+    bracket pair — [(a, b)] / [<S, E>] become [(...)] / [<...>]. *)
+let ellipsis_list_of node_type is_named (o, c) =
+  PNode
+    {
+      node_type;
+      is_named;
+      children = [ { field_name = None; child = Ellipsis } ];
+      template = [ Lit (String.make 1 o); Slot 0; Lit (String.make 1 c) ];
+    }
+
 (* ── Anti-unification ────────────────────────────────────────────── *)
 
 (** Build a recursive anti-unifier parameterised on a [hole_for] function. When
     [hole_for] is shared across multiple invocations (as in [anti_unify_edits]
     across the before and after sides), identical concrete-pair differences
     reuse the same hole index. *)
-let mk_anti_unify hole_for =
+let mk_anti_unify ?(allow_ellipsis = true) hole_for =
   let rec go p1 p2 =
     match (p1, p2) with
     | Hole h1, Hole h2 when h1 = h2 -> Hole h1
+    | Ellipsis, Ellipsis -> Ellipsis
     | Leaf l1, Leaf l2 when l1.node_type = l2.node_type && l1.value = l2.value
       ->
         Leaf l1
     | PNode n1, PNode n2
-      when n1.node_type = n2.node_type
-           && n1.is_named = n2.is_named
-           && List.length n1.children = List.length n2.children ->
-        let children =
-          List.map2
-            (fun c1 c2 ->
-              if c1.field_name = c2.field_name then
-                { field_name = c1.field_name; child = go c1.child c2.child }
-              else
-                { field_name = None; child = Hole (hole_for c1.child c2.child) })
-            n1.children n2.children
+      when n1.node_type = n2.node_type && n1.is_named = n2.is_named -> (
+        let same_count =
+          List.length n1.children = List.length n2.children
         in
+        match seq_brackets p1 with
+        | Some delims
+          when allow_ellipsis
+               && ((not same_count) || node_has_ellipsis p1
+                  || node_has_ellipsis p2) ->
+            (* Piece C: a delimited list whose arity differs across the two
+               sides (or that one side already generalised) becomes [(...)] —
+               the interior is a sequence wildcard, the brackets are kept as the
+               anchor. This is what lets functions/calls of different arity merge
+               into one cluster instead of fragmenting per-arity. *)
+            ellipsis_list_of n1.node_type n1.is_named delims
+        | _ when same_count ->
+            let children =
+              List.map2
+                (fun c1 c2 ->
+                  if c1.field_name = c2.field_name then
+                    { field_name = c1.field_name; child = go c1.child c2.child }
+                  else
+                    {
+                      field_name = None;
+                      child = Hole (hole_for c1.child c2.child);
+                    })
+                n1.children n2.children
+            in
         (* Collapse-to-single-hole: if anti-unifying a node's children leaves it
            rendering as adjacent holes ([_H0_H1]) — two holes with no token
            between them — the fragment is unmatchable and the safety gate rejects
@@ -357,8 +554,26 @@ let mk_anti_unify hole_for =
            anchoring token). A single hole or a hole flanked by tokens is left
            alone, so single-child wrappers never collapse — preserving the
            before/after hole alignment that a re-keyed wrapper hole would break. *)
-        let node = PNode { n1 with children } in
-        if has_adjacent_holes node then Hole (hole_for p1 p2) else node
+            let node = PNode { n1 with children } in
+            (* Collapse to a single hole when the recursed node has no surviving
+               anchor: adjacent holes ([_H0_H1], unmatchable) or — with Piece C —
+               a node that contains an ellipsis yet has no concrete token
+               ([_H0(...)], "any call"). The ellipsis is kept only when a concrete
+               sibling anchors it ([unwrap(...)], [fun f(...)]); without one the
+               whole subtree folds, restoring the pre-ellipsis behaviour where a
+               varying nested call became a clean single hole. Restricted to
+               ellipsis-bearing nodes so non-ellipsis anti-unification is
+               byte-identical to before. *)
+            let multi_child =
+              match children with _ :: _ :: _ -> true | _ -> false
+            in
+            if
+              has_adjacent_holes node
+              || (multi_child && contains_ellipsis node
+                 && not (has_concrete node))
+            then Hole (hole_for p1 p2)
+            else node
+        | _ -> Hole (hole_for p1 p2))
     | _ -> Hole (hole_for p1 p2)
   in
   go
@@ -376,9 +591,15 @@ let make_hole_for () =
         h
 
 let anti_unify_edits (e1 : edit_pat) (e2 : edit_pat) : edit_pat =
-  let go = mk_anti_unify (make_hole_for ()) in
-  let before = go e1.before e2.before in
-  let after = go e1.after e2.after in
+  (* Ellipsis ([...]) is sound only on the match ([-]) side, where it is a
+     constraint. On the replace ([+]) side an [...] with no match-side source is
+     an orphan the engine cannot bind (an added, arity-varying list — e.g. a
+     useCallback dependency array); the empty-skeleton + residual path handles
+     that instead. Both calls share one [hole_for] so hole indices still align
+     across the two sides. *)
+  let hole_for = make_hole_for () in
+  let before = mk_anti_unify ~allow_ellipsis:true hole_for e1.before e2.before in
+  let after = mk_anti_unify ~allow_ellipsis:false hole_for e1.after e2.after in
   { before; after }
 
 (** Anti-unify two single [pat_node]s (used for one-sided candidate clustering
@@ -389,6 +610,7 @@ let anti_unify_pat (p1 : pat_node) (p2 : pat_node) : pat_node =
 
 let rec max_hole_node = function
   | Hole h -> h
+  | Ellipsis -> -1
   | Leaf _ -> -1
   | PNode { children; _ } ->
       List.fold_left (fun m c -> max m (max_hole_node c.child)) (-1) children
@@ -397,6 +619,7 @@ let max_hole ep = max (max_hole_node ep.before) (max_hole_node ep.after)
 
 let rec shift_holes_node offset = function
   | Hole h -> Hole (h + offset)
+  | Ellipsis -> Ellipsis
   | Leaf l -> Leaf l
   | PNode n ->
       PNode
@@ -425,6 +648,7 @@ let hole_frac ep =
 
 let rec collect_leaf_values acc = function
   | Hole _ -> acc
+  | Ellipsis -> acc
   | Leaf { value; _ } -> value :: acc
   | PNode { children; _ } ->
       List.fold_left (fun a c -> collect_leaf_values a c.child) acc children
@@ -442,6 +666,7 @@ let rec collect_leaf_values acc = function
 let rec same_shape_mod_holes p1 p2 =
   match (p1, p2) with
   | Hole _, Hole _ -> true
+  | Ellipsis, Ellipsis -> true
   | Leaf l1, Leaf l2 -> l1.node_type = l2.node_type
   | PNode n1, PNode n2 ->
       n1.node_type = n2.node_type
@@ -470,8 +695,15 @@ let has_concrete_edit (ep : edit_pat) : bool =
     bound in match"), so emitting it would produce an unapplicable rule. This
     usually means the cluster's anti-unification dropped some context that
     carried the binding source — fall back to the coherent dendrogram parent
-    instead. See design doc §4.3. *)
+    instead. See design doc §4.3.
+
+    The same applies to the sequence wildcard [...] (Piece C): an [...] on the
+    [+] side with no [...] on the [-] side is an orphan the engine cannot bind
+    (an added, arity-varying list — e.g. a useCallback dependency array — which
+    the empty-skeleton + residual path handles instead). A [...] on both sides
+    is a preserved list (e.g. [fun f(...)] in match and replace) and is fine. *)
 let no_orphan_after_holes (ep : edit_pat) : bool =
   let before_holes = collect_holes [] ep.before in
   let after_holes = collect_holes [] ep.after in
   List.for_all (fun h -> List.mem h before_holes) after_holes
+  && ((not (contains_ellipsis ep.after)) || contains_ellipsis ep.before)

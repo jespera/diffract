@@ -14,5 +14,6 @@ let () =
       ("Tree_sitter_cursor", Test_tree_sitter_cursor.tests);
       ("Tokenize", Test_tokenize.tests);
       ("Matcher", Test_matcher.tests);
+      ("Cs_pattern", Test_cs_pattern.tests);
       ("Change summary", Test_change_summary.tests);
     ]
