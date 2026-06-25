@@ -493,6 +493,59 @@ let ellipsis_list_of node_type is_named (o, c) =
       template = [ Lit (String.make 1 o); Slot 0; Lit (String.make 1 c) ];
     }
 
+(* ── Field-aware alignment — Piece B increment 2 ───────────────────── *)
+
+let node_type_of = function
+  | Hole _ -> "_hole"
+  | Ellipsis -> "_ellipsis"
+  | Leaf { node_type; _ } | PNode { node_type; _ } -> node_type
+
+(** Longest common subsequence of two child lists, matching on field name when
+    both sides have one (rare — most grammars, e.g. tree-sitter-kotlin, assign
+    almost none) else on node type. Returns the matched [(i, j)] index pairs in
+    order; unmatched children (a return type present on one side only) fall out
+    and are dropped by the caller. *)
+let lcs_align (a : pat_child array) (b : pat_child array) : (int * int) list =
+  let na = Array.length a and nb = Array.length b in
+  let matches c1 c2 =
+    match (c1.field_name, c2.field_name) with
+    | Some f1, Some f2 -> f1 = f2
+    | _ -> node_type_of c1.child = node_type_of c2.child
+  in
+  let dp = Array.make_matrix (na + 1) (nb + 1) 0 in
+  for i = na - 1 downto 0 do
+    for j = nb - 1 downto 0 do
+      dp.(i).(j) <-
+        (if matches a.(i) b.(j) then 1 + dp.(i + 1).(j + 1)
+         else max dp.(i + 1).(j) dp.(i).(j + 1))
+    done
+  done;
+  let rec bt i j acc =
+    if i >= na || j >= nb then List.rev acc
+    else if matches a.(i) b.(j) then bt (i + 1) (j + 1) ((i, j) :: acc)
+    else if dp.(i + 1).(j) >= dp.(i).(j + 1) then bt (i + 1) j acc
+    else bt i (j + 1) acc
+  in
+  bt 0 0 []
+
+(** Rebuild a template after dropping some slots: [newidx_of j] gives the kept
+    child's new index, or [None] if dropped. A dropped slot takes one adjacent
+    separator [Lit] with it (preceding if present — the [": "] of a return type
+    — else following, for a leading modifier list). *)
+let remap_template template newidx_of =
+  let rec go acc = function
+    | [] -> List.rev acc
+    | Slot j :: rest -> (
+        match newidx_of j with
+        | Some nj -> go (Slot nj :: acc) rest
+        | None -> (
+            match acc with
+            | Lit _ :: acc' -> go acc' rest
+            | _ -> ( match rest with Lit _ :: r -> go acc r | r -> go acc r)))
+    | (Lit _ as l) :: rest -> go (l :: acc) rest
+  in
+  go [] template
+
 (* ── Anti-unification ────────────────────────────────────────────── *)
 
 (** Build a recursive anti-unifier parameterised on a [hole_for] function. When
@@ -573,8 +626,58 @@ let mk_anti_unify ?(allow_ellipsis = true) hole_for =
                  && not (has_concrete node))
             then Hole (hole_for p1 p2)
             else node
-        | _ -> Hole (hole_for p1 p2))
+        | _ ->
+            (* Differing child count, not a bracketed list. If one side's
+               children FULLY embed in the other by node type (the pure
+               "optional child present on one side" case — return type,
+               modifiers, annotations), align and drop the extras instead of
+               collapsing to a bare hole. A genuine structural divergence (both
+               sides carry unique children) still collapses. *)
+            let a = Array.of_list n1.children in
+            let b = Array.of_list n2.children in
+            let pairs = lcs_align a b in
+            if
+              (* Not a bracketed list — those are ellipsis-or-collapse territory
+                 (dropping an argument would diverge from the other side). *)
+              seq_brackets p1 = None
+              && pairs <> []
+              && List.length pairs
+                 = min (Array.length a) (Array.length b)
+            then
+              field_align ~node_type:n1.node_type ~is_named:n1.is_named
+                ~template:n1.template a b pairs
+            else Hole (hole_for p1 p2))
     | _ -> Hole (hole_for p1 p2)
+  and field_align ~node_type ~is_named ~template a b pairs =
+    (* Align children by the LCS, recurse the matched ones, drop the unmatched
+       (one-sided optional) children, and rebuild the template — so declarations
+       of different signature shape merge into one cluster. *)
+    let merged_children =
+      List.map
+        (fun (i, j) ->
+          let c1 = a.(i) and c2 = b.(j) in
+          if c1.field_name = c2.field_name then
+            { field_name = c1.field_name; child = go c1.child c2.child }
+          else
+            { field_name = None; child = Hole (hole_for c1.child c2.child) })
+        pairs
+    in
+    let kept = List.map fst pairs in
+    let newidx_of j =
+      let rec find k = function
+        | [] -> None
+        | x :: _ when x = j -> Some k
+        | _ :: rest -> find (k + 1) rest
+      in
+      find 0 kept
+    in
+    PNode
+      {
+        node_type;
+        is_named;
+        children = merged_children;
+        template = remap_template template newidx_of;
+      }
   in
   go
 
@@ -599,7 +702,16 @@ let anti_unify_edits (e1 : edit_pat) (e2 : edit_pat) : edit_pat =
      across the two sides. *)
   let hole_for = make_hole_for () in
   let before = mk_anti_unify ~allow_ellipsis:true hole_for e1.before e2.before in
-  let after = mk_anti_unify ~allow_ellipsis:false hole_for e1.after e2.after in
+  (* The replace side may ellipsize only when the match side did — a preserved
+     list (e.g. function params, present on both sides) then gets matching
+     [(...)] and binds; an added, arity-varying list (e.g. a useCallback
+     dependency array, present only on the after side) does not ellipsize and
+     falls to the hole → empty-skeleton + residual path instead of becoming an
+     orphan [...]. *)
+  let after =
+    mk_anti_unify ~allow_ellipsis:(contains_ellipsis before) hole_for e1.after
+      e2.after
+  in
   { before; after }
 
 (** Anti-unify two single [pat_node]s (used for one-sided candidate clustering
