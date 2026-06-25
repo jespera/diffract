@@ -125,11 +125,83 @@ let field_render_round_trip () =
     (Printf.sprintf "round-trips to after (rule=%S)" r)
     asrc (String.trim out)
 
+(* ── Field-aware alignment (Piece B, increment 2) ─────────────────── *)
+
+(* Merge two block→expression-body change-pairs whose function signatures differ
+   only by return-type *presence*. Field-aware alignment should drop the
+   non-shared return-type field and merge into one field rule, rather than
+   collapsing the differing-child-count declaration to a bare hole. *)
+let field_align_return_type_presence () =
+  let ep1 =
+    {
+      Cs_types.before = decl "fun f(x: Int): Int { return x }";
+      after = decl "fun f(x: Int): Int = x";
+    }
+  in
+  let ep2 =
+    {
+      Cs_types.before = decl "fun g(y: Int) { return y }";
+      after = decl "fun g(y: Int) = y";
+    }
+  in
+  let r =
+    Cs_pattern.render_pattern_body_field (Cs_pattern.anti_unify_edits ep1 ep2)
+  in
+  (* merged (not collapsed to a bare hole), field mode, body is the edit, and
+     the return type is dropped (no `): Int` after the params). *)
+  Alcotest.(check bool) (Printf.sprintf "field rule — got %S" r) true
+    (contains ~sub:"match: field" r);
+  Alcotest.(check bool) "signature survived as context (fun _H)" true
+    (contains ~sub:"fun _H" r);
+  Alcotest.(check bool) "body is the edit" true
+    (contains ~sub:"- {" r && contains ~sub:"+ = " r);
+  Alcotest.(check bool) "return type dropped" false (contains ~sub:"): Int" r)
+
+(* The fun-exp shape: merge functions that differ in BOTH arity and return-type
+   presence into one field rule with `(...)` params and the return type dropped —
+   and confirm the merged rule actually applies (round-trip). *)
+let field_align_arity_and_return_type () =
+  let ep1 =
+    {
+      Cs_types.before = decl "fun f(x: Int): Int { return x }";
+      after = decl "fun f(x: Int): Int = x";
+    }
+  in
+  let ep2 =
+    {
+      Cs_types.before = decl "fun g() { return zero }";
+      after = decl "fun g() = zero";
+    }
+  in
+  let r =
+    Cs_pattern.render_pattern_body_field (Cs_pattern.anti_unify_edits ep1 ep2)
+  in
+  Alcotest.(check bool) (Printf.sprintf "field rule — got %S" r) true
+    (contains ~sub:"match: field" r);
+  Alcotest.(check bool) "params generalised to (...)" true
+    (contains ~sub:"(...)" r);
+  Alcotest.(check bool) "return type dropped" false (contains ~sub:"): Int" r);
+  (* round-trip: the merged rule converts a concrete site, preserving its own
+     params and return type (field mode ignores the latter). *)
+  let out =
+    Matcher.transform ~ctx ~language:"kotlin" ~pattern_text:r
+      ~source_text:"fun f(a: String, b: String): Foo { return bar }"
+  in
+  Alcotest.(check string)
+    (Printf.sprintf "round-trips (rule=%S)" r)
+    "fun f(a: String, b: String): Foo = bar" (String.trim out)
+
 let tests =
   [
     ( "differing param arity yields (...)",
       `Quick,
       differing_arity_yields_ellipsis );
+    ( "field-align: return-type presence variance",
+      `Quick,
+      field_align_return_type_presence );
+    ( "field-align: arity + return-type (fun-exp shape)",
+      `Quick,
+      field_align_arity_and_return_type );
     ( "same arity keeps per-element holes",
       `Quick,
       same_arity_keeps_holes_no_ellipsis );
