@@ -1,0 +1,14 @@
+# rule R1  support=6  language=kotlin
+@@
+match: field
+metavar _H0: single
+metavar _H1: single
+@@
+  fun _H1(...)
+- {
+-         return _H0
+-     }
++ = _H0
+# sites R1
+a.kt
+b.kt
