@@ -312,6 +312,57 @@ let compute_mapping ~before_source ~after_source before_root after_root =
 
 (** {1 Diff derivation} *)
 
+(** When two same-type nodes have pairwise-equal NAMED children yet differ, the
+    difference is only in unnamed tokens (a trailing comma, wrapping
+    delimiters). Rather than collapse the whole node to an opaque [Replaced],
+    align ALL children by structural equality so the unnamed difference surfaces
+    as [Added]/[Removed]. LCS over children ([Tree.equal]); matched children
+    become [Same], the rest [Added]/[Removed]. No [Changed] is produced (the
+    named children are already known equal), so no recursion into
+    {!derive_change} is needed.
+
+    Inspired by difftastic (https://github.com/Wilfred/difftastic), which frames
+    diffing as a shortest-path alignment of atoms across the two trees rather
+    than a coarse node-level match. We borrow the insight — align finely instead
+    of collapsing to [Replaced] — but apply it *locally* to refine this one
+    case, not as a wholesale replacement of the node mapping (difftastic itself
+    notes it scales poorly on files with many changes, which would bite at
+    summarize's corpus scale). *)
+let same_children_alignment ~before_source ~after_source (bn : Tree.src Tree.t)
+    (an : Tree.src Tree.t) : child_change list =
+  let ba = Array.of_list bn.Tree.children in
+  let aa = Array.of_list an.Tree.children in
+  let nb = Array.length ba and na = Array.length aa in
+  let eq i j =
+    Tree.equal before_source ba.(i).Tree.node after_source aa.(j).Tree.node
+  in
+  let dp = Array.make_matrix (nb + 1) (na + 1) 0 in
+  for i = nb - 1 downto 0 do
+    for j = na - 1 downto 0 do
+      dp.(i).(j) <-
+        (if eq i j then 1 + dp.(i + 1).(j + 1)
+         else max dp.(i + 1).(j) dp.(i).(j + 1))
+    done
+  done;
+  let out = ref [] in
+  let i = ref 0 and j = ref 0 in
+  while !i < nb || !j < na do
+    if !i < nb && !j < na && eq !i !j then begin
+      out := Same { node = ba.(!i).Tree.node } :: !out;
+      incr i;
+      incr j
+    end
+    else if !j >= na || (!i < nb && dp.(!i + 1).(!j) >= dp.(!i).(!j + 1)) then begin
+      out := Removed { node = ba.(!i).Tree.node } :: !out;
+      incr i
+    end
+    else begin
+      out := Added { node = aa.(!j).Tree.node } :: !out;
+      incr j
+    end
+  done;
+  List.rev !out
+
 (** Derive the structured diff for a matched pair of nodes. *)
 let rec derive_change mapping ~before_source ~after_source
     (before_n : Tree.src Tree.t) (after_n : Tree.src Tree.t) =
@@ -350,7 +401,21 @@ let rec derive_change mapping ~before_source ~after_source
                (fun b a -> Tree.equal before_source b after_source a)
                before_children after_children
         in
-        if pairwise_equal then Replaced else Unchanged
+        if pairwise_equal then (
+          (* Named children agree but the parents differ — the difference is
+             unnamed tokens only. Refine over all children so it surfaces as
+             Added/Removed instead of a coarse Replaced. Fall back to Replaced
+             if the finer alignment has no shared anchor or no difference. *)
+          let all_cc =
+            same_children_alignment ~before_source ~after_source before_n
+              after_n
+          in
+          if
+            List.exists (function Same _ -> true | _ -> false) all_cc
+            && List.exists (function Same _ -> false | _ -> true) all_cc
+          then Modified { child_changes = all_cc }
+          else Replaced)
+        else Unchanged
       else Modified { child_changes }
 
 (** Derive child_change list from the mapping. *)

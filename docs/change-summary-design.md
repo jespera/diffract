@@ -1696,21 +1696,37 @@ trailing comma") survives as a residual even when a rule already explains
 the semantic change. With `ignore_formatting` set (threaded from the CLI
 flag through `summarize` to `residual_diff`), the changed-region oracle
 (`changed_regions ~ignore_separators`) treats a bare `,`/`;` token as
-trivia: an added/removed separator child contributes no region, and — since
-tree-sitter surfaces a re-wrapped list as a coarse `Replaced` rather than a
-fine-grained added comma — a whole-node `Replaced` whose two sides are
-equal *modulo separators* (`equal_mod_sep`: same node types and child
-structure with bare separators dropped, leaves compared by text)
-contributes none either. The comparison is **structural, not
-token-stream** — the same reason the base filter uses the tree: `return\nx`
-vs `return x` differ in statement structure, so they are not equal and stay
-reported, and a genuinely structural change (an inserted brace block) is
-kept. It is residual-only (rules are untouched) and off by default, so the
+trivia: an added/removed separator child contributes no region. For this to
+suffice, the *diff itself* must surface such a change finely — see the
+`same_children_alignment` refinement below, which turns a re-wrapped list
+from a coarse whole-node `Replaced` into a `Modified` with an `Added` comma.
+It is residual-only (rules are untouched) and off by default, so the
 option-off path — and thus every golden fixture and the safety gate's hot
 path — is byte-identical. It does *not* attempt optional-brace or
 newline-reshape normalisation (those remain honest residuals). Tests
 (`residual_diff` directly): a trailing-comma reflow is dropped, a
 brace-insertion is kept.
+
+**Refining coarse `Replaced` nodes (`Tree_diff.same_children_alignment`),
+inspired by [difftastic](https://github.com/Wilfred/difftastic).** When two
+same-type nodes have pairwise-equal *named* children yet differ, the
+difference is only in *unnamed* tokens (a trailing comma, wrapping
+delimiters), which the named-child decomposition cannot express — so the
+node would otherwise collapse to an opaque `Replaced`. Instead the diff
+aligns *all* children by structural equality (an LCS over
+`Tree.equal`) and emits `Modified` with the unnamed difference as
+`Added`/`Removed`. Difftastic frames the whole diff as a shortest-path
+alignment of atoms across the two trees; this borrows that *insight* — align
+finely, don't collapse — but applies it *locally*, only to refine this one
+coarse case, rather than replacing GumTree wholesale (difftastic itself
+notes it "scales relatively poorly on files with a large number of changes",
+which would bite at summarize's corpus scale). The refinement is always-on
+and byte-neutral on the golden suite and the real corpora; its payoff is a
+more precise diff (which is what lets the separator skip above replace the
+former residual-level `equal_mod_sep` workaround). It does *not* address the
+deeper cases difftastic's atom-level matching would — value reparenting
+(`{ return x }` → `= x`, handled separately in the proposer) or
+different-node-type reflow (brace insertion) — those remain future work.
 
 **Section-delimiter safety: the column-0 role-indicator contract.** The
 parser treats any line beginning with `# ` at column 0 as a section
