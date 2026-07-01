@@ -83,6 +83,7 @@ val collect_one_sided_candidates :
     provided, is called once per [Modified] file just before parsing it. *)
 
 val residual_diff :
+  ?ignore_formatting:bool ->
   ctx:Context.t ->
   language:string ->
   file_path:string ->
@@ -101,6 +102,7 @@ val residual_diff :
 
 val summarize :
   ?progress:(stage:string -> idx:int -> total:int -> path:string -> unit) ->
+  ?ignore_formatting:bool ->
   ctx:Context.t ->
   changeset ->
   summary
@@ -110,7 +112,14 @@ val summarize :
     [progress], if provided, is called once per [Modified] file just before
     parsing. [stage] identifies which pass is running
     ([{"two-sided"; "one-sided"}]); [idx] is 1-based and [total] is the count of
-    [Modified] files. *)
+    [Modified] files.
+
+    [ignore_formatting] (default [false]): when set, the residual filter treats
+    trailing separators (commas, redundant semicolons) as trivia in addition to
+    whitespace, so reflow-only leftovers — re-indentation plus a trailing comma,
+    the shape a formatter like ktlint/prettier produces — are dropped from the
+    residuals rather than reported as unexplained changes. Structural changes
+    (e.g. an inserted brace block) are still kept. *)
 
 val format_summary : summary -> string
 (** [format_summary s] serialises [s] in the [.summary] format defined in §9 of
