@@ -1687,6 +1687,31 @@ which this project deliberately avoids. The durable fix is upstream
 grammar precision. Test: `ts_layout_residual_filtered` (a layout-only gap emits
 nothing; a mixed gap keeps only its real hunk).
 
+**`--ignore-formatting` (opt-in) extends the filter to trailing
+separators.** The default filter drops only what the parse tree cannot
+see — whitespace. But a formatter (ktlint/prettier/gofmt) also adds a
+**trailing separator** when it re-wraps a list (a trailing comma, a
+redundant semicolon), and that is a real node, so a reflow ("dedent +
+trailing comma") survives as a residual even when a rule already explains
+the semantic change. With `ignore_formatting` set (threaded from the CLI
+flag through `summarize` to `residual_diff`), the changed-region oracle
+(`changed_regions ~ignore_separators`) treats a bare `,`/`;` token as
+trivia: an added/removed separator child contributes no region, and — since
+tree-sitter surfaces a re-wrapped list as a coarse `Replaced` rather than a
+fine-grained added comma — a whole-node `Replaced` whose two sides are
+equal *modulo separators* (`equal_mod_sep`: same node types and child
+structure with bare separators dropped, leaves compared by text)
+contributes none either. The comparison is **structural, not
+token-stream** — the same reason the base filter uses the tree: `return\nx`
+vs `return x` differ in statement structure, so they are not equal and stay
+reported, and a genuinely structural change (an inserted brace block) is
+kept. It is residual-only (rules are untouched) and off by default, so the
+option-off path — and thus every golden fixture and the safety gate's hot
+path — is byte-identical. It does *not* attempt optional-brace or
+newline-reshape normalisation (those remain honest residuals). Tests
+(`residual_diff` directly): a trailing-comma reflow is dropped, a
+brace-insertion is kept.
+
 **Section-delimiter safety: the column-0 role-indicator contract.** The
 parser treats any line beginning with `# ` at column 0 as a section
 header. For this to be unambiguous, emitted rule bodies must never
