@@ -13,6 +13,6 @@ b.ts
 # residual
 --- a/d.ts
 +++ b/d.ts
-@@ ... @@
+@@ -1,1 +1,1 @@
 -const ok = foo(k, a);
 +const ok = qux(k);

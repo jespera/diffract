@@ -24,13 +24,13 @@ d.tsx
 # residual  rule=R1
 --- a/a.tsx
 +++ b/a.tsx
-@@ ... @@
+@@ -1,1 +1,1 @@
 -const x = useAppMemo(useFoo(), useCallback((m) => m.id, []));
 +const x = useAppMemo(useFoo(), useCallback((m) => m.id, [dep]));
 
 # residual  rule=R2
 --- a/c.tsx
 +++ b/c.tsx
-@@ ... @@
+@@ -1,1 +1,1 @@
 -const p = buildThing(cfg, []);
 +const p = buildThing(cfg, [dep]);

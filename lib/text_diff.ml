@@ -79,30 +79,45 @@ let generate_diff ?(context = 3) ?keep_hunk ~file_path ~original ~transformed ()
        DRemove advance the original; DAdd does not. Used to report each
        hunk's original position to [keep_hunk]. *)
     let orig_line_at = Array.make (n_ops + 1) 0 in
+    let trans_line_at = Array.make (n_ops + 1) 0 in
     for k = 0 to n_ops - 1 do
       orig_line_at.(k + 1) <-
         (orig_line_at.(k)
-        + match ops_arr.(k) with DKeep _ | DRemove _ -> 1 | DAdd _ -> 0)
+        + match ops_arr.(k) with DKeep _ | DRemove _ -> 1 | DAdd _ -> 0);
+      trans_line_at.(k + 1) <-
+        (trans_line_at.(k)
+        + match ops_arr.(k) with DKeep _ | DAdd _ -> 1 | DRemove _ -> 0)
     done;
     let emitted = ref false in
     List.iter
       (fun (start_op, hunk) ->
+        let orig_start = orig_line_at.(start_op) in
+        let trans_start = trans_line_at.(start_op) in
+        let orig_len =
+          Array.fold_left
+            (fun a op ->
+              match op with DKeep _ | DRemove _ -> a + 1 | DAdd _ -> a)
+            0 hunk
+        in
+        let trans_len =
+          Array.fold_left
+            (fun a op ->
+              match op with DKeep _ | DAdd _ -> a + 1 | DRemove _ -> a)
+            0 hunk
+        in
         let keep =
-          match keep_hunk with
-          | None -> true
-          | Some f ->
-              let orig_start = orig_line_at.(start_op) in
-              let orig_len =
-                Array.fold_left
-                  (fun a op ->
-                    match op with DKeep _ | DRemove _ -> a + 1 | DAdd _ -> a)
-                  0 hunk
-              in
-              f ~orig_start ~orig_len
+          match keep_hunk with None -> true | Some f -> f ~orig_start ~orig_len
         in
         if keep then begin
           emitted := true;
-          Buffer.add_string buf "@@ ... @@\n";
+          (* Standard unified-diff hunk header with real line numbers. A
+             zero-length side uses the position itself (git's [-0,0] / [-l,0]
+             convention); otherwise 1-based. Exact enough for [git apply] with
+             the surrounding context lines. *)
+          let l1 = if orig_len = 0 then orig_start else orig_start + 1 in
+          let l2 = if trans_len = 0 then trans_start else trans_start + 1 in
+          Buffer.add_string buf
+            (Printf.sprintf "@@ -%d,%d +%d,%d @@\n" l1 orig_len l2 trans_len);
           Array.iter
             (fun op ->
               match op with
