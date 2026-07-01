@@ -589,7 +589,7 @@ let run_diff before_path after_path language =
 (* ── summarize subcommand ──────────────────────────────────────────── *)
 
 let run_summarize before_dir after_dir language include_pattern exclude_patterns
-    verbose =
+    verbose ignore_formatting =
   let ctx = Diffract.Context.create () in
   let exclude_dirs =
     if exclude_patterns = [] then default_excludes else exclude_patterns
@@ -651,7 +651,8 @@ let run_summarize before_dir after_dir language include_pattern exclude_patterns
       in
       let summary =
         phase "summarize" (fun () ->
-            Diffract.Change_summary.summarize ?progress ~ctx changeset)
+            Diffract.Change_summary.summarize ?progress ~ignore_formatting ~ctx
+              changeset)
       in
       if verbose then
         Printf.eprintf "[summarize] %d rule(s)\n%!" (List.length summary.rules);
@@ -710,12 +711,21 @@ let summarize_cmd =
       & pos 1 (some string) None
       & info [] ~docv:"AFTER_DIR" ~doc:"Directory containing the after state.")
   in
+  let ignore_formatting =
+    let doc =
+      "Treat formatting as invisible: drop reflow-only residuals (re-indentation \
+       plus trailing separators, e.g. a trailing comma a formatter adds) rather \
+       than reporting them as unexplained changes. Structural changes are still \
+       kept."
+    in
+    Arg.(value & flag & info [ "ignore-formatting" ] ~doc)
+  in
   Cmd.v
     (Cmd.info "summarize" ~doc)
     Term.(
       ret
         (const run_summarize $ before_dir $ after_dir $ language
-       $ include_pattern $ exclude_patterns $ verbose_flag))
+       $ include_pattern $ exclude_patterns $ verbose_flag $ ignore_formatting))
 
 let diff_cmd =
   let doc = "Show AST-level changes between two versions of a file." in

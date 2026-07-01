@@ -9,7 +9,8 @@ open Cs_types
 open Cs_evaluate
 open Cs_select
 
-let summarize ?progress ~ctx (cs : changeset) : summary =
+let summarize ?progress ?(ignore_formatting = false) ~ctx (cs : changeset) :
+    summary =
   let on_file_for stage =
     match progress with
     | None -> None
@@ -278,8 +279,8 @@ let summarize ?progress ~ctx (cs : changeset) : summary =
             then None
             else
               let d =
-                residual_diff ~ctx ~language ~file_path:path ~original:inter
-                  ~transformed:after_source ()
+                residual_diff ~ignore_formatting ~ctx ~language ~file_path:path
+                  ~original:inter ~transformed:after_source ()
               in
               if d = "" then None
               else

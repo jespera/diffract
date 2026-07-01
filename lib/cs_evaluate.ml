@@ -23,20 +23,62 @@ type site_info = {
           predate the rule — while rejecting any error the rule invents. *)
 }
 
+(** A bare separator token — a childless [,]/[;] node. Added or removed alone it
+    is pure formatting (a trailing comma, a redundant statement/enum semicolon):
+    a real element change carries its own content node, and this token only ever
+    sits between elements or before a closer. Used by [changed_regions] under
+    [ignore_separators] so formatting-only reflow (which tree-sitter surfaces as
+    an added/removed separator plus whitespace) leaves no changed region and is
+    filtered out of the residual. *)
+let is_separator_token src (n : Tree.src Tree.t) =
+  n.children = []
+  && match String.trim (Tree.text src n) with "," | ";" -> true | _ -> false
+
 (** Finest-grain changed regions of a diff, each carrying the after-side content
     that replaced it. The walk recurses through [Modified] chains so a region is
     the smallest changed node, not its enclosing scaffold; [Added] children
     become zero-width insertions at the before-position between their siblings.
-*)
-let changed_regions (d : Tree_diff.diff) : (int * int * string) list =
+
+    With [ignore_separators], an added/removed bare separator token contributes
+    no region — the formatting-blind mode (a trailing comma or redundant
+    semicolon is trivia). Sound: content changes still carry their own regions,
+    so only pure-separator reflow is suppressed. *)
+let changed_regions ?(ignore_separators = false) (d : Tree_diff.diff) :
+    (int * int * string) list =
   let acc = ref [] in
   let add s e txt = acc := (s, e, txt) :: !acc in
   let after_text (n : Tree.src Tree.t) = Tree.text d.after_source n in
+  (* Two subtrees equal modulo separators: same node types and child structure
+     with bare [,]/[;] children dropped on each side, leaves compared by token
+     text. This is the STRUCTURAL formatting-equality test — a whole-node
+     [Replaced] that is only a reflow (a param list re-wrapped with a trailing
+     comma) passes, while a newline-sensitive change like [return\nx] vs
+     [return x] does not (its statement structure differs), which pure
+     token-stream equality would wrongly accept. *)
+  let rec equal_mod_sep (b : Tree.src Tree.t) (a : Tree.src Tree.t) =
+    b.node_type = a.node_type
+    &&
+    match (b.children, a.children) with
+    | [], [] -> Tree.text d.before_source b = Tree.text d.after_source a
+    | _ ->
+        let keep src (c : Tree.src Tree.child) =
+          not (is_separator_token src c.node)
+        in
+        let bc = List.filter (keep d.before_source) b.children in
+        let ac = List.filter (keep d.after_source) a.children in
+        List.length bc = List.length ac
+        && List.for_all2
+             (fun (cb : Tree.src Tree.child) (ca : Tree.src Tree.child) ->
+               equal_mod_sep cb.node ca.node)
+             bc ac
+  in
   let rec go (b : Tree.src Tree.t) (a : Tree.src Tree.t)
       (ch : Tree_diff.node_change) =
     match ch with
     | Tree_diff.Unchanged -> ()
-    | Tree_diff.Replaced -> add b.start_byte b.end_byte (after_text a)
+    | Tree_diff.Replaced ->
+        if not (ignore_separators && equal_mod_sep b a) then
+          add b.start_byte b.end_byte (after_text a)
     | Tree_diff.Modified { child_changes } ->
         let cursor = ref b.start_byte in
         List.iter
@@ -47,9 +89,12 @@ let changed_regions (d : Tree_diff.diff) : (int * int * string) list =
                 go before after change;
                 cursor := before.end_byte
             | Tree_diff.Removed { node } ->
-                add node.start_byte node.end_byte "";
+                if not (ignore_separators && is_separator_token d.before_source node)
+                then add node.start_byte node.end_byte "";
                 cursor := node.end_byte
-            | Tree_diff.Added { node } -> add !cursor !cursor (after_text node))
+            | Tree_diff.Added { node } ->
+                if not (ignore_separators && is_separator_token d.after_source node)
+                then add !cursor !cursor (after_text node))
           child_changes
   in
   go d.before_root d.after_root d.root_change;
@@ -104,8 +149,14 @@ let string_mem ~sub s =
     whole-file gap check, the gate's tree-level re-diff). Returns [""] when the
     gap is entirely layout. Conservative in the keep direction: hunk and region
     line spans are each widened by one line before intersecting, and an
-    unparseable side falls back to the unfiltered diff. *)
-let residual_diff ~ctx ~language ~file_path ~original ~transformed () =
+    unparseable side falls back to the unfiltered diff.
+
+    With [ignore_formatting], the changed-region oracle also treats added/removed
+    bare separators (trailing commas, redundant semicolons) as trivia, so a hunk
+    that is only reflow — re-indentation plus a trailing separator — is dropped
+    too, not just pure-whitespace hunks. *)
+let residual_diff ?(ignore_formatting = false) ~ctx ~language ~file_path
+    ~original ~transformed () =
   if original = transformed then ""
   else
     let keep_hunk =
@@ -113,7 +164,9 @@ let residual_diff ~ctx ~language ~file_path ~original ~transformed () =
         let bt = Tree.parse ~ctx ~language original in
         let at = Tree.parse ~ctx ~language transformed in
         let d = Tree_diff.diff ~before:bt ~after:at in
-        let regions = changed_regions d in
+        let regions =
+          changed_regions ~ignore_separators:ignore_formatting d
+        in
         let line_starts =
           let acc = ref [ 0 ] in
           String.iteri

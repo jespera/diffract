@@ -512,4 +512,35 @@ let tests =
           Alcotest.(check bool)
             "site lines unannotated" true
             (String.split_on_char '\n' out |> List.exists (fun l -> l = "x.ts")));
+      (* [~ignore_formatting] drops a reflow-only residual — re-indentation plus
+         a trailing comma, which a formatter adds — but keeps a structural
+         change (an inserted brace block), so it does not over-suppress. Tested
+         on [residual_diff] directly: the golden harness runs with the option
+         off, and this pins both the drop and the soundness boundary. *)
+      Alcotest.test_case "ignore-formatting: trailing-comma reflow dropped"
+        `Quick (fun () ->
+          let ctx = Context.create () in
+          let original = "val x = g(a, b)" in
+          let transformed = "val x = g(\n    a,\n    b,\n)" in
+          let kept =
+            Change_summary.residual_diff ~ctx ~language:"kotlin"
+              ~file_path:"x.kt" ~original ~transformed ()
+          in
+          let dropped =
+            Change_summary.residual_diff ~ignore_formatting:true ~ctx
+              ~language:"kotlin" ~file_path:"x.kt" ~original ~transformed ()
+          in
+          Alcotest.(check bool) "kept without the flag" true (kept <> "");
+          Alcotest.(check bool) "dropped with the flag" true (dropped = ""));
+      Alcotest.test_case "ignore-formatting: structural change kept" `Quick
+        (fun () ->
+          let ctx = Context.create () in
+          let original = "fun f() { if (c) g() }" in
+          let transformed = "fun f() { if (c) { g() } }" in
+          let dropped =
+            Change_summary.residual_diff ~ignore_formatting:true ~ctx
+              ~language:"kotlin" ~file_path:"x.kt" ~original ~transformed ()
+          in
+          Alcotest.(check bool) "brace insertion still reported" true
+            (dropped <> ""));
     ]
