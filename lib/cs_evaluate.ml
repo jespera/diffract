@@ -248,6 +248,13 @@ type site_evaluation = {
           [box($H).get() ⤳ $H] over a bare removal [box($H).get()] that deletes
           and defers the rest to a residual). Always false for a
           decomposable-only site. *)
+  ev_overfire : bool;
+      (** the candidate fired here (produced edits) but at least one edit fell
+          outside every changed region — the placement leg failed. Distinct from
+          a plain no-match: it marks a context-stripped pattern matching code the
+          changeset did not touch. Declaration anchoring keys on this — a body
+          rule that over-fires is the one worth re-anchoring under its enclosing
+          declaration. *)
 }
 (** Per-site safety gate: the operational form of the safety property (design
     §2.3) — with [t'' = apply(rule, t)], [d(t,t'') + d(t'',t') = d(t,t')]. Two
@@ -285,6 +292,7 @@ let no_fire =
     ev_fires = 0;
     ev_resolved = [];
     ev_clean = false;
+    ev_overfire = false;
   }
 
 (** Evaluate one candidate pattern at one site — the §3.1 gate, keeping the
@@ -305,7 +313,7 @@ let site_eval ~ctx ~language ~pattern_text (si : site_info) : site_evaluation =
               si.si_regions)
           edits
       in
-      if not placement_ok then no_fire
+      if not placement_ok then { no_fire with ev_overfire = true }
       else begin
         (* Landing zones in t''-coordinates: each edit's span shifted by
            the cumulative length delta of the edits before it
@@ -497,6 +505,7 @@ let site_eval ~ctx ~language ~pattern_text (si : site_info) : site_evaluation =
               ev_resolved = resolved;
               ev_clean =
                 t'' = si.si_after || ws_collapse t'' = ws_collapse si.si_after;
+              ev_overfire = false;
             }
         end
       end

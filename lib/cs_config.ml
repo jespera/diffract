@@ -40,6 +40,13 @@ type options = {
       (** legacy change-density parameter for [collect_change_pairs_multi];
           retained for compatibility (multi-level emission no longer gates on
           it). *)
+  anchor_sample : int;
+      (** declaration anchoring: how many of a two-sided cluster's instances to
+          re-anchor under their enclosing declaration when proposing a
+          [match: field] candidate. Distinct anchor shapes (e.g. [fun]) dedupe,
+          and evaluation finds the full support of each from one representative,
+          so a small sample suffices; the cap bounds the re-parse cost on large
+          clusters. *)
 }
 
 (** The values the pipeline ships with — the behaviour every golden test pins. *)
@@ -53,4 +60,5 @@ let default =
     max_selectors_per_pair = 8;
     selector_depth_limit = 5;
     emission_threshold = 0.5;
+    anchor_sample = 12;
   }

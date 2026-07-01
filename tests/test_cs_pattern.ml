@@ -191,8 +191,104 @@ let field_align_arity_and_return_type () =
     (Printf.sprintf "round-trips (rule=%S)" r)
     "fun f(a: String, b: String): Foo = bar" (String.trim out)
 
+(* ── Declaration anchoring ────────────────────────────────────────── *)
+
+(* First node of a given type in [src], with the parse it came from (so spans
+   line up across [find]s on the same source). *)
+let find_node ty src =
+  let t = Tree.parse ~ctx ~language:"kotlin" src in
+  let rec go (n : Tree.src Tree.t) =
+    if n.Tree.node_type = ty then Some n
+    else
+      List.find_map (fun (c : Tree.src Tree.child) -> go c.Tree.node)
+        n.Tree.children
+  in
+  (go t.Tree.root, t)
+
+(* of_src the function_body node in [src]. *)
+let fbody src =
+  match fst (find_node "function_body" src) with
+  | Some n -> Cs_pattern.of_src src n
+  | None -> failwith "no function_body"
+
+(* The clean body cluster [{ return _H0 } ⤳ = _H0], built by anti-unifying two
+   single-return conversions. *)
+let body_cluster () =
+  Cs_pattern.anti_unify_edits
+    { Cs_types.before = fbody "fun a() { return p }"; after = fbody "fun a() = p" }
+    { Cs_types.before = fbody "fun b() { return q }"; after = fbody "fun b() = q" }
+
+let anchored_decl_round_trips () =
+  let body_ep = body_cluster () in
+  let src = "fun foo(x: Int): Int { return x }" in
+  let decl, t = find_node "function_declaration" src in
+  let body, _ = find_node "function_body" src in
+  match (decl, body) with
+  | Some decl, Some body ->
+      ignore t;
+      (match
+         Cs_pattern.build_anchored_decl src decl
+           ~body_start:body.Tree.start_byte ~body_end:body.Tree.end_byte body_ep
+       with
+      | None -> Alcotest.fail "expected an anchored field rule, got None"
+      | Some ep ->
+          let r = Cs_pattern.render_pattern_body_field ep in
+          Alcotest.(check bool) (Printf.sprintf "field mode — got %S" r) true
+            (contains ~sub:"match: field" r);
+          Alcotest.(check bool) "fun keyword anchor in context" true
+            (contains ~sub:"fun" r);
+          Alcotest.(check bool) "params generalised to (...)" true
+            (contains ~sub:"(...)" r);
+          Alcotest.(check bool) "return type dropped" false
+            (contains ~sub:"): Int" r);
+          (* applies to a different function, preserving its own return type
+             (field mode ignores the omitted one) and converting the body. *)
+          let out =
+            Matcher.transform ~ctx ~language:"kotlin" ~pattern_text:r
+              ~source_text:"fun bar(a: Int): Long { return a }"
+          in
+          Alcotest.(check string)
+            (Printf.sprintf "round-trips (rule=%S)" r)
+            "fun bar(a: Int): Long = a" (String.trim out))
+  | _ -> Alcotest.fail "could not locate declaration/body"
+
+let realign_orphan_holes_aligns () =
+  (* A misaligned body pair [{ ... _H0 } ⤳ { ... _H1 }] (the same value holed to
+     different indices on each side, as a ktlint-reflowed after produces) is
+     realigned so the after hole reuses the before's — no orphan. *)
+  let ep = { Cs_types.before = Cs_types.Hole 0; after = Cs_types.Hole 1 } in
+  let r = Cs_pattern.realign_orphan_holes ep in
+  Alcotest.(check string) "after hole renamed onto before" "_H0"
+    (render r.Cs_types.after);
+  Alcotest.(check bool) "no orphan after realign" true
+    (Cs_pattern.no_orphan_after_holes r)
+
+let anchored_decl_strips_comment () =
+  (* An incidental line comment in a body is stripped from the anchored rule. *)
+  let body_ep = body_cluster () in
+  let src = "fun foo() {\n    // incidental\n    return x\n}" in
+  let decl, _ = find_node "function_declaration" src in
+  let body, _ = find_node "function_body" src in
+  match (decl, body) with
+  | Some decl, Some body -> (
+      match
+        Cs_pattern.build_anchored_decl src decl ~body_start:body.Tree.start_byte
+          ~body_end:body.Tree.end_byte body_ep
+      with
+      | None -> Alcotest.fail "expected an anchored field rule"
+      | Some ep ->
+          let r = Cs_pattern.render_pattern_body_field ep in
+          Alcotest.(check bool)
+            (Printf.sprintf "comment stripped — got %S" r)
+            false
+            (contains ~sub:"//" r))
+  | _ -> Alcotest.fail "could not locate declaration/body"
+
 let tests =
   [
+    ("anchored decl round-trips", `Quick, anchored_decl_round_trips);
+    ("realign orphan holes", `Quick, realign_orphan_holes_aligns);
+    ("anchored decl strips comment", `Quick, anchored_decl_strips_comment);
     ( "differing param arity yields (...)",
       `Quick,
       differing_arity_yields_ellipsis );
