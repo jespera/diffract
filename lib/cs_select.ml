@@ -386,6 +386,76 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
             add_candidate ~language pattern_text)
           (safe_removal_groups ~ctx ~site_db c))
     os_clusters;
+  (* Declaration-anchored field candidates: re-anchor a two-sided cluster's
+     change under its enclosing declaration (cs_pattern.build_anchored_decl),
+     rendered as a [match: field] rule. A clean but context-stripped body rule
+     ([{ return _H } ⤳ = _H]) over-fires on every single-return block, so it
+     fails the placement gate on files where some such block was not converted
+     and fragments into signature-anchored pieces; its anchored form
+     ([fun _Hf(...) { return _H } ⤳ = _H]) fires only on declarations and is
+     safe everywhere. Added as ADDITIONAL candidates: selection keeps the bare
+     rule wherever it covers as much (the anchored form has more concrete nodes
+     and longer text, so it loses the tie-break) and prefers the anchored form
+     only over regions the bare rule's over-fire leaves uncovered.
+
+     Gate on over-fire: anchoring pays off exactly when the bare rule fires on
+     code the changeset did not touch. A rule already safe everywhere needs no
+     anchor, and anchoring it would add a field candidate — expensive to
+     evaluate — that only ever loses selection (this keeps corpora without the
+     pattern, e.g. gen3, byte-identical and fast). The check reuses the
+     [eval_at] cache the bare pattern's general-candidate evaluation populates,
+     so it costs no extra parses. *)
+  let cluster_overfires (c : cluster) =
+    (* Realign first: a body cluster whose two sides hole the same value at
+       different indices ([{ return _H0 } ⤳ = _H1], from a ktlint-reflowed
+       after) renders as an unapplicable orphan and could never be seen to fire.
+       The realigned form is what anchoring will carry, so test that. *)
+    let pattern_text =
+      render_pattern_body (realign_orphan_holes c.pattern)
+    in
+    let language = lang_of c in
+    language <> ""
+    && List.exists
+         (fun f -> (eval_at ~language ~pattern_text f).ev_overfire)
+         all_files
+  in
+  let anchored_count = ref 0 in
+  List.iter
+    (fun (c : cluster) ->
+      if not (cluster_overfires c) then ()
+      else
+      let seen = Hashtbl.create 4 in
+      c.instances
+      |> List.filteri (fun i _ -> i < Cs_config.default.anchor_sample)
+      |> List.iter (fun (inst : instance) ->
+          match
+            (try
+               let t =
+                 Tree.parse ~ctx ~language:inst.language inst.before_full_source
+               in
+               match
+                 find_enclosing_parent t.Tree.root inst.site_start inst.site_end
+               with
+               | None -> None
+               | Some parent ->
+                   build_anchored_decl inst.before_full_source parent
+                     ~body_start:inst.site_start ~body_end:inst.site_end
+                     c.pattern
+             with
+            | (Stack_overflow | Out_of_memory | Sys.Break) as e -> raise e
+            | _ -> None)
+          with
+          | None -> ()
+          | Some ep ->
+              let txt = render_pattern_body_field ep in
+              if not (Hashtbl.mem seen txt) then begin
+                Hashtbl.replace seen txt ();
+                incr anchored_count;
+                add_candidate ~language:inst.language txt
+              end))
+    base_two_sided;
+  if Cs_trace.on () then
+    Printf.eprintf "anchored field candidates: %d\n%!" !anchored_count;
   (* §3.2 anchored realisations are NOT proposed here — they are gated and
      evaluated after round 1, restricted to uncovered delta pools (below). *)
   let general_cands = List.rev !cand_order in

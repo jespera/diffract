@@ -819,3 +819,262 @@ let no_orphan_after_holes (ep : edit_pat) : bool =
   let after_holes = collect_holes [] ep.after in
   List.for_all (fun h -> List.mem h before_holes) after_holes
   && ((not (contains_ellipsis ep.after)) || contains_ellipsis ep.before)
+
+(* ── Declaration anchoring ─────────────────────────────────────────── *)
+
+(** The immediate parent of the node spanning exactly [(s, e)] in [root], or
+    [None] if no node has a kept (non-extra) child at that span. Descends into
+    the kept child strictly containing the span. Lets a body-level change pair
+    ([{ return _H } ⤳ = _H], a [function_body]) be re-anchored under its
+    enclosing declaration ([function_declaration]). *)
+
+(** Drop whole-line [//] comments from a node's template [Lit]s, recursively.
+    A comment that fell between two children is absorbed into a [Lit] by
+    {!build_template}; it then renders into the pattern body, where the matcher
+    treats it as skippable trivia anyway — but it is incidental to one instance
+    and pollutes the rule text. Stripping it leaves the rule matching the same
+    sites (a comment-free body pattern still matches comment-bearing bodies; the
+    comment is an [extra]). Line comments only; block comments are left intact. *)
+let strip_line_comments (ep : edit_pat) : edit_pat =
+  let strip_lit s =
+    String.split_on_char '\n' s
+    |> List.filter (fun line ->
+        let t = String.trim line in
+        not (String.length t >= 2 && t.[0] = '/' && t.[1] = '/'))
+    |> String.concat "\n"
+  in
+  let rec go = function
+    | (Hole _ | Ellipsis | Leaf _) as p -> p
+    | PNode n ->
+        PNode
+          {
+            n with
+            template =
+              List.map
+                (function Lit s -> Lit (strip_lit s) | Slot _ as sl -> sl)
+                n.template;
+            children =
+              List.map (fun c -> { c with child = go c.child }) n.children;
+          }
+  in
+  { before = go ep.before; after = go ep.after }
+
+let find_enclosing_parent (root : Tree.src Tree.t) (s : int) (e : int) :
+    Tree.src Tree.t option =
+  let rec go (n : Tree.src Tree.t) =
+    let kept =
+      List.filter
+        (fun (c : Tree.src Tree.child) -> not c.node.is_extra)
+        n.children
+    in
+    if
+      List.exists
+        (fun (c : Tree.src Tree.child) ->
+          c.node.start_byte = s && c.node.end_byte = e)
+        kept
+    then Some n
+    else
+      match
+        List.find_opt
+          (fun (c : Tree.src Tree.child) ->
+            c.node.start_byte <= s && e <= c.node.end_byte
+            && not (c.node.start_byte = s && c.node.end_byte = e))
+          kept
+      with
+      | Some c -> go c.node
+      | None -> None
+  in
+  go root
+
+(** Re-anchor a body-level change [body_ep] (e.g. [{ return _H } ⤳ = _H], a
+    [function_body] edit) under its enclosing declaration [parent], generalising
+    the signature so the resulting rule fires only on declarations of that shape
+    rather than on every single-return block anywhere in the file (the
+    over-firing that forces a context-stripped body rule to fragment into
+    signature-anchored pieces). The declaration's kept children are classified by
+    surface shape — language-general, no node-type allowlist:
+
+    - the body child ([(body_start, body_end)]) → [body_ep]'s two sides;
+    - a named leaf (the name) → a fresh hole;
+    - a bracket-delimited list (the parameters, [(...)]/[<...>]) → [Ellipsis];
+    - an anonymous keyword/operator leaf → kept concrete;
+    - any other child (modifiers, return type, annotations) → dropped — field
+      mode tolerates the omission when the rule is applied.
+
+    A dropped child takes one keyword-free adjacent separator [Lit] with it, but
+    never a [Lit] carrying an alphabetic keyword: Kotlin's [fun] is silent source
+    text in the [Lit] following [modifiers], and that is the anchor. The result
+    is rendered as a [match: field] rule by {!render_pattern_body_field}.
+
+    Returns [None] unless the span is a direct child of [parent], the result is a
+    coherent edit, and a concrete keyword survives in the signature — the latter
+    is what keeps anchoring to genuine declarations ([fun]/[def]/[val]) rather
+    than to bracket scaffolding like a class body. *)
+
+(** Rename the after side's orphan holes onto the before side's, pairing them in
+    first-appearance order. A body change pair anti-unifies its two sides
+    independently, so when the after-side value is rendered differently from the
+    before-side one — a [{ return f(a,b,c) } ⤳ = f(a, b, c,)] where ktlint added
+    a trailing comma — the shared hole counter cannot recognise them as the same
+    value and assigns distinct indices ([{ return _H0 } ⤳ = _H1]). The after
+    hole is then unbound and the rule unapplicable. Pairing the leftover holes
+    positionally restores [{ return _H0 } ⤳ = _H0]; the reflow difference falls
+    out as a decomposable residual. Sound because the gate re-validates every
+    site: a wrong pairing produces a transform that does not reproduce the after
+    and is shed. No-op unless the orphan counts match on both sides. *)
+let realign_orphan_holes (ep : edit_pat) : edit_pat =
+  let order p = List.rev (collect_holes [] p) in
+  let bh = order ep.before and ah = order ep.after in
+  let before_only = List.filter (fun h -> not (List.mem h ah)) bh in
+  let after_only = List.filter (fun h -> not (List.mem h bh)) ah in
+  if after_only <> [] && List.length before_only = List.length after_only then begin
+    let remap = List.combine after_only before_only in
+    let rec rn = function
+      | Hole h -> Hole (Option.value ~default:h (List.assoc_opt h remap))
+      | Ellipsis -> Ellipsis
+      | Leaf _ as l -> l
+      | PNode n ->
+          PNode
+            {
+              n with
+              children =
+                List.map (fun c -> { c with child = rn c.child }) n.children;
+            }
+    in
+    { ep with after = rn ep.after }
+  end
+  else ep
+
+let build_anchored_decl source (parent : Tree.src Tree.t) ~body_start ~body_end
+    (body_ep : edit_pat) : edit_pat option =
+  let kept =
+    List.filter
+      (fun (c : Tree.src Tree.child) -> not c.node.is_extra)
+      parent.children
+  in
+  let karr = Array.of_list kept in
+  let body_idx =
+    let r = ref (-1) in
+    Array.iteri
+      (fun i (c : Tree.src Tree.child) ->
+        if
+          !r < 0 && c.node.start_byte = body_start && c.node.end_byte = body_end
+        then r := i)
+      karr;
+    !r
+  in
+  if body_idx < 0 then None
+  else begin
+    let next = ref (max_hole body_ep + 1) in
+    let cls =
+      Array.mapi
+        (fun i (c : Tree.src Tree.child) ->
+          if i = body_idx then `Body
+          else
+            let cn = c.node in
+            if cn.is_named && cn.children = [] then (
+              let h = !next in
+              incr next;
+              `Keep (Hole h))
+            else
+              let p = of_src source cn in
+              match seq_brackets p with
+              | Some delims ->
+                  `Keep (ellipsis_list_of cn.node_type cn.is_named delims)
+              | None ->
+                  (* An anonymous keyword leaf — [fun]/[def]/[val], which
+                     tree-sitter exposes as a childless anonymous node — is the
+                     structural anchor, kept concrete. Anonymous punctuation
+                     ([:], [,]) is also childless but carries no keyword text;
+                     it is a separator for a dropped optional (a return type's
+                     [:]) and is dropped with it. Anything with children
+                     (modifiers, return type) is dropped. *)
+                  if cn.children = [] && has_concrete p then `Keep p else `Drop)
+        karr
+    in
+    let newidx = Array.make (Array.length karr) None in
+    let k = ref 0 in
+    Array.iteri
+      (fun i c ->
+        match c with
+        | `Drop -> ()
+        | _ ->
+            newidx.(i) <- Some !k;
+            incr k)
+      cls;
+    let build_children body_child =
+      let acc = ref [] in
+      Array.iteri
+        (fun i c ->
+          match c with
+          | `Drop -> ()
+          | `Body ->
+              acc :=
+                { field_name = karr.(i).field_name; child = body_child } :: !acc
+          | `Keep p ->
+              acc := { field_name = karr.(i).field_name; child = p } :: !acc)
+        cls;
+      List.rev !acc
+    in
+    let template =
+      let orig =
+        build_template ~source ~node:parent
+          ~keep:(fun (n : Tree.src Tree.t) -> not n.is_extra)
+          ()
+      in
+      let rec go acc = function
+        | [] -> List.rev acc
+        | Slot j :: rest -> (
+            match newidx.(j) with
+            | Some nj -> go (Slot nj :: acc) rest
+            | None -> (
+                match acc with
+                | Lit l :: acc' when not (has_keyword_text l) -> go acc' rest
+                | _ -> (
+                    match rest with
+                    | Lit l :: r when not (has_keyword_text l) -> go acc r
+                    | r -> go acc r)))
+        | (Lit _ as l) :: rest -> go (l :: acc) rest
+      in
+      (* Drop leading whitespace of the first Lit so the [modifiers]-dropped and
+         no-modifiers shapes (" fun" vs "fun") render — and dedupe — alike. *)
+      match go [] orig with
+      | Lit l :: rest ->
+          let j = ref 0 in
+          while !j < String.length l && (l.[!j] = ' ' || l.[!j] = '\t') do
+            incr j
+          done;
+          Lit (String.sub l !j (String.length l - !j)) :: rest
+      | t -> t
+    in
+    (* A surviving concrete signature anchor — the structural keyword
+       ([fun]/[def]/[val]), which tree-sitter exposes as an anonymous child
+       node (kept concrete above), or a keyword in a [Lit]. Without one the
+       "declaration" is just bracket scaffolding (a bare block, a class body)
+       and the rule would not be anchored to a real definition. *)
+    let signature_anchor =
+      Array.exists (function `Keep p -> has_concrete p | _ -> false) cls
+      || List.exists (function Lit l -> has_keyword_text l | _ -> false) template
+    in
+    if not signature_anchor then None
+    else
+      let mk body_child =
+        PNode
+          {
+            node_type = parent.node_type;
+            is_named = parent.is_named;
+            children = build_children body_child;
+            template;
+          }
+      in
+      let ep =
+        strip_line_comments
+          (realign_orphan_holes
+             { before = mk body_ep.before; after = mk body_ep.after })
+      in
+      if
+        has_concrete ep.before && has_concrete_edit ep
+        && no_orphan_after_holes ep
+      then Some ep
+      else None
+  end
