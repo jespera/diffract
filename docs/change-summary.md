@@ -47,6 +47,7 @@ once per language/extension set (e.g. `-l kotlin -i '*.kt'`, then
 | `-i`, `--include` | **Required.** Glob for files to scan (e.g. `'*.kt'`) |
 | `-e`, `--exclude` | Directory names to skip (repeatable; sensible defaults) |
 | `-v` | Progress and phase timing on stderr |
+| `--ignore-formatting` | Treat formatting as invisible in the residuals (see below) |
 
 ## Output format
 
@@ -94,6 +95,28 @@ src/b.kt
   spacing tweaks (`{ }` vs `{}`), and line splits are dropped — a file
   whose entire leftover is layout emits no residual at all. (The summary's
   reconstruction guarantee is modulo layout throughout.)
+
+### `--ignore-formatting`
+
+The layout filter above only drops changes the parse tree can't see —
+pure whitespace. A formatter (ktlint, prettier, gofmt) does more than
+re-indent, though: when it re-wraps a list it adds a **trailing separator**
+(a trailing comma, a redundant semicolon), and that *is* a real node, so
+the reflow survives as a noisy residual even when a rule already explains
+the semantic change. `--ignore-formatting` extends the filter to treat
+those trailing separators as trivia too: a residual hunk that is only
+re-indentation plus a trailing separator is dropped, so the residuals show
+just what changed *semantically*.
+
+It is deliberately conservative and sound: it drops a whole-node
+replacement only when its two sides are equal **modulo separators** as
+*trees* (not as text), so a newline-sensitive change like `return\nx` vs
+`return x` — which differs in statement structure — is still reported, and
+a genuinely structural change such as an inserted brace block
+(`if (c) g()` → `if (c) { g() }`) is kept. It affects the residuals only;
+the rules are unchanged. Off by default. Useful when the after-state was
+run through a formatter and you want the residuals to reflect intent rather
+than reformatting.
 
 ## Worked examples
 
