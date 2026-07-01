@@ -69,7 +69,7 @@ src/b.kt
 # residual  rule=R1                              ← what R1 leaves at one site
 --- a/src/a.kt
 +++ b/src/a.kt
-@@ ... @@
+@@ -12,3 +12,2 @@
 -...
 +...
 
@@ -184,7 +184,7 @@ c.ts
 # residual  rule=R1
 --- a/a.ts
 +++ b/a.ts
-@@ ... @@
+@@ -1,1 +1,1 @@
 -const ok = bar(x + 1);
 +const ok = bar(x);
 ```
@@ -223,7 +223,7 @@ c.ts
 # residual
 --- a/a.ts
 +++ b/a.ts
-@@ ... @@
+@@ -1,1 +1,1 @@
 -const r = box(old).get();
 +const r = new1;
 ```

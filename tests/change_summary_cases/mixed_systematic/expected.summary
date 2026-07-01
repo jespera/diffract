@@ -20,6 +20,6 @@ session.ts
 # residual  rule=R1
 --- a/rates.ts
 +++ b/rates.ts
-@@ ... @@
+@@ -11,1 +11,1 @@
 -    throw new Error("rate must be non-negative");
 +    throw new Error("negative rate not allowed");

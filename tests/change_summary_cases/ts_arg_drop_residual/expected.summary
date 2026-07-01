@@ -14,6 +14,6 @@ c.ts
 # residual  rule=R1
 --- a/a.ts
 +++ b/a.ts
-@@ ... @@
+@@ -1,1 +1,1 @@
 -const ok = bar(x + 1);
 +const ok = bar(x);

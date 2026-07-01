@@ -214,7 +214,7 @@ users.ts
 # residual  rule=R1
 --- a/items.ts
 +++ b/items.ts
-@@ ... @@
+@@ -2,1 +2,1 @@
 -  const ttl = 30;
 +  const ttl = 60;
 ```

@@ -23,7 +23,7 @@ c.kt
 # residual  rule=R1,R2
 --- a/c.kt
 +++ b/c.kt
-@@ ... @@
+@@ -5,1 +4,0 @@
 -import com.example.app.appUserIdJsonCodec
-@@ ... @@
+@@ -46,1 +44,0 @@
 -        userCodec = appUserIdJsonCodec,

@@ -241,20 +241,22 @@ let summarize ?progress ?(ignore_formatting = false) ~ctx (cs : changeset) :
     in
     let file_op_diff ~added path content =
       let buf = Buffer.create (String.length content + 64) in
-      if added then begin
-        Buffer.add_string buf "--- /dev/null\n";
-        Buffer.add_string buf (Printf.sprintf "+++ b/%s\n" path)
-      end
-      else begin
-        Buffer.add_string buf (Printf.sprintf "--- a/%s\n" path);
-        Buffer.add_string buf "+++ /dev/null\n"
-      end;
-      Buffer.add_string buf "@@ ... @@\n";
       let lines =
         match List.rev (String.split_on_char '\n' content) with
         | "" :: rest -> List.rev rest
         | l -> List.rev l
       in
+      let n = List.length lines in
+      if added then begin
+        Buffer.add_string buf "--- /dev/null\n";
+        Buffer.add_string buf (Printf.sprintf "+++ b/%s\n" path);
+        Buffer.add_string buf (Printf.sprintf "@@ -0,0 +1,%d @@\n" n)
+      end
+      else begin
+        Buffer.add_string buf (Printf.sprintf "--- a/%s\n" path);
+        Buffer.add_string buf "+++ /dev/null\n";
+        Buffer.add_string buf (Printf.sprintf "@@ -1,%d +0,0 @@\n" n)
+      end;
       List.iter
         (fun line ->
           Buffer.add_char buf (if added then '+' else '-');
