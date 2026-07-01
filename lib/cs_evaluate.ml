@@ -48,37 +48,11 @@ let changed_regions ?(ignore_separators = false) (d : Tree_diff.diff) :
   let acc = ref [] in
   let add s e txt = acc := (s, e, txt) :: !acc in
   let after_text (n : Tree.src Tree.t) = Tree.text d.after_source n in
-  (* Two subtrees equal modulo separators: same node types and child structure
-     with bare [,]/[;] children dropped on each side, leaves compared by token
-     text. This is the STRUCTURAL formatting-equality test — a whole-node
-     [Replaced] that is only a reflow (a param list re-wrapped with a trailing
-     comma) passes, while a newline-sensitive change like [return\nx] vs
-     [return x] does not (its statement structure differs), which pure
-     token-stream equality would wrongly accept. *)
-  let rec equal_mod_sep (b : Tree.src Tree.t) (a : Tree.src Tree.t) =
-    b.node_type = a.node_type
-    &&
-    match (b.children, a.children) with
-    | [], [] -> Tree.text d.before_source b = Tree.text d.after_source a
-    | _ ->
-        let keep src (c : Tree.src Tree.child) =
-          not (is_separator_token src c.node)
-        in
-        let bc = List.filter (keep d.before_source) b.children in
-        let ac = List.filter (keep d.after_source) a.children in
-        List.length bc = List.length ac
-        && List.for_all2
-             (fun (cb : Tree.src Tree.child) (ca : Tree.src Tree.child) ->
-               equal_mod_sep cb.node ca.node)
-             bc ac
-  in
   let rec go (b : Tree.src Tree.t) (a : Tree.src Tree.t)
       (ch : Tree_diff.node_change) =
     match ch with
     | Tree_diff.Unchanged -> ()
-    | Tree_diff.Replaced ->
-        if not (ignore_separators && equal_mod_sep b a) then
-          add b.start_byte b.end_byte (after_text a)
+    | Tree_diff.Replaced -> add b.start_byte b.end_byte (after_text a)
     | Tree_diff.Modified { child_changes } ->
         let cursor = ref b.start_byte in
         List.iter
