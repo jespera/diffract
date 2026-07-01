@@ -473,7 +473,28 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
                        Hashtbl.replace seen txt ();
                        incr anchored_count;
                        add_candidate ~language txt;
-                       Hashtbl.replace field_cand_files (txt, language) files
+                       (* [add_candidate] dedupes by (txt, language), so a txt
+                          shared by two clusters is evaluated once. Its scope
+                          must therefore be the UNION of both clusters' fire
+                          files — a plain replace would drop the earlier
+                          cluster's sites to residuals. Merge and re-sort so the
+                          scope stays [all_files]-ordered. *)
+                       let prev =
+                         match
+                           Hashtbl.find_opt field_cand_files (txt, language)
+                         with
+                         | Some fs -> fs
+                         | None -> []
+                       in
+                       let merged =
+                         let seen_f = Hashtbl.create 16 in
+                         List.iter (fun f -> Hashtbl.replace seen_f f ()) prev;
+                         List.iter (fun f -> Hashtbl.replace seen_f f ()) files;
+                         List.filter
+                           (fun f -> Hashtbl.mem seen_f f)
+                           all_files
+                       in
+                       Hashtbl.replace field_cand_files (txt, language) merged
                      end)
          end)
        base_two_sided);
