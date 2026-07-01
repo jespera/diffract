@@ -405,55 +405,78 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
      pattern, e.g. gen3, byte-identical and fast). The check reuses the
      [eval_at] cache the bare pattern's general-candidate evaluation populates,
      so it costs no extra parses. *)
-  let cluster_overfires (c : cluster) =
-    (* Realign first: a body cluster whose two sides hole the same value at
-       different indices ([{ return _H0 } ⤳ = _H1], from a ktlint-reflowed
-       after) renders as an unapplicable orphan and could never be seen to fire.
-       The realigned form is what anchoring will carry, so test that. *)
-    let pattern_text =
-      render_pattern_body (realign_orphan_holes c.pattern)
-    in
-    let language = lang_of c in
-    language <> ""
-    && List.exists
-         (fun f -> (eval_at ~language ~pattern_text f).ev_overfire)
-         all_files
+  (* An anchored field candidate can only fire in files where its source
+     cluster's bare pattern already produces edits (safely or as an over-fire);
+     a file with no such block cannot host [fun _Hf(...) { ... }]. So scope each
+     field candidate's evaluation to that file set rather than the whole
+     changeset — field-mode matching is expensive, and evaluating every anchored
+     candidate against all N files is what makes the channel blow up on a large
+     corpus (measured on a ~4k-file real codebase). *)
+  let field_cand_files : (string * string, string list) Hashtbl.t =
+    Hashtbl.create 16
   in
   let anchored_count = ref 0 in
-  List.iter
-    (fun (c : cluster) ->
-      if not (cluster_overfires c) then ()
-      else
-      let seen = Hashtbl.create 4 in
-      c.instances
-      |> List.filteri (fun i _ -> i < Cs_config.default.anchor_sample)
-      |> List.iter (fun (inst : instance) ->
-          match
-            (try
-               let t =
-                 Tree.parse ~ctx ~language:inst.language inst.before_full_source
-               in
-               match
-                 find_enclosing_parent t.Tree.root inst.site_start inst.site_end
-               with
-               | None -> None
-               | Some parent ->
-                   build_anchored_decl inst.before_full_source parent
-                     ~body_start:inst.site_start ~body_end:inst.site_end
-                     c.pattern
-             with
-            | (Stack_overflow | Out_of_memory | Sys.Break) as e -> raise e
-            | _ -> None)
-          with
-          | None -> ()
-          | Some ep ->
-              let txt = render_pattern_body_field ep in
-              if not (Hashtbl.mem seen txt) then begin
-                Hashtbl.replace seen txt ();
-                incr anchored_count;
-                add_candidate ~language:inst.language txt
-              end))
-    base_two_sided;
+  (List.iter
+       (fun (c : cluster) ->
+         let language = lang_of c in
+         if language = "" then ()
+         else begin
+           (* Evaluate the cluster's (realigned — a misaligned body pair renders
+              as an unapplicable orphan) bare pattern once across all files:
+              record whether it OVER-FIRES (fires outside a changed region — the
+              symptom that a declaration anchor pays off) and the files where it
+              produces any edits (the only files the field rule can fire in).
+              These evals reuse the [eval_at] cache the general candidates warm. *)
+           let bare = render_pattern_body (realign_orphan_holes c.pattern) in
+           let overfires = ref false in
+           let fire_files = ref [] in
+           List.iter
+             (fun f ->
+               let e = eval_at ~language ~pattern_text:bare f in
+               if e.ev_overfire then overfires := true;
+               if e.ev_fires > 0 || e.ev_overfire then
+                 fire_files := f :: !fire_files)
+             all_files;
+           if not !overfires then ()
+           else
+             (* [all_files] is sorted; [fire_files] was prepended, so reverse it
+                back to sorted order — the field rule's site list then matches the
+                order every other candidate produces. *)
+             let files = List.rev !fire_files in
+             let seen = Hashtbl.create 4 in
+             c.instances
+             |> List.filteri (fun i _ -> i < Cs_config.default.anchor_sample)
+             |> List.iter (fun (inst : instance) ->
+                 match
+                   (try
+                      let t =
+                        Tree.parse ~ctx ~language:inst.language
+                          inst.before_full_source
+                      in
+                      match
+                        find_enclosing_parent t.Tree.root inst.site_start
+                          inst.site_end
+                      with
+                      | None -> None
+                      | Some parent ->
+                          build_anchored_decl inst.before_full_source parent
+                            ~body_start:inst.site_start ~body_end:inst.site_end
+                            c.pattern
+                    with
+                   | (Stack_overflow | Out_of_memory | Sys.Break) as e -> raise e
+                   | _ -> None)
+                 with
+                 | None -> ()
+                 | Some ep ->
+                     let txt = render_pattern_body_field ep in
+                     if not (Hashtbl.mem seen txt) then begin
+                       Hashtbl.replace seen txt ();
+                       incr anchored_count;
+                       add_candidate ~language txt;
+                       Hashtbl.replace field_cand_files (txt, language) files
+                     end)
+         end)
+       base_two_sided);
   if Cs_trace.on () then
     Printf.eprintf "anchored field candidates: %d\n%!" !anchored_count;
   (* §3.2 anchored realisations are NOT proposed here — they are gated and
@@ -481,6 +504,14 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
           | Some si -> string_mem ~sub:n si.si_before
           | None -> true)
     in
+    (* Anchored field candidates are scoped to the files their source cluster's
+       bare pattern touches (see the anchoring block); all other candidates see
+       the whole changeset. *)
+    let files =
+      match Hashtbl.find_opt field_cand_files (pattern_text, language) with
+      | Some fs -> fs
+      | None -> all_files
+    in
     let extension =
       List.filter_map
         (fun f ->
@@ -493,7 +524,7 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
             if (e.ev_exact || e.ev_decomposable) && e.ev_fires > 0 then
               Some (f, e)
             else None)
-        all_files
+        files
     in
     let support = List.fold_left (fun a (_, e) -> a + e.ev_fires) 0 extension in
     (* Anchored realisations of a pooled delta carry the pool's

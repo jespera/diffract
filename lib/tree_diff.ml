@@ -405,16 +405,30 @@ let rec derive_change mapping ~before_source ~after_source
           (* Named children agree but the parents differ — the difference is
              unnamed tokens only. Refine over all children so it surfaces as
              Added/Removed instead of a coarse Replaced. Fall back to Replaced
-             if the finer alignment has no shared anchor or no difference. *)
-          let all_cc =
-            same_children_alignment ~before_source ~after_source before_n
-              after_n
-          in
+             if the finer alignment has no shared anchor or no difference.
+
+             Cap the refinement's LCS (O(nb·na) time and matrix space) to nodes
+             with a bounded child count: real separator-only cases (param /
+             argument / small collection lists) are well under this, while a
+             huge generated/reformatted literal that happens to hit this case
+             would otherwise allocate a giant matrix and stall (observed on a
+             large real codebase). For an over-cap node we keep the coarse Replaced —
+             byte-identical to the pre-refinement behaviour there. *)
+          let refine_cap = 256 in
           if
-            List.exists (function Same _ -> true | _ -> false) all_cc
-            && List.exists (function Same _ -> false | _ -> true) all_cc
-          then Modified { child_changes = all_cc }
-          else Replaced)
+            List.length before_n.children > refine_cap
+            || List.length after_n.children > refine_cap
+          then Replaced
+          else
+            let all_cc =
+              same_children_alignment ~before_source ~after_source before_n
+                after_n
+            in
+            if
+              List.exists (function Same _ -> true | _ -> false) all_cc
+              && List.exists (function Same _ -> false | _ -> true) all_cc
+            then Modified { child_changes = all_cc }
+            else Replaced)
         else Unchanged
       else Modified { child_changes }
 
