@@ -82,10 +82,31 @@ files?
       leaf rule (compensated), then the DIRECT rule (echo compensates!),
       leaving the echo as survivor — hence ViewModelFactory claimed by
       the echo with no after= predecessors.
-- [ ] 1.3 Fix (design decision pending — see "fix options" below), with a
-      golden fixture pinning the behaviour.
-- [ ] 1.4 Gauntlet: `dune test`; gen3 ×3, fun-exp, drupal byte-compared;
-      androidx reviewed qualitatively.
+- [x] 1.3 Fix landed: Option A — `sort_for_application` in cs_select
+      assigns tier ids by match-side specificity (concrete-token count,
+      desc; support, then text, as tie-breaks) instead of support desc.
+      Behaviour pinned by the re-blessed goldens: kotlin_rename_fused_rescue
+      (fused rule now precedes the bare rename: 3 rules → 2, echo + 
+      support-1 fragment gone) and ts_arg_drop_tiered (tiered factoring →
+      two flat rules with disjoint sites); tsx_memo_tiered_deps still
+      exercises genuine tiering unchanged. docs/change-summary.md's
+      "Tiered rules" worked example rewritten accordingly.
+- [x] 1.4 Gauntlet: 498 tests green. gen3 ×3 and fun-exp semantically
+      IDENTICAL (same (pattern, support, sites) multisets and residual
+      bodies; only rule numbering/attributions moved). androidx:
+      32→29 rules, 40→33 residuals, 919→795 lines, after= 30→15,
+      runtime 43s→32s. The `_H0.arch.lifecycle._H1` echo family is GONE;
+      the lifecycle rule claims 46/47 files incl. ViewModelFactory (the
+      holdout is TestExtensions.kt, an honest composite residual — its
+      import block also gains @UiThread).
+
+**Phase 1 exit criteria: met.** Follow-up (small, optional): the
+minimal-claiming trial order (now specificity order) hands some pure-flip
+files from the concrete InstantTaskExecutorRule rule to the leaf rename
+(16→6 sites; leaf 3→14 across two same-text rules in different tiers) —
+E2's mirror image. If it grates, Option B with an explicit
+"prefer-specific" swap direction is the tool; measure first whether it
+matters outside this corpus.
 
 ### Phase 1 fix options (decide before 1.3)
 

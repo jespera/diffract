@@ -294,10 +294,13 @@ preserved. At `a.ts`, applying it would write `old` where the change wrote
 whole change is reported as a residual. The summary never asserts a rule
 did something it didn't. (Fixture: `ts_unwrap_rename_confound`.)
 
-### Tiered rules: factoring the change
+### Overlapping variants: the specific rule wins its sites
 
-When the leftover gaps are themselves systematic, they are re-clustered
-into second-tier rules (recursively, until nothing systematic remains):
+When one systematic change is a more elaborate variant of another, both
+are emitted as flat rules with disjoint sites — the more specific pattern
+applies first (rule ids are application order, assigned
+specificity-first), so it takes the sites it fully explains and the
+general rule keeps the rest:
 
 ```
 a.ts  before:  const r = f(x + 1, p);    after:  const r = g(x);
@@ -307,7 +310,19 @@ d.ts  before:  const r = f(y + 1, s);    after:  const r = g(y);
 ```
 
 ```
-# rule R1  support=4  language=typescript
+# rule R1  support=2  language=typescript
+@@
+match: strict
+metavar _H0: single
+metavar _H1: single
+@@
+- f(_H0 + 1, _H1)
++ g(_H0)
+# sites R1
+a.ts
+d.ts
+
+# rule R2  support=2  language=typescript
 @@
 match: strict
 metavar _H0: single
@@ -315,29 +330,24 @@ metavar _H1: single
 @@
 - f(_H0, _H1)
 + g(_H0)
-# sites R1
-a.ts
+# sites R2
 b.ts
 c.ts
-d.ts
-
-# rule R2  support=2  language=typescript  after=R1
-@@
-match: strict
-metavar _H0: single
-@@
-- (_H0 + 1)
-+ (_H0)
-# sites R2
-a.ts
-d.ts
 ```
 
-The primary rule covers all four files; the `+ 1`-dropping that two of them
-additionally did becomes its own rule, applied **after** R1 (its pattern
-matches the intermediate `g(x + 1)`). Each site's change factors as
-primary ∘ secondary ∘ residual, every tier individually safe — here with no
-residual at all. (Fixture: `ts_arg_drop_tiered`.)
+No residual, no ordering subtlety a reviewer has to track: each file's
+change is one rule. (Fixture: `ts_arg_drop_tiered`. Broad-rule-first
+ordering would instead have R2 fire everywhere and re-derive the `+ 1`
+handling as a second-tier rule against its own intermediate.)
+
+When the leftover gaps are systematic but **not** expressible as a flat
+rule on the before-state — the secondary change only makes sense against
+the intermediate an earlier rule produces — they re-cluster into
+second-tier rules (recursively, until nothing systematic remains). A
+tier-2 rule carries `after=`: its pattern matched the intermediate the
+listed rules produce, so rule-id order is application order, and each
+site's change factors as primary ∘ secondary ∘ residual, every tier
+individually safe. (Fixture: `tsx_memo_tiered_deps`.)
 
 ## How it works, briefly
 

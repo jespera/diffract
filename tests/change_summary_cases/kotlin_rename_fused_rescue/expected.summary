@@ -1,28 +1,20 @@
-# rule R1  support=4  language=kotlin
-@@
-match: strict
-@@
-- holder
-+ holders
-# sites R1
-a.kt
-b.kt
-
-# rule R2  support=1  language=kotlin
+# rule R1  support=3  language=kotlin
 @@
 match: strict
 @@
 - holder = null
 + holders = emptySet()
-# sites R2
+# sites R1
+a.kt
+b.kt
 c.kt
 
-# rule R3  support=2  language=kotlin  after=R1
+# rule R2  support=2  language=kotlin
 @@
 match: strict
 @@
-- holders = null
-+ holders = emptySet()
-# sites R3
+- holder
++ holders
+# sites R2
 a.kt
 b.kt

@@ -1,8 +1,8 @@
 (** Change-summary selection (design §3.3): one tier of propose → evaluate →
     select. [tier_rules] assembles candidates from every channel ({!Cs_propose},
     {!Cs_cluster}, {!Cs_fusion}), evaluates each against the changeset's sites
-    ({!Cs_evaluate} — the gate that defines a rule's meaning), and emits a greedy
-    weighted set-cover over the changed regions. *)
+    ({!Cs_evaluate} — the gate that defines a rule's meaning), and emits a
+    greedy weighted set-cover over the changed regions. *)
 
 open Cs_types
 open Cs_pattern
@@ -25,10 +25,11 @@ type scored_candidate = {
     per LHS (before-side) root node-type rather than one global tree.
     Anti-unification recurses on the before side, so two pairs can only merge
     coherently when their before-roots share a node-type; a before-root mismatch
-    collapses to a root hole the cut discards. The AFTER side may differ freely —
-    the shared hole binding reconciles it (the extraction case,
+    collapses to a root hole the cut discards. The AFTER side may differ freely
+    — the shared hole binding reconciles it (the extraction case,
     [box(foo()).get()⤳foo()] ∧ [box(42).get()⤳42] → [box(_H0).get()⤳_H0]) — so
-    we must NOT split on it. A single pre-grouped cluster skips the dendrogram. *)
+    we must NOT split on it. A single pre-grouped cluster skips the dendrogram.
+*)
 let propose_two_sided_clusters ~safe_instances (initial : cluster list) :
     cluster list =
   match initial with
@@ -59,7 +60,10 @@ let propose_two_sided_clusters ~safe_instances (initial : cluster list) :
       let order = ref [] in
       List.iter
         (fun c ->
-          let s = fst (root_sig c.pattern) (* LHS root node-type only *) in
+          let s =
+            fst (root_sig c.pattern)
+            (* LHS root node-type only *)
+          in
           match Hashtbl.find_opt tbl s with
           | Some l -> l := c :: !l
           | None ->
@@ -110,8 +114,89 @@ let arbitrate_fusion_inputs ~eval_at ~all_files
       end)
     scored
 
+(* ── Application order ────────────────────────────────────────────
+   The tier loop assigns ids in this list's order, and id order IS
+   application order (the contract shared by apply_claiming, the
+   residual pass, and the round-trip property). Order by SPECIFICITY —
+   concrete match-side tokens, descending — so a specific rule applies
+   before a broader one whose edits would consume its matches: at a
+   file needing both [import android.arch.lifecycle._H0 ⤳ import
+   androidx.lifecycle._H0] and the bare [- android + androidx] leaf
+   flip (for an arch.core import the specific rule does not cover),
+   broad-first flips [android] everywhere, kills the specific rule's
+   matches, and forces the next tier to re-derive its content as an
+   echo rule against the intermediate. Specific-first lets both fire.
+   Support breaks ties (bigger first), then pattern text for
+   determinism. *)
+
+(* Concrete tokens on the match side: word tokens ([A-Za-z0-9_]+) of
+   body lines that participate in matching (context and [-] lines, not
+   [+] replacements), excluding declared metavar names. Crude — token
+   count, not tree size — but monotone in how much concrete anchoring
+   the pattern brings to a match. *)
+let match_side_specificity pattern_text =
+  let lines = String.split_on_char '\n' pattern_text in
+  let metavars = Hashtbl.create 8 in
+  List.iter
+    (fun l ->
+      match String.split_on_char ' ' (String.trim l) with
+      | "metavar" :: name :: _ ->
+          let name =
+            match String.index_opt name ':' with
+            | Some i -> String.sub name 0 i
+            | None -> name
+          in
+          Hashtbl.replace metavars name ()
+      | _ -> ())
+    lines;
+  let is_word c =
+    (c >= 'a' && c <= 'z')
+    || (c >= 'A' && c <= 'Z')
+    || (c >= '0' && c <= '9')
+    || c = '_'
+  in
+  let count = ref 0 in
+  let ats = ref 0 in
+  List.iter
+    (fun l ->
+      if String.trim l = "@@" then incr ats
+      else if !ats >= 2 && !ats mod 2 = 0 then
+        if String.length l > 0 && l.[0] = '+' then ()
+        else begin
+          (* context or [-] line: count its concrete word tokens *)
+          let n = String.length l in
+          let i = ref (if n > 0 && l.[0] = '-' then 1 else 0) in
+          while !i < n do
+            if is_word l.[!i] then begin
+              let j = ref !i in
+              while !j < n && is_word l.[!j] do
+                incr j
+              done;
+              let w = String.sub l !i (!j - !i) in
+              if not (Hashtbl.mem metavars w) then incr count;
+              i := !j
+            end
+            else incr i
+          done
+        end)
+    lines;
+  !count
+
+let sort_for_application (rules : rule list) : rule list =
+  let scored =
+    List.map (fun r -> (match_side_specificity r.pattern_text, r)) rules
+  in
+  List.sort
+    (fun (sa, a) (sb, b) ->
+      if sa <> sb then compare sb sa
+      else if a.support <> b.support then compare b.support a.support
+      else compare a.pattern_text b.pattern_text)
+    scored
+  |> List.map snd
+
 (** One tier of the pipeline (§3.3): propose → evaluate → select over a
-    changeset, returning the selected rules sorted by support, unnumbered
+    changeset, returning the selected rules in application order
+    (specificity-descending — see [sort_for_application]), unnumbered
     ([id = ""], [after = []] — the M2 tier loop in [summarize] assigns both).
     Tier 1 runs this on the raw changeset; tier n+1 re-runs it on the
     (intermediate, after) pairs the earlier tiers leave unexplained (design §4.4
@@ -416,88 +501,86 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
     Hashtbl.create 16
   in
   let anchored_count = ref 0 in
-  (List.iter
-       (fun (c : cluster) ->
-         let language = lang_of c in
-         if language = "" then ()
-         else begin
-           (* Evaluate the cluster's (realigned — a misaligned body pair renders
+  List.iter
+    (fun (c : cluster) ->
+      let language = lang_of c in
+      if language = "" then ()
+      else begin
+        (* Evaluate the cluster's (realigned — a misaligned body pair renders
               as an unapplicable orphan) bare pattern once across all files:
               record whether it OVER-FIRES (fires outside a changed region — the
               symptom that a declaration anchor pays off) and the files where it
               produces any edits (the only files the field rule can fire in).
               These evals reuse the [eval_at] cache the general candidates warm. *)
-           let bare = render_pattern_body (realign_orphan_holes c.pattern) in
-           let overfires = ref false in
-           let fire_files = ref [] in
-           List.iter
-             (fun f ->
-               let e = eval_at ~language ~pattern_text:bare f in
-               if e.ev_overfire then overfires := true;
-               if e.ev_fires > 0 || e.ev_overfire then
-                 fire_files := f :: !fire_files)
-             all_files;
-           if not !overfires then ()
-           else
-             (* [all_files] is sorted; [fire_files] was prepended, so reverse it
+        let bare = render_pattern_body (realign_orphan_holes c.pattern) in
+        let overfires = ref false in
+        let fire_files = ref [] in
+        List.iter
+          (fun f ->
+            let e = eval_at ~language ~pattern_text:bare f in
+            if e.ev_overfire then overfires := true;
+            if e.ev_fires > 0 || e.ev_overfire then
+              fire_files := f :: !fire_files)
+          all_files;
+        if not !overfires then ()
+        else
+          (* [all_files] is sorted; [fire_files] was prepended, so reverse it
                 back to sorted order — the field rule's site list then matches the
                 order every other candidate produces. *)
-             let files = List.rev !fire_files in
-             let seen = Hashtbl.create 4 in
-             c.instances
-             |> List.filteri (fun i _ -> i < Cs_config.default.anchor_sample)
-             |> List.iter (fun (inst : instance) ->
-                 match
-                   (try
-                      let t =
-                        Tree.parse ~ctx ~language:inst.language
-                          inst.before_full_source
-                      in
-                      match
-                        find_enclosing_parent t.Tree.root inst.site_start
-                          inst.site_end
-                      with
-                      | None -> None
-                      | Some parent ->
-                          build_anchored_decl inst.before_full_source parent
-                            ~body_start:inst.site_start ~body_end:inst.site_end
-                            c.pattern
-                    with
-                   | (Stack_overflow | Out_of_memory | Sys.Break) as e -> raise e
-                   | _ -> None)
-                 with
-                 | None -> ()
-                 | Some ep ->
-                     let txt = render_pattern_body_field ep in
-                     if not (Hashtbl.mem seen txt) then begin
-                       Hashtbl.replace seen txt ();
-                       incr anchored_count;
-                       add_candidate ~language txt;
-                       (* [add_candidate] dedupes by (txt, language), so a txt
+          let files = List.rev !fire_files in
+          let seen = Hashtbl.create 4 in
+          c.instances
+          |> List.filteri (fun i _ -> i < Cs_config.default.anchor_sample)
+          |> List.iter (fun (inst : instance) ->
+              match
+                try
+                  let t =
+                    Tree.parse ~ctx ~language:inst.language
+                      inst.before_full_source
+                  in
+                  match
+                    find_enclosing_parent t.Tree.root inst.site_start
+                      inst.site_end
+                  with
+                  | None -> None
+                  | Some parent ->
+                      build_anchored_decl inst.before_full_source parent
+                        ~body_start:inst.site_start ~body_end:inst.site_end
+                        c.pattern
+                with
+                | (Stack_overflow | Out_of_memory | Sys.Break) as e -> raise e
+                | _ -> None
+              with
+              | None -> ()
+              | Some ep ->
+                  let txt = render_pattern_body_field ep in
+                  if not (Hashtbl.mem seen txt) then begin
+                    Hashtbl.replace seen txt ();
+                    incr anchored_count;
+                    add_candidate ~language txt;
+                    (* [add_candidate] dedupes by (txt, language), so a txt
                           shared by two clusters is evaluated once. Its scope
                           must therefore be the UNION of both clusters' fire
                           files — a plain replace would drop the earlier
                           cluster's sites to residuals. Merge and re-sort so the
                           scope stays [all_files]-ordered. *)
-                       let prev =
-                         match
-                           Hashtbl.find_opt field_cand_files (txt, language)
-                         with
-                         | Some fs -> fs
-                         | None -> []
-                       in
-                       let merged =
-                         let seen_f = Hashtbl.create 16 in
-                         List.iter (fun f -> Hashtbl.replace seen_f f ()) prev;
-                         List.iter (fun f -> Hashtbl.replace seen_f f ()) files;
-                         List.filter
-                           (fun f -> Hashtbl.mem seen_f f)
-                           all_files
-                       in
-                       Hashtbl.replace field_cand_files (txt, language) merged
-                     end)
-         end)
-       base_two_sided);
+                    let prev =
+                      match
+                        Hashtbl.find_opt field_cand_files (txt, language)
+                      with
+                      | Some fs -> fs
+                      | None -> []
+                    in
+                    let merged =
+                      let seen_f = Hashtbl.create 16 in
+                      List.iter (fun f -> Hashtbl.replace seen_f f ()) prev;
+                      List.iter (fun f -> Hashtbl.replace seen_f f ()) files;
+                      List.filter (fun f -> Hashtbl.mem seen_f f) all_files
+                    in
+                    Hashtbl.replace field_cand_files (txt, language) merged
+                  end)
+      end)
+    base_two_sided;
   if Cs_trace.on () then
     Printf.eprintf "anchored field candidates: %d\n%!" !anchored_count;
   (* §3.2 anchored realisations are NOT proposed here — they are gated and
@@ -550,7 +633,10 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
     let support = List.fold_left (fun a (_, e) -> a + e.ev_fires) 0 extension in
     (* Anchored realisations of a pooled delta carry the pool's
            support; their own floor is 1 (§3.2 lattice descent). *)
-    let floor = if Hashtbl.mem exempt (pattern_text, language) then 1 else Cs_config.default.min_support in
+    let floor =
+      if Hashtbl.mem exempt (pattern_text, language) then 1
+      else Cs_config.default.min_support
+    in
     if support < floor then None
     else
       Some
@@ -651,7 +737,9 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
   (* Round 1: the general candidates. (A general candidate that textually
      coincides with an anchored realisation is exempt — marked above — and
      waits for round 2, exactly as before.) *)
-  select_round (List.filter (fun sc -> not (is_exempt sc)) evaluated_general) Cs_config.default.min_support;
+  select_round
+    (List.filter (fun sc -> not (is_exempt sc)) evaluated_general)
+    Cs_config.default.min_support;
   (* ── lazy descent ── Round 1 has marked the regions it covers. Now gate
      and evaluate anchored realisations, but ONLY for delta pools where some
      home site is still uncovered: an anchored rule whose every site is
@@ -735,4 +823,4 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
         sites = List.map fst sc.sc_extension;
         after = [];
       })
-  |> List.sort (fun a b -> compare b.support a.support)
+  |> sort_for_application
