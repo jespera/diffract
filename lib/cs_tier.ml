@@ -143,6 +143,68 @@ let summarize ?progress ?(ignore_formatting = false) ~ctx (cs : changeset) :
         else tier_loop (tier_idx + 1) next acc
   in
   let combined = tier_loop 1 cs [] in
+  (* ── Per-site minimal claiming set ────────────────────────────────
+     Selection's sites are evaluated rule-independently (§3.3) and are
+     therefore generous: a broad partial rule can claim a file whose
+     change a complete rule fully explains on its own; application then
+     routes the file through a manufactured intermediate that a later
+     tier must re-explain with echo rules duplicating the complete
+     rule's content (a bare leaf rename claiming import lines a
+     class-name-metavar import rule already rewrites outright).
+     Removing a rule at a file is SAFE exactly when the chain without
+     it reaches the byte-identical intermediate: the residual — and so
+     reconstruction — is unchanged by construction. Walk each file's
+     claiming chain in id order, dropping every rule whose removal
+     leaves the final intermediate identical; echo rules whose every
+     site drops this way die in the chain-effect pass below. A rule
+     that makes partial progress no other rule compensates (the
+     legitimate §4.4 multi-step factoring) changes the intermediate
+     when removed, so it always survives. *)
+  let combined =
+    let dropped : (string * string, unit) Hashtbl.t = Hashtbl.create 16 in
+    List.iter
+      (function
+        | Modified { path; language; before_source; _ } -> (
+            let claiming =
+              List.filter
+                (fun (r : rule) ->
+                  r.language = language && List.mem path r.sites)
+                combined
+            in
+            match claiming with
+            | [] | [ _ ] -> ()
+            | _ ->
+                (* Invariant: [apply_claiming !kept] equals [full] — every
+                   accepted drop preserved the intermediate. *)
+                let full = apply_claiming claiming path ~language before_source in
+                let kept = ref claiming in
+                List.iter
+                  (fun (r : rule) ->
+                    if List.length !kept > 1 then begin
+                      let without =
+                        List.filter (fun (x : rule) -> x != r) !kept
+                      in
+                      let inter =
+                        apply_claiming without path ~language before_source
+                      in
+                      if inter = full then begin
+                        kept := without;
+                        Hashtbl.replace dropped (r.id, path) ()
+                      end
+                    end)
+                  claiming)
+        | Added _ | Deleted _ -> ())
+      cs.files;
+    if Hashtbl.length dropped = 0 then combined
+    else
+      List.map
+        (fun (r : rule) ->
+          let sites =
+            List.filter (fun f -> not (Hashtbl.mem dropped (r.id, f))) r.sites
+          in
+          { r with sites })
+        combined
+  in
   (* ── Chain-effect accounting (per-site) ──────────────────────────
      A rule's sites and support come from rule-independent evaluation
      (§3.3), but application composes sequentially in id order — an

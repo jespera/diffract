@@ -1,0 +1,21 @@
+# rule R1  support=2  language=kotlin
+@@
+match: strict
+@@
+- android
++ androidx
+# sites R1
+c.kt
+d.kt
+
+# rule R2  support=3  language=kotlin
+@@
+match: strict
+metavar _H0: single
+@@
+- import android.arch.lifecycle._H0
++ import androidx.lifecycle._H0
+# sites R2
+a.kt
+b.kt
+e.kt
