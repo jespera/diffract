@@ -62,15 +62,53 @@ intermediates the residuals repair.
 The bounded bug hunt: why does an `ev_exact` candidate lose 17 of its 47
 files?
 
-- [ ] 1.1 Trace the lifecycle candidate through one androidx tier-1 run
-      (CS_TRACE + targeted temp instrumentation): proposed? deduped?
-      exempt? file scope? extension size? selection round + marginal?
-- [ ] 1.2 Name the mechanism; write it down (memory + this file).
-- [ ] 1.3 Fix, with a small golden fixture pinning the behaviour
-      (mirror the kotlin_minimal_claiming recipe: needs a file keeping the
-      broad rule alive, a composite file, and a pure file).
+- [x] 1.1 Trace the lifecycle candidate through one androidx tier-1 run.
+      Result: the candidate is healthy at every suspected stage — a plain
+      general candidate (NOT exempt, NOT field-scoped, all-files),
+      extension = 46 files including ViewModelFactory.kt, support 75.
+      All the round-2/scoping suspects are exonerated.
+- [x] 1.2 Mechanism named — TWO interacting ORDER effects downstream of
+      selection:
+      (E1) Application order: tier ids are assigned by support desc, so
+      the broad leaf rule (`- android + androidx`, biggest extension)
+      applies FIRST. At composite files where it is genuinely needed
+      (an arch.core pure-flip import), it flips `android` everywhere and
+      consumes the direct rule's matches — those files then need the
+      tier-2 echo (`import _H0.arch.lifecycle._H1`, holed prefix
+      matching both raw and flipped states).
+      (E2) Minimal-claiming trial order (a581de8): at a PURE lifecycle
+      file, {direct} and {echo} are both minimal identity-preserving
+      claiming sets; the pass tries drops in id order, so it drops the
+      leaf rule (compensated), then the DIRECT rule (echo compensates!),
+      leaving the echo as survivor — hence ViewModelFactory claimed by
+      the echo with no after= predecessors.
+- [ ] 1.3 Fix (design decision pending — see "fix options" below), with a
+      golden fixture pinning the behaviour.
 - [ ] 1.4 Gauntlet: `dune test`; gen3 ×3, fun-exp, drupal byte-compared;
       androidx reviewed qualitatively.
+
+### Phase 1 fix options (decide before 1.3)
+
+- **(A) Application order by specificity**: assign tier ids so more
+  specific rules apply before broader ones (concrete-token count of the
+  match side, descending), instead of support-descending. Kills E1 at the
+  root: the direct rule fixes lifecycle lines before the leaf rule ever
+  runs; echoes never arise; E2 becomes moot at these files (no echo to
+  hand the file to). Reporting semantics unchanged (id order remains
+  application order — ids are just assigned differently). Risks: ordering
+  is corpus-global, so every multi-rule file's chain changes → golden
+  churn to review; needs a specificity measure on rendered patterns
+  (token count of `-` lines, metavars excluded) — crude but monotone.
+- **(B) Preference-aware minimal claiming**: keep id order, extend the
+  a581de8 pass with a swap step — after the drop pass, for each kept
+  later rule L and dropped earlier rule E (E.id < L.id), if
+  chain(kept − L + E) is identical, swap to keep E. Fixes E2 (pure files
+  return to the tier-1 rule) but NOT E1 (composite files still route
+  through leaf + echo, echoes survive at those sites).
+- Assessment: A is the root-cause fix and likely eliminates the echo
+  family entirely (Phase-1 exit criteria); B is a smaller, provably
+  reconstruction-preserving patch that fixes only the pure-file half.
+  A and B compose; A first, then measure whether B still has work to do.
 
 **Exit criteria**: one tier-1 rule claims the whole 47-file lifecycle
 family; R22/R21/R23/R24-shape duplicates gone or justified; no corpus
