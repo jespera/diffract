@@ -182,6 +182,59 @@ match(tag).with("A", () => 1).with("B", () => 2).exhaustive();
 See [Transform documentation](docs/patterns.md#transforms-semantic-patches) for
 partial-mode, field-mode, and sequence transforms.
 
+### Change Summaries (`summarize`)
+
+`summarize` runs the transform machinery in reverse: given a before/after pair
+of directory trees, it infers the semantic-patch rules behind the changeset.
+Instead of reading the same edit repeated across a large diff, a reviewer reads
+each rule once and then inspects only the **residuals** — per-file diffs of
+whatever no rule explains. For example, a changeset that converts Kotlin block
+bodies to expression bodies:
+
+```kotlin
+// before/a.kt                       // after/a.kt
+fun label(): String {                fun label(): String = "repo"
+    return "repo"
+}
+
+override fun count(): Int {          override fun count(): Int = items.size
+    return items.size
+}
+```
+
+```
+$ diffract summarize -l kotlin -i '*.kt' before/ after/
+# rule R1  support=6  language=kotlin
+@@
+match: field
+metavar _H0: single
+metavar _H1: single
+@@
+  fun _H1(...)
+- {
+-         return _H0
+-     }
++ = _H0
+# sites R1
+a.kt
+b.kt
+```
+
+One `match: field` rule covers every site even though the signatures differ —
+visibility modifiers, `override`, return types, parameter lists — because
+[field mode](docs/field-mode.md) aligns only the parts the pattern addresses.
+And the rules are *safe*: a rule claims a file only when applying it there is
+verified to reproduce part of that file's actual change, so look-alike sites
+that did something subtly different are reported as residuals instead of being
+claimed wrongly.
+
+On a real-world changeset this example is distilled from -- a mechanical
+refactor touching ~100 Kotlin files, ~2,700 changed diff lines -— `summarize`
+reduces the whole diff to two rules plus two small residuals.
+
+See [Change summaries](docs/change-summary.md) for the output format, more
+worked examples, and `--ignore-formatting`.
+
 ### Directory Scanning
 
 When the target is a directory, use `--include` to specify which files to scan:
