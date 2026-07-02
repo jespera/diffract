@@ -1,0 +1,10 @@
+# rule R1  support=2  language=kotlin
+@@
+match: strict
+metavar _H0: single
+@@
+- import android.arch.lifecycle._H0
++ import androidx.lifecycle._H0
+# sites R1
+a.kt
+b.kt

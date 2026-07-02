@@ -42,31 +42,45 @@ let build_template ~source ~(node : Tree.src Tree.t)
 
 let is_ws c = c = ' ' || c = '\t' || c = '\n' || c = '\r'
 
-(** True if any byte in the node's range that is not covered by a child is
-    non-whitespace. These are "silently-consumed delimiters" — bytes the grammar
-    embeds in the parent node's text but does not expose as children (e.g. the
-    surrounding quotes of a string literal in Kotlin/TS, the slashes of a regex
-    literal). Treat such nodes as leaves during [of_src]: anti-unification then
-    holes the whole node when its content varies, rather than holing inside the
-    delimiters and rendering a placeholder embedded inside a string literal —
-    which the pattern parser would misread as the literal characters of the
-    delimited token rather than as a metavariable. *)
+(** True if a byte at the node's EDGES (before its first child or after its
+    last) that is not covered by a child is non-whitespace. These are
+    "silently-consumed wrapping delimiters" — bytes the grammar embeds in the
+    parent node's text but does not expose as children, and that wrap the
+    node's content into one surface token (e.g. the surrounding quotes of a
+    string literal in Kotlin/TS, the slashes of a regex literal). Treat such
+    nodes as leaves during [of_src]: anti-unification then holes the whole
+    node when its content varies, rather than holing inside the delimiters
+    and rendering a placeholder embedded inside a string literal — which the
+    pattern parser would misread as the literal characters of the delimited
+    token rather than as a metavariable.
+
+    INTERIOR-only silent bytes do not count: they are separators *between*
+    real tokens (the hidden [.] of a Kotlin dotted [identifier], whose only
+    exposed children are the [simple_identifier] segments). Recursing into
+    such a node is safe — the separators survive in the template's [Lit]
+    segments, and a hole at a child renders as its own leaf ([import
+    android.arch.lifecycle._H0] lexes [_H0] as one identifier). Flattening
+    them instead makes the whole path an opaque leaf, which blocks
+    anti-unification from generalising across sites that vary only in one
+    segment (per-class import rules instead of one class-name-metavar rule). *)
 let has_silent_concrete_delimiters ~source ~(node : Tree.src Tree.t) : bool =
-  let found = ref false in
-  let cursor = ref node.start_byte in
-  let scan_gap upto =
-    for i = !cursor to upto - 1 do
+  let non_ws_in a b =
+    let found = ref false in
+    for i = a to b - 1 do
       if not (is_ws source.[i]) then found := true
     done;
-    cursor := upto
+    !found
   in
-  List.iter
-    (fun (c : _ Tree.child) ->
-      scan_gap c.node.start_byte;
-      cursor := c.node.end_byte)
-    node.children;
-  scan_gap node.end_byte;
-  !found
+  match node.children with
+  | [] -> false (* childless named nodes are already leaves in [of_src] *)
+  | (first : _ Tree.child) :: _ ->
+      let last =
+        List.fold_left
+          (fun (acc : _ Tree.child) c -> c)
+          first node.children
+      in
+      non_ws_in node.start_byte first.node.start_byte
+      || non_ws_in last.node.end_byte node.end_byte
 
 (** Some grammars (TypeScript, JavaScript) expose string-literal quotes as
     unnamed child nodes rather than consuming them silently. These nodes have
