@@ -4,7 +4,7 @@
 
 open Cs_types
 
-let format_summary (s : summary) : string =
+let format_summary ?(sites = `Full) (s : summary) : string =
   let buf = Buffer.create 256 in
   List.iteri
     (fun i (r : rule) ->
@@ -31,20 +31,30 @@ let format_summary (s : summary) : string =
            | Some preds -> "  after=" ^ String.concat "," preds
            | None -> ""));
       Buffer.add_string buf r.pattern_text;
-      if r.sites <> [] then begin
-        Buffer.add_string buf (Printf.sprintf "# sites %s\n" r.id);
-        List.iter
-          (fun p ->
-            let annot =
-              if uniform <> None then ""
-              else
-                match after_of p with
-                | Some preds -> "  after=" ^ String.concat "," preds
-                | None -> ""
-            in
-            Buffer.add_string buf (p ^ annot ^ "\n"))
-          r.sites
-      end)
+      if r.sites <> [] then
+        begin match sites with
+        | `Count ->
+            (* Reading mode ([--format text-minimal]): the breadth signal
+               without the scroll. Mixed per-site [after=] annotations are
+               elided with the file lines; the uniform case still shows in
+               the rule header above. *)
+            Buffer.add_string buf
+              (Printf.sprintf "# sites %s  %d file(s)\n" r.id
+                 (List.length r.sites))
+        | `Full ->
+            Buffer.add_string buf (Printf.sprintf "# sites %s\n" r.id);
+            List.iter
+              (fun p ->
+                let annot =
+                  if uniform <> None then ""
+                  else
+                    match after_of p with
+                    | Some preds -> "  after=" ^ String.concat "," preds
+                    | None -> ""
+                in
+                Buffer.add_string buf (p ^ annot ^ "\n"))
+              r.sites
+        end)
     s.rules;
   List.iteri
     (fun i (res : residual) ->
@@ -57,6 +67,67 @@ let format_summary (s : summary) : string =
       Buffer.add_string buf res.res_diff)
     s.residuals;
   Buffer.contents buf
+
+(* ── JSON rendering ─────────────────────────────────────────────── *)
+
+(* Minimal RFC 8259 string escaping: the two mandatory escapes plus the
+   common control characters; remaining control bytes as \u00XX. Source
+   text is UTF-8 and JSON strings carry UTF-8 verbatim, so all other
+   bytes pass through unchanged. *)
+let json_escape s =
+  let buf = Buffer.create (String.length s + 8) in
+  String.iter
+    (fun c ->
+      match c with
+      | '"' -> Buffer.add_string buf "\\\""
+      | '\\' -> Buffer.add_string buf "\\\\"
+      | '\n' -> Buffer.add_string buf "\\n"
+      | '\r' -> Buffer.add_string buf "\\r"
+      | '\t' -> Buffer.add_string buf "\\t"
+      | c when Char.code c < 0x20 ->
+          Buffer.add_string buf (Printf.sprintf "\\u%04x" (Char.code c))
+      | c -> Buffer.add_char buf c)
+    s;
+  Buffer.contents buf
+
+let format_summary_json (s : summary) : string =
+  let str x = "\"" ^ json_escape x ^ "\"" in
+  let arr xs = "[" ^ String.concat "," xs ^ "]" in
+  let obj fields =
+    "{"
+    ^ String.concat "," (List.map (fun (k, v) -> str k ^ ":" ^ v) fields)
+    ^ "}"
+  in
+  let site_of (r : rule) p =
+    let base = [ ("file", str p) ] in
+    match List.assoc_opt p r.after with
+    | Some preds -> obj (base @ [ ("after", arr (List.map str preds)) ])
+    | None -> obj base
+  in
+  let rule_of (r : rule) =
+    obj
+      [
+        ("id", str r.id);
+        ("support", string_of_int r.support);
+        ("language", str r.language);
+        ("pattern", str r.pattern_text);
+        ("sites", arr (List.map (site_of r) r.sites));
+      ]
+  in
+  let residual_of (res : residual) =
+    obj
+      [
+        ("file", str res.res_file);
+        ("rules", arr (List.map str res.res_rules));
+        ("diff", str res.res_diff);
+      ]
+  in
+  obj
+    [
+      ("rules", arr (List.map rule_of s.rules));
+      ("residuals", arr (List.map residual_of s.residuals));
+    ]
+  ^ "\n"
 
 (* ── Filesystem loader ──────────────────────────────────────────── *)
 

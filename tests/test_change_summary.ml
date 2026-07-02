@@ -512,6 +512,67 @@ let tests =
           Alcotest.(check bool)
             "site lines unannotated" true
             (String.split_on_char '\n' out |> List.exists (fun l -> l = "x.ts")));
+      (* [~sites:`Count] ([--format text-minimal]): the site list collapses
+         to a one-line file count; per-site after= annotations go with it. *)
+      Alcotest.test_case "text-minimal: sites collapse to count" `Quick
+        (fun () ->
+          let r =
+            {
+              Change_summary.id = "R3";
+              pattern_text = "@@\nmatch: strict\n@@\n- a\n+ b\n";
+              support = 5;
+              language = "typescript";
+              sites = [ "x.ts"; "y.ts" ];
+              after = [ ("x.ts", [ "R1" ]); ("y.ts", [ "R2" ]) ];
+            }
+          in
+          let out =
+            Change_summary.format_summary ~sites:`Count
+              { Change_summary.rules = [ r ]; residuals = [] }
+          in
+          let lines = String.split_on_char '\n' out in
+          Alcotest.(check bool)
+            "count line present" true
+            (List.mem "# sites R3  2 file(s)" lines);
+          Alcotest.(check bool)
+            "no site file lines" true
+            (not
+               (List.exists (fun l -> l = "x.ts" || l = "x.ts  after=R1") lines)));
+      (* JSON projection: same data as the [.summary] text — rules with
+         per-site after attribution, residuals with their diff — as one
+         parseable object. Pins the exact serialisation, including string
+         escaping (newlines in patterns/diffs, a quote in a diff line). *)
+      Alcotest.test_case "json format: escaping and shape" `Quick (fun () ->
+          let r =
+            {
+              Change_summary.id = "R2";
+              pattern_text = "@@\nmatch: strict\n@@\n- a \"x\"\n+ b\n";
+              support = 2;
+              language = "kotlin";
+              sites = [ "x.kt"; "y.kt" ];
+              after = [ ("y.kt", [ "R1" ]) ];
+            }
+          in
+          let res =
+            {
+              Change_summary.res_file = "z.kt";
+              res_rules = [ "R2" ];
+              res_diff = "--- a/z.kt\n+++ b/z.kt\n@@ -1,1 +1,1 @@\n-\"q\\e\"\n";
+            }
+          in
+          let out =
+            Change_summary.format_summary_json
+              { Change_summary.rules = [ r ]; residuals = [ res ] }
+          in
+          Alcotest.(check string)
+            "exact json"
+            ("{\"rules\":[{\"id\":\"R2\",\"support\":2,\"language\":\"kotlin\","
+           ^ "\"pattern\":\"@@\\nmatch: strict\\n@@\\n- a \\\"x\\\"\\n+ b\\n\","
+           ^ "\"sites\":[{\"file\":\"x.kt\"},{\"file\":\"y.kt\",\"after\":[\"R1\"]}]}],"
+           ^ "\"residuals\":[{\"file\":\"z.kt\",\"rules\":[\"R2\"],"
+           ^ "\"diff\":\"--- a/z.kt\\n+++ b/z.kt\\n@@ -1,1 +1,1 \
+              @@\\n-\\\"q\\\\e\\\"\\n\"}]}\n")
+            out);
       (* [~ignore_formatting] drops a reflow-only residual — re-indentation plus
          a trailing comma, which a formatter adds — but keeps a structural
          change (an inserted brace block), so it does not over-suppress. Tested
@@ -541,6 +602,6 @@ let tests =
             Change_summary.residual_diff ~ignore_formatting:true ~ctx
               ~language:"kotlin" ~file_path:"x.kt" ~original ~transformed ()
           in
-          Alcotest.(check bool) "brace insertion still reported" true
-            (dropped <> ""));
+          Alcotest.(check bool)
+            "brace insertion still reported" true (dropped <> ""));
     ]

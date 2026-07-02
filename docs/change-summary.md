@@ -48,6 +48,7 @@ once per language/extension set (e.g. `-l kotlin -i '*.kt'`, then
 | `-e`, `--exclude` | Directory names to skip (repeatable; sensible defaults) |
 | `-v` | Progress and phase timing on stderr |
 | `--ignore-formatting` | Treat formatting as invisible in the residuals (see below) |
+| `--format text\|text-minimal\|json` | Output format (default `text`). `text-minimal` collapses each rule's site list to a one-line file count — a reading mode. `json` emits one object for filtering with `jq` (see [JSON output](#json-output)) |
 
 ## Output format
 
@@ -117,6 +118,65 @@ a genuinely structural change such as an inserted brace block
 the rules are unchanged. Off by default. Useful when the after-state was
 run through a formatter and you want the residuals to reflect intent rather
 than reformatting.
+
+### Minimal text output
+
+`--format text-minimal` is the `.summary` text with each rule's site list
+collapsed to a one-line count:
+
+```
+# rule R1  support=8  language=kotlin
+@@
+...
+# sites R1  8 file(s)
+```
+
+Use it when reading the rules is the point and the per-file scope would be
+noise; re-run with the default format (or use `--format json` and `jq`) to
+drill into where a rule applies. Mixed per-site `after=` annotations are
+elided with the file lines (a uniform `after=` still shows in the rule
+header), so the full `text` format remains the canonical, lossless one.
+
+### JSON output
+
+`--format json` emits the same data as the `.summary` text — one compact
+JSON object — so any projection of it is a `jq` filter away. The `.summary`
+text remains the default and the canonical format; JSON is for tooling and
+selective reading. The shape:
+
+```json
+{
+  "rules": [
+    { "id": "R1", "support": 8, "language": "kotlin",
+      "pattern": "@@\nmatch: strict\n@@\n- android\n+ androidx\n",
+      "sites": [ { "file": "c.kt" },
+                 { "file": "a.kt", "after": ["R2"] } ] }
+  ],
+  "residuals": [
+    { "file": "z.kt", "rules": ["R1"], "diff": "--- a/z.kt\n..." }
+  ]
+}
+```
+
+A site's optional `after` array is the per-site tier attribution (the
+earlier rule ids whose output this rule's pattern matched there — the
+`after=` annotations of the text format). Useful projections:
+
+```bash
+# Rules only, without the site lists:
+diffract summarize ... --format json |
+  jq -r '.rules[] | "# rule \(.id)  support=\(.support)  files=\(.sites|length)\n\(.pattern)"'
+
+# Residuals only (what no rule explains):
+diffract summarize ... --format json | jq -r '.residuals[].diff'
+
+# Everything touching one file:
+diffract summarize ... --format json |
+  jq --arg f "src/App.kt" '.rules[] | select(.sites[].file == $f)'
+```
+
+The enum leaves room for further formats later (e.g. SARIF for
+code-review integration).
 
 ## Worked examples
 

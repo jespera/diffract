@@ -589,7 +589,7 @@ let run_diff before_path after_path language =
 (* ── summarize subcommand ──────────────────────────────────────────── *)
 
 let run_summarize before_dir after_dir language include_pattern exclude_patterns
-    verbose ignore_formatting =
+    verbose ignore_formatting output_format =
   let ctx = Diffract.Context.create () in
   let exclude_dirs =
     if exclude_patterns = [] then default_excludes else exclude_patterns
@@ -688,7 +688,11 @@ let run_summarize before_dir after_dir language include_pattern exclude_patterns
       end;
       let output =
         phase "format" (fun () ->
-            Diffract.Change_summary.format_summary summary)
+            match output_format with
+            | `Json -> Diffract.Change_summary.format_summary_json summary
+            | `Text -> Diffract.Change_summary.format_summary summary
+            | `TextMinimal ->
+                Diffract.Change_summary.format_summary ~sites:`Count summary)
       in
       print_string output;
       `Ok ()
@@ -713,19 +717,39 @@ let summarize_cmd =
   in
   let ignore_formatting =
     let doc =
-      "Treat formatting as invisible: drop reflow-only residuals (re-indentation \
-       plus trailing separators, e.g. a trailing comma a formatter adds) rather \
-       than reporting them as unexplained changes. Structural changes are still \
-       kept."
+      "Treat formatting as invisible: drop reflow-only residuals \
+       (re-indentation plus trailing separators, e.g. a trailing comma a \
+       formatter adds) rather than reporting them as unexplained changes. \
+       Structural changes are still kept."
     in
     Arg.(value & flag & info [ "ignore-formatting" ] ~doc)
+  in
+  let output_format =
+    (* An enum so further formats (e.g. SARIF for code-review integration)
+       can slot in without changing the CLI shape. *)
+    let doc =
+      "Output format: $(b,text) (the .summary format; default), \
+       $(b,text-minimal) (same, but each rule's site list collapses to a \
+       one-line file count — a reading mode), or $(b,json) (one object with \
+       $(b,rules) and $(b,residuals) arrays, for filtering with e.g. jq)."
+    in
+    Arg.(
+      value
+      & opt
+          (enum
+             [
+               ("text", `Text); ("text-minimal", `TextMinimal); ("json", `Json);
+             ])
+          `Text
+      & info [ "format" ] ~docv:"FORMAT" ~doc)
   in
   Cmd.v
     (Cmd.info "summarize" ~doc)
     Term.(
       ret
         (const run_summarize $ before_dir $ after_dir $ language
-       $ include_pattern $ exclude_patterns $ verbose_flag $ ignore_formatting))
+       $ include_pattern $ exclude_patterns $ verbose_flag $ ignore_formatting
+       $ output_format))
 
 let diff_cmd =
   let doc = "Show AST-level changes between two versions of a file." in

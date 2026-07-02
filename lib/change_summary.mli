@@ -121,9 +121,22 @@ val summarize :
     residuals rather than reported as unexplained changes. Structural changes
     (e.g. an inserted brace block) are still kept. *)
 
-val format_summary : summary -> string
+val format_summary : ?sites:[ `Full | `Count ] -> summary -> string
 (** [format_summary s] serialises [s] in the [.summary] format defined in §9 of
-    the design doc. *)
+    the design doc. [?sites] (default [`Full]) controls the [# sites] blocks:
+    [`Count] replaces each file list with a one-line count
+    ([# sites R1  8 file(s)]) — the CLI's [--format text-minimal], a reading
+    mode; the full text remains the canonical format. *)
+
+val format_summary_json : summary -> string
+(** [format_summary_json s] serialises [s] as a single compact JSON object, for
+    filtering with tools like [jq]:
+    [{"rules": [{"id", "support", "language", "pattern", "sites": [{"file",
+     "after"?}]}], "residuals": [{"file", "rules", "diff"}]}]. A site's optional
+    ["after"] array carries the per-site tier attribution (the earlier rule ids
+    whose output the rule's pattern matched there). The [.summary] text
+    ([format_summary]) remains the canonical format; this is a projection of the
+    same data. *)
 
 val load_from_dirs :
   before_dir:string ->
