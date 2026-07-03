@@ -54,7 +54,7 @@ diffract is an OCaml library and CLI for parsing source files with tree-sitter a
 
 **Diff / change summaries (`lib/`)**
 - `tree_diff.ml` - AST-level diff (GumTree-style node mapping); used by `diff` and as `summarize`'s change-pair source
-- `tree_inclusion.ml` - Ordered tree embedding (Kilpeläinen–Mannila); the summary safety gate's residual-leg test
+- `leaf_metric.ml` - Token-level edit metric over tree-sitter leaf streams (Myers LCS distance); the summary safety gate's geodesic test
 - `change_summary.ml` - Thin facade: re-exports the public surface (`summarize`, `format_summary`, `load_from_dirs`, types). The `summarize` pipeline (propose → evaluate → select, tiered) is split across `cs_*.ml` modules, one per phase:
   - `cs_types.ml` - shared types (public API + internal pattern representation)
   - `cs_config.ml` - tuning constants (one documented home; internal, no CLI)

@@ -5,7 +5,6 @@ module Context = Context
 
 module Tree = Tree
 module Tree_diff = Tree_diff
-module Tree_inclusion = Tree_inclusion
 module Leaf_metric = Leaf_metric
 module Grammar_metadata = Grammar_metadata
 module Cursor = Cursor
