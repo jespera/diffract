@@ -337,6 +337,113 @@ let delta_keyed_pair (cp : Tree_diff.change_pair) : edit_pat option =
 
 (* ── Anchored variant (§3.2 lattice descent) ─────────────────────── *)
 
+(** Ellipsis-context form of one level (§3.2, list bloat): when a level of the
+    changed-child chain is a bracket-delimited list — its first and last kept
+    children are a matching anonymous bracket pair — and exactly one child
+    between the brackets changed, the list's other children collapse into
+    [Ellipsis] runs around the changed child instead of staying concrete
+    (anchor mode) or becoming per-child holes (inner mode). Both alternatives
+    bake the list's ARITY into the pattern, so a one-parameter type rename in
+    constructors of different arities fragments into per-arity rules; the
+    ellipsis form renders as
+
+    {v
+    (
+    ...
+    private readonly _H0: DestroyRef
+    ...
+    )
+    v}
+
+    which is arity- and position-independent (a leading/trailing [...] matches
+    zero siblings, and absorbs the separator next to the changed child), so the
+    realisation is textually identical across sites and pools by identity.
+    The synthetic template puts every part on its own line: the surgical
+    renderer aligns lines, and the [...] lines must land in the common
+    prefix/suffix to render as context — a [+ ...] line would be a fresh
+    unbound sequence binding.
+
+    Keeping the brackets concrete is load-bearing beyond readability: a bare
+    fragment without them re-parses with neutral-context leaf types and the
+    gate finds zero fires (the §3.2 re-parse mismatch); [<] is worst — bare
+    angle brackets re-parse as JSX/comparison. The bracket level typically sits
+    under a concrete head kept by anchor mode ([constructor], the generic type
+    name), so the emitted rule reads [head( ... delta ... )].
+
+    Returns [None] (caller falls back to the concrete form) unless the bracket
+    shape holds and exactly one non-delimiter child is unmatched on each side. *)
+let ellipsize_level (bn : Tree.src Tree.t) (an : Tree.src Tree.t)
+    (b_assign : (Tree.src Tree.child * int option) list)
+    (aks : Tree.src Tree.child list) (used : bool array)
+    (b_children : pat_child list) (a_children : pat_child list) :
+    (pat_node * pat_node) option =
+  let closer_of = function
+    | '(' -> ')'
+    | '[' -> ']'
+    | '{' -> '}'
+    | '<' -> '>'
+    | _ -> '\x00'
+  in
+  let bracket_leaf (c : Tree.src Tree.child) =
+    (not c.node.is_named) && String.length c.node.node_type = 1
+  in
+  let ba = Array.of_list b_assign in
+  let bc = Array.of_list b_children in
+  let aa = Array.of_list aks in
+  let ac = Array.of_list a_children in
+  let nb = Array.length ba and na = Array.length aa in
+  if nb < 3 || na < 3 then None
+  else
+    let b0, _ = ba.(0)
+    and blast, _ = ba.(nb - 1)
+    and a0 = aa.(0)
+    and alast = aa.(na - 1) in
+    let shape_ok =
+      bracket_leaf b0 && bracket_leaf blast && bracket_leaf a0
+      && bracket_leaf alast
+      && String.contains "([{<" b0.node.node_type.[0]
+      && blast.node.node_type.[0] = closer_of b0.node.node_type.[0]
+      && a0.node.node_type = b0.node.node_type
+      && alast.node.node_type = blast.node.node_type
+    in
+    if not shape_ok then None
+    else begin
+      let unmatched_b = ref [] in
+      Array.iteri
+        (fun i (_, m) -> if m = None && i > 0 && i < nb - 1 then unmatched_b := i :: !unmatched_b)
+        ba;
+      let unmatched_a = ref [] in
+      Array.iteri
+        (fun i u -> if (not u) && i > 0 && i < na - 1 then unmatched_a := i :: !unmatched_a)
+        used;
+      match (!unmatched_b, !unmatched_a) with
+      | [ bi ], [ ai ] ->
+          let mk (node : Tree.src Tree.t) open_c chain close_c =
+            PNode
+              {
+                node_type = node.node_type;
+                is_named = node.is_named;
+                children =
+                  [
+                    open_c;
+                    { field_name = None; child = Ellipsis };
+                    chain;
+                    { field_name = None; child = Ellipsis };
+                    close_c;
+                  ];
+                template =
+                  [
+                    Slot 0; Lit "\n"; Slot 1; Lit "\n"; Slot 2; Lit "\n";
+                    Slot 3; Lit "\n"; Slot 4;
+                  ];
+              }
+          in
+          Some
+            ( mk bn bc.(0) bc.(bi) bc.(nb - 1),
+              mk an ac.(0) ac.(ai) ac.(na - 1) )
+      | _ -> None
+    end
+
 (** Anchored lattice-descent variants (§3.2): the pair's own preserved children
     stay CONCRETE — they are the anchor that discriminates a context-dependent change
     — while preserved content *inside* the changed-child chain becomes shared
@@ -501,8 +608,13 @@ let anchored_variants (cp : Tree_diff.change_pair) :
                     else [ [ j ] ])
                   zipped)
   in
-  (* Build one variant for a given selector. Mutable per-run state. *)
-  let build selector0 =
+  (* Build one variant for a given selector. Mutable per-run state.
+     [ellipsis_lists] additionally collapses bracket-delimited levels of the
+     chain into ellipsis-context form (see {!ellipsize_level}); levels where
+     that shape doesn't hold fall back to the concrete form, so the flag is a
+     best-effort variant, deduped against the concrete one when it changes
+     nothing. *)
+  let build ~ellipsis_lists selector0 =
     next_hole := 0;
     let sel = ref selector0 in
     let b_delta = ref [] and a_delta = ref [] in
@@ -653,20 +765,31 @@ let anchored_variants (cp : Tree_diff.change_pair) :
           aks
       in
       let keep (n : Tree.src Tree.t) = not n.is_extra in
-      ( PNode
-          {
-            node_type = bn.node_type;
-            is_named = bn.is_named;
-            children = b_children;
-            template = build_template ~source:cp.before_source ~node:bn ~keep ();
-          },
-        PNode
-          {
-            node_type = an.node_type;
-            is_named = an.is_named;
-            children = a_children;
-            template = build_template ~source:cp.after_source ~node:an ~keep ();
-          } )
+      let concrete_level () =
+        ( PNode
+            {
+              node_type = bn.node_type;
+              is_named = bn.is_named;
+              children = b_children;
+              template =
+                build_template ~source:cp.before_source ~node:bn ~keep ();
+            },
+          PNode
+            {
+              node_type = an.node_type;
+              is_named = an.is_named;
+              children = a_children;
+              template =
+                build_template ~source:cp.after_source ~node:an ~keep ();
+            } )
+      in
+      if not ellipsis_lists then concrete_level ()
+      else
+        (match
+           ellipsize_level bn an b_assign aks used b_children a_children
+         with
+        | Some pair -> pair
+        | None -> concrete_level ())
     in
     let before, after =
       level ~holed_preserved:false cp.before_node cp.after_node
@@ -709,16 +832,19 @@ let anchored_variants (cp : Tree_diff.change_pair) :
     let sels = enum_selectors b a 0 in
     let sels = List.filteri (fun i _ -> i < Cs_config.default.max_selectors_per_pair) sels in
     let seen = Hashtbl.create 8 in
-    List.filter_map
+    List.concat_map
       (fun s ->
-        match build s with
-        | Some ((ep, _, _) as v) ->
-            if Hashtbl.mem seen ep then None
-            else begin
-              Hashtbl.add seen ep ();
-              Some v
-            end
-        | None -> None)
+        List.filter_map
+          (fun ellipsis_lists ->
+            match build ~ellipsis_lists s with
+            | Some ((ep, _, _) as v) ->
+                if Hashtbl.mem seen ep then None
+                else begin
+                  Hashtbl.add seen ep ();
+                  Some v
+                end
+            | None -> None)
+          [ false; true ])
       sels
   end
 
