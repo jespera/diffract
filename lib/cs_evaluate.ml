@@ -21,6 +21,15 @@ type site_info = {
       (** texts of the before-parse's ERROR nodes (usually empty). The
           well-formedness guard tolerates these in a rule's output — they
           predate the rule — while rejecting any error the rule invents. *)
+  si_before_leaves : Leaf_metric.stream;
+      (** leaf stream of the before-source, cached for the geodesic check —
+          the gate evaluates many candidates per site against the same
+          endpoints. *)
+  si_after_leaves : Leaf_metric.stream;  (** leaf stream of the after-source *)
+  si_d_endpoints : int;
+      (** [Leaf_metric.distance si_before_leaves si_after_leaves] — the
+          site's own edit distance, the geodesic equation's right-hand
+          side. *)
 }
 
 (** A bare separator token — a childless [,]/[;] node. Added or removed alone it
@@ -216,6 +225,12 @@ let build_site_db ~ctx (cs : changeset) : (string, site_info) Hashtbl.t =
             let bt = Tree.parse ~ctx ~language before_source in
             let at = Tree.parse ~ctx ~language after_source in
             let d = Tree_diff.diff ~before:bt ~after:at in
+            let before_leaves =
+              Leaf_metric.leaves ~source:before_source bt.Tree.root
+            in
+            let after_leaves =
+              Leaf_metric.leaves ~source:after_source at.Tree.root
+            in
             Hashtbl.replace tbl path
               {
                 si_before = before_source;
@@ -223,6 +238,9 @@ let build_site_db ~ctx (cs : changeset) : (string, site_info) Hashtbl.t =
                 si_language = language;
                 si_regions = changed_regions d;
                 si_before_errors = error_texts before_source bt.Tree.root;
+                si_before_leaves = before_leaves;
+                si_after_leaves = after_leaves;
+                si_d_endpoints = Leaf_metric.distance before_leaves after_leaves;
               }
           with
           | (Stack_overflow | Out_of_memory | Sys.Break) as e -> raise e
@@ -252,10 +270,10 @@ type site_evaluation = {
   ev_decomposable : bool;
       (** M1.9b: the candidate fires and makes safe-but-*partial* progress
           within a region — [t''] differs from the after inside a landing zone,
-          but the rule stays on the geodesic (§2.3): [t''] and the after are
-          tree-inclusion comparable ([Tree_inclusion]), so the gap is a pure
-          insertion or pure deletion — an honest residual rather than a detour
-          (relabel) that must be undone. A decomposable site counts toward
+          but the rule stays on the geodesic (§2.3):
+          [d(t,t'') + d(t'',t') = d(t,t')] on the leaf-stream metric
+          ([Leaf_metric]), so the gap is an honest residual step rather than
+          a detour that must be undone. A decomposable site counts toward
           support and coverage; its in-zone gap is emitted as a
           [rule=]-attributed residual (§4.4) by the re-diff in [summarize].
           Mutually exclusive with [ev_exact]. *)
@@ -425,38 +443,32 @@ let site_eval ~ctx ~language ~pattern_text (si : site_info) : site_evaluation =
           (* M1.9b decomposable: the rule's edits left a gap inside a landing
            zone, but [t''] is on the geodesic between before and after
            (design §2.3) — the rule's change plus the residual change
-           compose to the site's change with no detour. Operationally:
-           [t''] and the after must be *tree-inclusion comparable* (one
-           obtainable from the other by node deletion alone,
-           [Tree_inclusion]) — the residual is then a pure insertion
-           ([t'' ⊑ after]: the rule under-wrote, e.g. an emptied
-           dependency array the site fills) or a pure deletion
-           ([after ⊑ t'']: the rule over-wrote through a metavariable,
-           e.g. [g(x+1)] where the site keeps only [x]). A detour —
-           writing a value in neither before nor after, [f→h] where the
-           change is [f→g] — is a relabel, which inclusion forbids in
-           both directions. The deletion direction additionally requires
-           the deleted content to be before-derived (it reached [t'']
-           through a metavariable binding, not an invented template
-           literal whose insertion the residual would have to undo).
-           Inclusion is checked on the whole file, so a site whose
-           remaining gap mixes insertions and deletions — or overlaps
-           another rule's pending region — is shed to its residual:
-           conservative, honest, never unsafe.
+           compose to the site's change with no detour. Checked as the
+           metric equation itself: [d(t,t'') + d(t'',t') = d(t,t')] on the
+           leaf-stream LCS metric ([Leaf_metric]). A detour — writing a
+           value in neither before nor after, [f→h] where the change is
+           [f→g] — inflates both legs and fails the equation; so does
+           deleting in place content the after still needs (each token the
+           residual must re-add in place pays twice — the coarsened rule
+           emptying a function body to [{}] is off-geodesic outright). What
+           passes is honest partial progress: applying a subset of the
+           site's changes, or a partial step *inside* one change (flipping
+           a leaf of a bigger rewrite — a relabel, which the old
+           tree-inclusion check could not admit). The equation is checked
+           on the whole file, so a gap that conflicts with another pending
+           change sheds the site to its residual: conservative, honest,
+           never unsafe.
 
-           Inclusion alone validates only the *residual* leg. The rule's
-           own leg needs the net-progress guard below: a rule may delete
-           content the after still needs and let the residual re-add it —
-           inclusion holds ([t'' ⊑ after], the re-add is "pure
-           insertion") yet the delete-then-readd is wasted work off the
-           geodesic. Soaks hit exactly this: a coarsened rule emptying a
-           function body to [{}], whose residual re-inserts the whole
-           body — safe by reconstruction, worse than the raw diff by
-           size. The guard is the compactness half of the safety story
-           (spdiff's largest *common* part, MDL): the in-zone gap the
+           The geodesic validates direction, not worth. The net-progress
+           guard below is the compactness half of the safety story
+           (spdiff's largest *common* part, MDL): metric-neutral but
+           wasted work — deleting a token the residual re-adds *elsewhere*
+           (a move the rule has no business decomposing), or a step whose
+           in-zone gap states no less than the change it claims to
+           explain — passes the equation and is rejected here: the gap the
            rule leaves must be strictly smaller than the change it
-           explains, so claiming the site states the change more
-           compactly than the raw hunk would. *)
+           explains, so claiming the site states the change more compactly
+           than the raw hunk would. *)
           let net_progress =
             let extent (rs, re, txt) = re - rs + String.length txt in
             let gap =
@@ -486,18 +498,10 @@ let site_eval ~ctx ~language ~pattern_text (si : site_info) : site_evaluation =
           in
           let decomposable =
             (not exact) && net_progress
-            && (Tree_inclusion.included_src ~sub:(t'', bt.Tree.root)
-                  ~sup:(si.si_after, at.Tree.root)
-               || Tree_inclusion.included_src
-                    ~sub:(si.si_after, at.Tree.root)
-                    ~sup:(t'', bt.Tree.root)
-                  && List.for_all
-                       (fun (rs, re, txt) ->
-                         txt <> ""
-                         || string_mem
-                              ~sub:(String.sub t'' rs (re - rs))
-                              si.si_before)
-                       remaining)
+            && Leaf_metric.geodesic ~d_endpoints:si.si_d_endpoints
+                 ~before:si.si_before_leaves
+                 ~mid:(Leaf_metric.leaves ~source:t'' bt.Tree.root)
+                 ~after:si.si_after_leaves ()
           in
           if not (exact || decomposable) then no_fire
           else

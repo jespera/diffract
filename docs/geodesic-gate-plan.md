@@ -176,22 +176,59 @@ the inclusion checks).
 
 ## Phase 3 — gate swap
 
-- [ ] 3.1 Replace the decomposable disjunction (inclusion both ways +
-      before-derivedness) with `net_progress && geodesic`; keep the
-      placement prefilter, the ERROR well-formedness guard, and `exact`
-      unchanged.
-- [ ] 3.2 Full gauntlet. Golden churn is *expected* — review each changed
-      fixture and re-bless deliberately. Corpus diffs reviewed; androidx
-      measured against ideal.summary; eval-loop perf measured (the gate
-      runs thousands of times).
-- [ ] 3.3 Contingency if monsters resurface (they are on-geodesic):
-      selection-side counterweight — e.g. weighting cover by resolved
-      fraction or preferring `ev_clean` more aggressively. Only with
-      Phase 1 landed can this be attributed cleanly.
+- [x] 3.1 `decomposable := net_progress && geodesic` (cs_evaluate).
+      Placement prefilter, ERROR guard, `exact` unchanged. `site_info`
+      caches the before/after leaf streams and the endpoint distance;
+      the per-eval cost is one `leaves(t'')` + two triangle-bounded
+      Myers legs. The inclusion-both-ways disjunct and its
+      before-derivedness side condition are gone from the gate
+      (`string_mem` stays — cs_select's needle prefilter uses it).
+- [x] 3.2 Gauntlet: 515 tests green with exactly ONE golden churn,
+      re-blessed as an improvement: ts_unwrap_rename_confound — the
+      unwrap rule now claims the confounded site (support 2→3) with the
+      leftover rename as a rule-attributed residual; the old gate called
+      that intra-node leaf flip a relabel and shed the whole site.
+      Corpora: fun-exp and gen3-kotlin byte-identical; drupal
+      byte-identical (140 s vs 147 s — noise); gen3-ts +1 rule,
+      gen3-tsx +1 rule (both real: sites previously residual-only,
+      residual counts unchanged). androidx regressed 29→33 rules,
+      33→41 residuals, 795→1027 lines — the 3.3 contingency, landed
+      with this measured gap on record. No eval-loop slowdown anywhere
+      (androidx 35.8 s vs 40.7 s same-session pre-swap).
+- [ ] 3.3 The contingency fired; cause fully attributed, counterweight
+      NOT yet landed. Mechanism (traced on androidx): the geodesic
+      correctly fattens decomposable extensions, which lets *umbrella
+      candidates* — patterns carrying pass-through junk lines, e.g.
+      `- import _H3` / `+ import _H3`, that bind fresh holes and rewrite
+      nothing — reach the support floor by aggregating straggler regions
+      across families. Junk lines inflate concrete-token specificity, so
+      they apply FIRST (Phase-1 order), consuming the per-family rules'
+      matches (lifecycle 75→68, annotation 44→42) and spawning after=
+      echoes — E1's shape, re-enabled at the candidate level.
+      Experiments, all measured on androidx:
+      - fresh−stale cover marginal: 48 rules (fragments; family rules
+        legitimately overlap each other's resolved regions) — rejected.
+      - zero-stale eligibility: 50 rules — rejected.
+      - dropping candidates with pass-through junk lines: 27 rules /
+        37 residuals / 833 lines, families unified (lifecycle support 77,
+        > Phase-1's 75 — geodesic admits it at composite files), shape
+        matches ideal.summary. Confirms umbrellas are the single
+        load-bearing cause. BUT the probe implementation string-scanned
+        rendered pattern text for `_H` tokens — wrong layer, and a false
+        positive killed drupal's one rule (a genuine `$this->_H0(...)`
+        context line). Do not re-discover metavars by string-scanning.
+      Follow-up (next workstream): the constraint belongs in the
+      pattern/coherence layer — a structural predicate over the internal
+      pattern representation ("a match-side line whose every token is a
+      hole bound nowhere else and whose rewrite is the identity
+      constrains only adjacency"), rejecting umbrella candidates before
+      rendering. cs_pattern's coherence predicates are the natural home.
 
 **Exit criteria**: androidx ≤ Phase-1 rule count with mangle-repair
 residuals gone; gen3/fun-exp/drupal reviewed (byte-identity not required,
 justified diffs only); no eval-loop slowdown beyond noise.
+**Status: perf + gen3/fun-exp/drupal criteria met; androidx criterion
+open, gated on the 3.3 coherence-layer follow-up.**
 
 ## Phase 4 — documentation & landing
 
