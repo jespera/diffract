@@ -42,6 +42,7 @@ let propose_two_sided_clusters ~safe_instances (initial : cluster list) :
         && has_concrete c.pattern.before
         && has_concrete c.pattern.after
         && has_concrete_edit c.pattern
+        && no_junk_passthrough c.pattern
         && hole_frac c.pattern < Cs_config.default.max_hole_fraction
       then begin
         let safe = safe_instances c.pattern c.instances in

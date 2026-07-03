@@ -195,40 +195,61 @@ the inclusion checks).
       33→41 residuals, 795→1027 lines — the 3.3 contingency, landed
       with this measured gap on record. No eval-loop slowdown anywhere
       (androidx 35.8 s vs 40.7 s same-session pre-swap).
-- [ ] 3.3 The contingency fired; cause fully attributed, counterweight
-      NOT yet landed. Mechanism (traced on androidx): the geodesic
-      correctly fattens decomposable extensions, which lets *umbrella
-      candidates* — patterns carrying pass-through junk lines, e.g.
-      `- import _H3` / `+ import _H3`, that bind fresh holes and rewrite
-      nothing — reach the support floor by aggregating straggler regions
-      across families. Junk lines inflate concrete-token specificity, so
-      they apply FIRST (Phase-1 order), consuming the per-family rules'
-      matches (lifecycle 75→68, annotation 44→42) and spawning after=
-      echoes — E1's shape, re-enabled at the candidate level.
-      Experiments, all measured on androidx:
+- [x] 3.3 The contingency fired and is resolved by a coherence predicate.
+      Mechanism (traced on androidx): the geodesic correctly fattens
+      decomposable extensions, which let *umbrella candidates* — patterns
+      carrying pass-through junk lines, e.g. `- import _H3` /
+      `+ import _H3`, that bind fresh holes and rewrite nothing — reach
+      the support floor by aggregating straggler regions across families.
+      Junk lines inflate concrete-token specificity, so they apply FIRST
+      (Phase-1 order), consuming the per-family rules' matches (lifecycle
+      75→68, annotation 44→42) and spawning after= echoes — E1's shape,
+      re-enabled at the candidate level.
+      Failed experiments (measured on androidx, do not repeat):
       - fresh−stale cover marginal: 48 rules (fragments; family rules
-        legitimately overlap each other's resolved regions) — rejected.
-      - zero-stale eligibility: 50 rules — rejected.
-      - dropping candidates with pass-through junk lines: 27 rules /
-        37 residuals / 833 lines, families unified (lifecycle support 77,
-        > Phase-1's 75 — geodesic admits it at composite files), shape
-        matches ideal.summary. Confirms umbrellas are the single
-        load-bearing cause. BUT the probe implementation string-scanned
-        rendered pattern text for `_H` tokens — wrong layer, and a false
-        positive killed drupal's one rule (a genuine `$this->_H0(...)`
-        context line). Do not re-discover metavars by string-scanning.
-      Follow-up (next workstream): the constraint belongs in the
-      pattern/coherence layer — a structural predicate over the internal
-      pattern representation ("a match-side line whose every token is a
-      hole bound nowhere else and whose rewrite is the identity
-      constrains only adjacency"), rejecting umbrella candidates before
-      rendering. cs_pattern's coherence predicates are the natural home.
+        legitimately overlap each other's resolved regions).
+      - zero-stale eligibility: 50 rules.
+      - a string-scanning probe of rendered pattern text for `_H` junk
+        lines validated the umbrella diagnosis (27 rules, families
+        unified) but is the wrong layer: a false positive killed drupal's
+        one rule (a genuine `$this->_H0(...)` context line). Do not
+        re-discover metavars by string-scanning.
+      Fix landed: `Cs_pattern.no_junk_passthrough`, a structural predicate
+      over the internal pattern representation, checked alongside
+      `has_concrete_edit`/`no_orphan_after_holes` at all five coherence
+      sites (cluster cut, single-cluster path, two propose channels,
+      anchored-decl builder). A child of the edit root is a junk
+      passthrough iff it (a) renders as its own line (newline-separated
+      template slot — a statement-level sibling, not a grammatical
+      constituent like a call's `(_H0)` argument list), (b) is
+      structurally identical on both sides (identity rewrite, same hole
+      indices), (c) has at least one hole and shares none of its hole
+      indices with the rest of the pattern, and (d) contains no named
+      leaf. Unit tests pin the boundary: R15 umbrella rejected;
+      concrete-anchored guard (`import android.content._H2`), shared-hole
+      binding source, call-arguments constituent, and the drupal
+      `$this->_H0(...)` context line all kept.
+      Gauntlet: 516 tests green, zero golden churn; gen3 ×3, fun-exp,
+      drupal byte-identical to the gate-swap state (drupal keeps its
+      rule); androidx 26 rules / 38 residuals / 827 lines vs Phase-1's
+      29/33/795 — families unified (lifecycle support 77 > Phase-1's 75:
+      the geodesic admits it at composite files), umbrellas gone.
+      Back-to-back A/B: coherence build faster (39 s vs 52 s — fewer
+      candidates to evaluate).
 
 **Exit criteria**: androidx ≤ Phase-1 rule count with mangle-repair
 residuals gone; gen3/fun-exp/drupal reviewed (byte-identity not required,
 justified diffs only); no eval-loop slowdown beyond noise.
-**Status: perf + gen3/fun-exp/drupal criteria met; androidx criterion
-open, gated on the 3.3 coherence-layer follow-up.**
+**Status: met on rules (26 ≤ 29), perf, and corpus review. NOT fully met
+on mangle-repairs: the leaf-rule chain-repair family
+(`androidx.support.v4.view.ViewPager`-shape, ~7 files) persists at parity
+with the Phase-1 baseline — it predates this branch and traces to
+claiming/tiering (cs_tier chain application), not the gate or candidate
+coherence. Plus a 5-file residual tail (LocalBroadcastManager /
+InstrumentationRegistry-variant families displaced by a concrete-anchored
+guard rule that applies first) — the claiming-order question Phase 1
+already flagged (Option-B "prefer-exact swap"). Both are cs_tier
+workstreams; recorded here, out of scope for the gate branch.**
 
 ## Phase 4 — documentation & landing
 

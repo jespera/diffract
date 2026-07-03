@@ -328,6 +328,7 @@ let delta_keyed_pair (cp : Tree_diff.change_pair) : edit_pat option =
       if
         has_concrete ep.before && has_concrete_edit ep
         && no_orphan_after_holes ep
+        && no_junk_passthrough ep
         && hole_frac ep < Cs_config.default.max_hole_fraction
       then Some ep
       else None
@@ -680,6 +681,7 @@ let anchored_variants (cp : Tree_diff.change_pair) :
     else if holes = 0 && not !all_leaves then None
     else if
       has_concrete ep.before && has_concrete_edit ep && no_orphan_after_holes ep
+      && no_junk_passthrough ep
       && hole_frac ep < Cs_config.default.max_hole_fraction
     then
       let key =

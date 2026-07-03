@@ -834,6 +834,84 @@ let no_orphan_after_holes (ep : edit_pat) : bool =
   List.for_all (fun h -> List.mem h before_holes) after_holes
   && ((not (contains_ellipsis ep.after)) || contains_ellipsis ep.before)
 
+(** No pass-through junk line. In a multi-child edit, a child that
+
+    (a) renders as its own line — the root's [template] separates it from
+    its siblings by newline [Lit]s (or the pattern boundary), so it is an
+    independent statement-level sibling, not a grammatical constituent
+    like a call's argument list;
+    (b) appears structurally identical — same hole indices — on both
+    sides, so its rewrite is the identity;
+    (c) contains at least one hole, none of whose indices occur anywhere
+    else in the pattern (an index shared with another child would make
+    this child a binding source); and
+    (d) carries no named leaf — only holes and keyword/punctuation tokens
+
+    states nothing about the edit: it is anti-unification residue of
+    unrelated adjacent nodes (the [import _H3] neighbours of a changed
+    import, holed because each instance file had different neighbours) and
+    constrains only adjacency. Umbrella candidates carrying such lines
+    reach the support floor by aggregating unrelated stragglers across
+    change families, out-rank the per-family rules on concrete-token
+    specificity (so they apply first and consume those rules' matches), and
+    re-create the tier-2 echo shape the specificity ordering exists to
+    prevent. A passthrough line with a named leaf
+    ([import android.content._H2]) is a selective guard and survives; so
+    does one whose hole is a binding source, and any line that actually
+    edits. *)
+let no_junk_passthrough (ep : edit_pat) : bool =
+  match (ep.before, ep.after) with
+  | PNode b, PNode a ->
+      (* Slot indices that render as their own line(s): a newline (or the
+         boundary) on both sides in the template. *)
+      let own_line =
+        let nl s = String.contains s '\n' in
+        let eligible = Hashtbl.create 8 in
+        let rec go prev_nl = function
+          | [] -> ()
+          | Lit s :: rest -> go (prev_nl || nl s) rest
+          | Slot j :: rest ->
+              let next_nl =
+                match rest with [] -> true | Lit s :: _ -> nl s | Slot _ :: _ -> false
+              in
+              if prev_nl && next_nl then Hashtbl.replace eligible j ();
+              go false rest
+        in
+        go true b.template;
+        Hashtbl.mem eligible
+      in
+      let rec occs acc = function
+        | Hole h -> h :: acc
+        | Ellipsis | Leaf _ -> acc
+        | PNode { children; _ } ->
+            List.fold_left (fun acc c -> occs acc c.child) acc children
+      in
+      let count xs i = List.length (List.filter (Int.equal i) xs) in
+      (* Lazily: only a candidate that has already matched every cheaper
+         junk condition pays for the whole-pattern occurrence scan. *)
+      let global = lazy (occs (occs [] ep.before) ep.after) in
+      let rec has_named_leaf = function
+        | Hole _ | Ellipsis -> false
+        | Leaf _ -> true
+        | PNode { children; _ } ->
+            List.exists (fun c -> has_named_leaf c.child) children
+      in
+      let junk j (c : pat_child) =
+        own_line j
+        && (match c.child with PNode _ -> true | _ -> false)
+        &&
+        let local = occs [] c.child in
+        local <> []
+        && (not (has_named_leaf c.child))
+        && List.exists (fun (c' : pat_child) -> c'.child = c.child) a.children
+        && List.for_all
+             (fun i -> count (Lazy.force global) i = 2 * count local i)
+             (List.sort_uniq compare local)
+      in
+      not (List.exists (fun (j, c) -> junk j c)
+             (List.mapi (fun j c -> (j, c)) b.children))
+  | _ -> true
+
 (* ── Declaration anchoring ─────────────────────────────────────────── *)
 
 (** The immediate parent of the node spanning exactly [(s, e)] in [root], or
@@ -1088,7 +1166,7 @@ let build_anchored_decl source (parent : Tree.src Tree.t) ~body_start ~body_end
       in
       if
         has_concrete ep.before && has_concrete_edit ep
-        && no_orphan_after_holes ep
+        && no_orphan_after_holes ep && no_junk_passthrough ep
       then Some ep
       else None
   end

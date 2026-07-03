@@ -284,8 +284,102 @@ let anchored_decl_strips_comment () =
             (contains ~sub:"//" r))
   | _ -> Alcotest.fail "could not locate declaration/body"
 
+(* ── no_junk_passthrough (geodesic-gate plan §3.3) ────────────────────
+   Hand-built pat_nodes: the predicate is structural, so the cases pin the
+   accept/reject boundary directly — no parsing or anti-unification. *)
+
+open Cs_types
+
+let kw t : pat_node =
+  PNode { node_type = t; is_named = false; children = []; template = [ Lit t ] }
+
+let ident v : pat_node = Leaf { node_type = "identifier"; value = v }
+
+let pnode t kids : pat_node =
+  PNode
+    {
+      node_type = t;
+      is_named = true;
+      children = List.map (fun c -> { field_name = None; child = c }) kids;
+      template = List.mapi (fun i _ -> Slot i) kids;
+    }
+
+(* A statement block: children rendered one per line (newline-separated
+   template slots), the shape [of_src] gives real statement containers.
+   [pnode]'s template has no separators — its slots are flush, like a
+   call's arguments. *)
+let block kids : pat_node =
+  PNode
+    {
+      node_type = "statements";
+      is_named = true;
+      children = List.map (fun c -> { field_name = None; child = c }) kids;
+      template =
+        List.concat (List.mapi (fun i _ -> [ Slot i; Lit "\n" ]) kids);
+    }
+
+let check_junk name expected ep =
+  Alcotest.(check bool) name expected (Cs_pattern.no_junk_passthrough ep)
+
+let junk_passthrough_cases () =
+  (* The androidx R15 umbrella: one real import edit plus two hole-only
+     pass-through imports (AU residue of unrelated neighbours) — rejected. *)
+  let junk3 = pnode "import" [ kw "import"; Hole 3 ] in
+  let junk4 = pnode "import" [ kw "import"; Hole 4 ] in
+  let imp_b =
+    pnode "import" [ kw "import"; ident "android"; Hole 0; Hole 1; Hole 2 ]
+  in
+  let imp_a =
+    pnode "import" [ kw "import"; ident "androidx"; Hole 1; Hole 2 ]
+  in
+  check_junk "umbrella with hole-only neighbours rejected" false
+    { before = block [ imp_b; junk3; junk4 ]; after = block [ imp_a; junk3; junk4 ] };
+  (* The same edit with no pass-through wrapping is fine. *)
+  check_junk "bare edit kept" true { before = imp_b; after = imp_a };
+  (* A call's argument list [(_H0)] is identical and hole-only on both
+     sides of a rename, but it is a grammatical constituent — flush
+     against the callee in the template, not its own line — and the hole
+     is the rename's binding. Never junk (the import_removal golden's
+     [legacyHandler(_H0) ⤳ modernHandler(_H0)] shape). *)
+  let args = pnode "arguments" [ kw "("; Hole 0; kw ")" ] in
+  let call name = pnode "call_expression" [ ident name; args ] in
+  check_junk "call arguments passthrough kept" true
+    { before = call "legacyHandler"; after = call "modernHandler" };
+  (* A passthrough with a named leaf is a selective guard (androidx R2's
+     [import android.content._H2]) — kept. *)
+  let guard =
+    pnode "import" [ kw "import"; ident "android"; ident "content"; Hole 5 ]
+  in
+  check_junk "concrete-anchored passthrough guard kept" true
+    { before = block [ imp_b; guard ]; after = block [ imp_a; guard ] };
+  (* A hole-only passthrough whose hole binds a changed child is that
+     child's binding source — kept. *)
+  let paren h = pnode "paren" [ kw "("; Hole h; kw ")" ] in
+  let call_b = pnode "call" [ ident "g"; Hole 0 ] in
+  let call_a = pnode "call" [ ident "h"; Hole 0 ] in
+  check_junk "shared-hole passthrough kept" true
+    { before = block [ paren 0; call_b ]; after = block [ paren 0; call_a ] };
+  (* ...but with an unshared hole it is junk. *)
+  check_junk "unshared hole-only passthrough rejected" false
+    { before = block [ paren 9; call_b ]; after = block [ paren 9; call_a ] };
+  (* The drupal false positive of the string-scanning probe: a passthrough
+     context line whose holes sit inside real code (named leaves present)
+     — kept. [$this->_H0($data, _H1::decode($string));] *)
+  let ctx_line =
+    pnode "expression_statement"
+      [ ident "$this"; Hole 0; ident "$data"; Hole 1; ident "decode";
+        ident "$string" ]
+  in
+  let meth_b = pnode "method" [ kw "public"; ident "testDecode" ] in
+  let meth_a =
+    pnode "method" [ kw "public"; ident "DataProvider"; ident "testDecode" ]
+  in
+  check_junk "code-context passthrough with named leaves kept" true
+    { before = block [ meth_b; ctx_line ]; after = block [ meth_a; ctx_line ] }
+
 let tests =
   [
+    ("junk passthrough boundary", `Quick, junk_passthrough_cases);
     ("anchored decl round-trips", `Quick, anchored_decl_round_trips);
     ("realign orphan holes", `Quick, realign_orphan_holes_aligns);
     ("anchored decl strips comment", `Quick, anchored_decl_strips_comment);

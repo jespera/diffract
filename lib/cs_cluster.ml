@@ -316,6 +316,7 @@ let cut_dendrogram ?(threshold = Cs_config.default.max_hole_fraction)
        keyword on the [-] side anchors the rule even though the
        [+] side is just brackets and holes. *)
     has_concrete ep.before && has_concrete_edit ep && no_orphan_after_holes ep
+    && no_junk_passthrough ep
     && (s = 0 || float_of_int (edit_holes ep) /. float_of_int s < threshold)
   in
   let clusters = ref [] in
