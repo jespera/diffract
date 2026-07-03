@@ -144,18 +144,35 @@ the `--ignore-formatting` interaction). Tree edit distance is out (exact
 TED too slow for thousands of evals; Tree_diff is a heuristic, not a
 metric — its script sizes can't carry an equality).
 
-- [ ] 2.1 `lib/leaf_metric.ml` (name TBD): leaf-stream extraction, Myers
-      O(ND) distance, `geodesic ~before ~mid ~after` with the
-      per-file `d(before, after)` cached by the caller.
-- [ ] 2.2 Unit tests: composite-subset ✓; mangler ✗ (invented text);
-      intra-line partial step ✓ (leaf flip); delete-then-readd ✓ by
-      geodesic (rejecting it is `net_progress`'s job — test documents the
-      division of labour); formatting neutrality; empty/identity edges.
-- [ ] 2.3 Micro-benchmark vs the two `Tree_inclusion` calls it replaces,
-      on corpus-sized files.
+- [x] 2.1 `lib/leaf_metric.ml`: `leaves` (leaf-stream extraction; skips
+      zero-width missing leaves, keeps comments), `distance` /
+      `distance_upto` (Myers O(ND) LCS distance, prefix/suffix trim,
+      per-call token interning), `geodesic ?d_endpoints ~before ~mid
+      ~after ()` — both legs cut off by the triangle inequality against
+      the (caller-cacheable) endpoint distance, so an off-geodesic mid
+      never pays a full far-pair search.
+- [x] 2.2 Unit tests (17, group "Leaf metric"): composite-subset ✓;
+      mangler ✗; intra-line leaf flip ✓ (the relabel inclusion rejects);
+      formatting neutrality; comment edits count; empty/identity edges;
+      bound cutoffs. One correction to the plan's expectation:
+      *same-position* delete-then-readd is **off**-geodesic under the LCS
+      metric (each re-added token pays twice — the emptied-body soak
+      shape, which inclusion blessed and only `net_progress` caught, is
+      now rejected by the metric itself). Delete-then-readd of a *moved*
+      element ✓ remains on-geodesic — policing metric-neutral wasted work
+      is still `net_progress`'s job. Both pinned by tests.
+- [x] 2.3 Micro-benchmark (androidx, 143 modified kt pairs, parses in
+      hand, scaffold not committed): inclusion both ways 707 ms total
+      (~4.9 ms/pair) vs leaves×2 28 ms + endpoint distance 7 ms +
+      geodesic 11–12 ms (~0.3 ms/pair all-in, ~15×; the gate additionally
+      caches before/after streams + endpoint distance per site, leaving
+      ~0.2 ms per candidate eval). Side observation: only 4/143 pairs are
+      inclusion-comparable at all, while every pair supports meaningful
+      geodesic queries — the metric has strictly more resolution on real
+      composite files.
 
-**Exit criteria**: unit tests green; per-eval cost ≤ current inclusion
-checks.
+**Exit criteria: met** (tests green — 515 total; per-eval cost ~15× below
+the inclusion checks).
 
 ## Phase 3 — gate swap
 

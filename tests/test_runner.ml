@@ -7,6 +7,7 @@ let () =
       ("Node", Test_node.tests);
       ("Tree diff", Test_tree_diff.tests);
       ("Tree inclusion", Test_tree_inclusion.tests);
+      ("Leaf metric", Test_leaf_metric.tests);
       ("Grammar metadata", Test_grammar_metadata.tests);
       ("Raw vs Wrapped", Test_raw_vs_wrapped.tests);
       ("Cursor", Test_cursor.tests);
