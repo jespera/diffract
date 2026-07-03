@@ -252,12 +252,13 @@ c.ts
 `a.ts` is still claimed — applying R1 there is safe progress — and the
 extra simplification is stated honestly as a residual *against the
 intermediate* (`bar(x + 1)`, i.e. after R1 has been applied). This is the
-"decomposable site" case: the gap must be a pure insertion or deletion on
-top of what the rule wrote (checked by ordered tree inclusion), and smaller
-than what the rule explains — otherwise the site is not claimed.
+"decomposable site" case: the rule's output must lie on a shortest edit
+path between before and after (the geodesic safety property, measured on
+the token stream), and the gap it leaves must be smaller than what the
+rule explains — otherwise the site is not claimed.
 (Fixture: `ts_arg_drop_residual`.)
 
-### Refusing to over-claim
+### An honest partial step inside one change
 
 Three files unwrap `box(...).get()` down to the wrapped value — but in one
 of them the value was *also renamed*:
@@ -269,7 +270,7 @@ c.ts  before:  const r = box(m).get();       after:  const r = m;
 ```
 
 ```
-# rule R1  support=2  language=typescript
+# rule R1  support=3  language=typescript
 @@
 match: strict
 metavar _H0: single
@@ -277,22 +278,28 @@ metavar _H0: single
 - box(_H0).get()
 + _H0
 # sites R1
+a.ts
 b.ts
 c.ts
 
-# residual
+# residual  rule=R1
 --- a/a.ts
 +++ b/a.ts
 @@ -1,1 +1,1 @@
--const r = box(old).get();
+-const r = old;
 +const r = new1;
 ```
 
-The unwrap rule claims only the sites where the value is genuinely
-preserved. At `a.ts`, applying it would write `old` where the change wrote
-`new1` — work that would have to be undone — so the site is refused and its
-whole change is reported as a residual. The summary never asserts a rule
-did something it didn't. (Fixture: `ts_unwrap_rename_confound`.)
+At `a.ts` the change composes two steps: the unwrap, which R1 states, and
+a rename `old → new1` that no other file shares. Applying R1 there writes
+`old` — an intermediate strictly *between* the before- and after-states
+(nothing about it must be undone; the rename still remains). So the site
+is claimed, and the rename is stated honestly as an attributed residual
+against the intermediate. The gate refuses a site instead when the rule's
+output strays off the path — writing content that appears in neither
+endpoint — or when the gap it leaves is no smaller than the change it
+claims to explain; such a site's whole change falls to an unattributed
+residual. (Fixture: `ts_unwrap_rename_confound`.)
 
 ### Overlapping variants: the specific rule wins its sites
 

@@ -67,14 +67,20 @@ be practical rather than optimal:
 - **Covering**. Every change pair extracted from the changeset is accounted
   for, either by a rule occurrence or in `residuals`.
 - **Safe**. For a site pair `(t, t')` and a rule with `t'' = apply(rule, t)`,
-  the rule is *safe at the site* iff, for a tree edit-distance metric `d`,
+  the rule is *safe at the site* iff, for an edit-distance metric `d`,
 
   ```
   d(t, t'') + d(t'', t') = d(t, t')
   ```
 
   — applying the rule stays on a geodesic from `t` to `t'`: it makes no
-  change that would have to be undone to reach the after-source.
+  change that would have to be undone to reach the after-source. The
+  implemented `d` (`Leaf_metric`) is LCS distance over tree-sitter
+  leaf-text streams — a genuine metric (unlike `Tree_diff`'s heuristic
+  script sizes), formatting-blind by construction (whitespace between
+  tokens is not a leaf), and cheap enough for the evaluation loop
+  (Myers O(ND), both legs cut off by the triangle inequality against
+  the site's cached endpoint distance).
   Equivalently, the rule's edits are a subset of a minimal edit script
   from `t` to `t'`. Every emitted `(site, rule)` association is safe;
   sites that fail the check are shed from the rule (they fall to
@@ -292,10 +298,22 @@ level of ancestor wins for each site. Key properties:
   The gate is *implemented as residual computation* (§4.4): applying
   the rule at a site and comparing against the after-source classifies
   the association as `exact` (residual empty — the rule fully explains
-  every region it touches), `decomposable` (residual is pure shrinkage
-  of the original diff: each rule edit appears in the diff's script,
-  untouched regions remain), or `unsafe` (the residual would have to
-  correct the rule's own edits). What may be *emitted* is staged by
+  every region it touches), `decomposable` (safe partial progress:
+  `t''` satisfies the §2.3 metric equation on the leaf-stream metric —
+  checked literally, not through structural proxies — AND passes the
+  *net-progress* guard: the in-zone gap the rule leaves must be
+  strictly smaller than the change it explains. Net progress is the
+  compactness half of the safety story — spdiff's largest *common*
+  part, MDL — and a genuinely separate axis: the metric deliberately
+  does not police metric-neutral waste such as deleting a token the
+  residual re-adds *elsewhere*, while same-position delete-then-readd
+  is already off-geodesic, each re-added token paying twice), or
+  `unsafe` (off the geodesic — some of the rule's work would have to
+  be undone to reach the after-source). A well-formedness precondition
+  guards every verdict: each parse-ERROR in `t''` must pre-exist, by
+  error text, in the site's before or after — an error in neither
+  endpoint is one the rule invented, and repairing rule-inflicted
+  damage is not a residual's job. What may be *emitted* is staged by
   milestone: M1 emits `exact` sites only, because the M1 format cannot
   attach residuals and an unexplained gap would mis-state the change;
   M1.9 admits `decomposable` sites with `rule=` residual attribution;
@@ -1567,6 +1585,51 @@ isolation against a synthetic fixture and leaves the tool in a usable state.
   parsed trees, rules applied in id order so tiers compose) over every
   golden case; soak corpora are exercised manually.
 
+- **M2.6 — The geodesic gate (implemented).** Replace M1.9b's
+  approximation strata — ordered tree inclusion both ways plus the
+  before-derivedness side condition — with the §2.3 metric equation
+  checked literally: `decomposable := net_progress && geodesic` over
+  `Leaf_metric` (leaf-stream LCS distance, Myers O(ND) with
+  triangle-inequality cutoffs; per-site endpoint streams and distance
+  cached in `site_info`). ~15× cheaper than the two inclusion calls it
+  replaced; on the androidx corpus only 4/143 modified pairs were
+  inclusion-comparable at all, while every pair supports geodesic
+  queries. The metric admits intra-node partial steps — a leaf flip
+  inside a bigger rewrite, a relabel inclusion forbade in both
+  directions (fixture `ts_unwrap_rename_confound` re-blessed: the
+  unwrap rule claims the confounded site, support 2→3, the leftover
+  rename an attributed residual) — and rejects same-position
+  delete-then-readd outright, so `net_progress` remains only for
+  metric-neutral waste (moves) and compactness. `Tree_inclusion`
+  deleted; the gate was its only caller.
+
+  Landing it took two selection-side fixes the fatter decomposable
+  extensions exposed (gate loosening before selection is healthy
+  regresses — measured twice):
+  1. *Application order by match-side specificity*
+     (`sort_for_application`): support-ordered application let broad
+     rules (the bare `- android + androidx` leaf flip) apply first,
+     consume specific rules' matches at composite files, and force the
+     next tier to re-derive them as echo rules (`import
+     _H0.arch.lifecycle._H1`) — the androidx lifecycle family split
+     30/17 across tiers with an `ev_exact` rule available the whole
+     time.
+  2. *`Cs_pattern.no_junk_passthrough`* at coherence time: umbrella
+     candidates carrying pass-through junk lines (an own-line template
+     slot, identical on both sides, holes shared with nothing else, no
+     named leaf — anti-unification residue of unrelated neighbouring
+     statements) aggregated straggler regions across change families to
+     reach the support floor, then out-ranked the per-family rules on
+     concrete-token specificity. Structural predicate over `pat_node`;
+     rendered-text scanning for metavars is explicitly the wrong layer
+     (a string-scanning probe's false positive killed a legitimate
+     drupal rule whose context line embedded holes in real code).
+  Net on androidx: 29 → 26 rules, the lifecycle family unified
+  (support 77), umbrella and echo rules gone, no slowdown. Remaining
+  known gap: leaf-rule chain-repair residuals and a claiming-order tail
+  (concrete guard rules applying before family rules) — cs_tier
+  territory, out of the gate's scope.
+
 - **M3 — Role-aware metavar naming (planned).** Use tree-sitter field names to name
   metavariables (`$function`, `$arguments`) when unambiguous.
 
@@ -1939,26 +2002,21 @@ declaration prevents silent misconfiguration.
   anti-unification-by-hash primitive the proposer could borrow; heed its
   critique of hdiff (whole-file patches mention many unchanged nodes —
   moot for our *localised* rules, which want minimal context anyway).
+- Myers, *An O(ND) Difference Algorithm and Its Variations* (1986). The
+  distance-only forward pass is `Leaf_metric.distance` — the `d` of the
+  §2.3 safety equation, over tree-sitter leaf-text streams. Cost scales
+  with the distance, and gate intermediates are close to both endpoints
+  by construction, which is what makes checking the equation literally
+  affordable in the evaluation loop.
 - Kilpeläinen & Mannila, *Ordered and unordered tree inclusion* (SIAM
-  J. Comput. 1995). The ordered tree embedding (`Tree_inclusion`,
-  delete-only obtainability with child promotion) that the M1.9b gate
-  uses as the geodesic's residual-leg test: `t''` and the after must be
-  inclusion-comparable (pure insertion or pure deletion; a relabel — a
-  detour — is forbidden in both directions). Ordered inclusion is
-  polynomial; the unordered variant (sibling reorders) is NP-complete
-  and deferred.
-- Bille & Gørtz, *The Tree Inclusion Problem: In Linear Space and
-  Faster* (arXiv cs/0608124). The O(n_T)-space inclusion algorithm —
-  cited in `lib/tree_inclusion.ml` as the upgrade path if inclusion is
-  ever hot; the implemented Kilpeläinen–Mannila-style memoised DP is
-  adequate for the gate's inputs.
-- Bille, *A survey on tree edit distance and related problems* (TCS
-  2005). The map of the edit-distance / alignment / inclusion family.
-  Inclusion is the delete-only specialization of tree edit distance;
-  the recorded upgrade path for the gate — exact Zhang–Shasha TED on
-  changed-region subtrees when inclusion's conservatism starts costing
-  coverage (relabel-bearing or mixed insert+delete residuals) — lives
-  in this map.
+  J. Comput. 1995). Historical (M1.9b → M2.6): ordered tree embedding
+  was the gate's residual-leg approximation — `t''` and the after had to
+  be inclusion-comparable, forbidding relabels in both directions —
+  until the leaf-stream metric made the geodesic equation itself
+  checkable and strictly more discriminating (a relabel *inside* one
+  change is an honest partial step the metric admits). The
+  implementation lives in git history (`lib/tree_inclusion.ml`, deleted
+  on the geodesic-gate branch).
 - Padioleau et al., *Coccinelle* / semantic patches. The output language of
   this feature — diffract's spatch DSL — is directly inspired by
   Coccinelle's SmPL. The `docs/patterns.md` file documents the concrete
