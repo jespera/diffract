@@ -149,6 +149,12 @@ function test() {
 - Does NOT replace `...$var` (PHP spread operator is preserved)
 - Each `...` gets a unique binding name (`..._0`, `..._1`, etc.)
 - Sequence metavars (including `...`) are not supported with `match: partial`.
+- In transform bodies `...` belongs on context lines: it is rejected anywhere
+  on a `+` line (a match-side binder has nothing to bind in a replacement) and
+  as a bare `-`/`+` line. An inline `...` within a `-` line's expression binds
+  normally and the captured run is deleted with it. Rewrite one list element by
+  marking only it between context `...` lines; delete one by putting it (and
+  its separator) on `-` lines between them.
 
 Matching modes (required - must specify one):
 - `match: strict` - Exact positional matching (no extra children allowed, ordered). Use for function calls, arrays.

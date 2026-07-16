@@ -342,7 +342,7 @@ level of ancestor wins for each site. Key properties:
   excluded from the quote-char set so `binary_expression` with `/` is
   not misclassified.
 
-### 3.2 Contextual emission with ellipses (planned)
+### 3.2 Contextual emission with ellipses
 
 The §3.1 emission is bimodal: a `Modified` ancestor emits with its
 non-changed siblings rendered as `$Hk` placeholders, and a `Replaced`
@@ -389,6 +389,103 @@ ellipsed) and the "removal-only standalone rule" case (empty context).
 It gives a uniform mechanism for emitting change pairs at the right
 granularity without per-grammar tuning of which ancestor levels to
 prefer.
+
+#### As built: ellipsis-context realisations (the list case)
+
+Every anchored-variant selector (class 1's "as built" below) also
+builds an *ellipsis-context* variant. At any bracket-delimited level of
+the changed-child chain — the level's first and last kept children are
+a matching anonymous bracket pair, recognized by surface shape, never
+by node type — the level's other children collapse into `...` runs
+around the changed child, instead of staying concrete (anchor mode) or
+becoming per-child holes (inner mode). Both alternatives bake the
+list's arity and the element's position into the pattern, fragmenting
+one rename into per-arity rules; the ellipsis form is arity- and
+position-independent, so its rendered text is identical across sites
+and pools by identity:
+
+```
+  (
+  ...
+- private readonly _H0: DestroyRef
++ private readonly _H0: QuietDestroyRef
+  ...
+  )
+```
+
+Two shapes are built. A **rewrite** — exactly one changed child on each
+side — keeps the changed child, scope-holed by the usual chain descent,
+between the ellipses. A **deletion** — a contiguous run of before-side
+children with no after-side counterpart — keeps the run concrete on
+`-` lines; the run is the element plus the adjacent separator exactly
+as the tree diff leaves them unmatched, so the separator is deleted
+explicitly and the pattern stays within the language rule that `...`
+only ever sits on context lines:
+
+```
+  {
+  ...
+- DestroyRef
+- ,
+  ...
+  }
+```
+
+Insertions stay excluded (un-anchorable, the §5.5 philosophy). The
+synthetic template puts every part on its own line because the surgical
+renderer aligns lines: the `...` must land in the common prefix/suffix
+to render as context — an ellipsis is a match-side binder and is
+invalid on a `+` line.
+
+Two properties are load-bearing:
+
+- **The delimiters, and any head above them, are the re-parse anchor.**
+  A fragment rendered without them re-parses with neutral-context leaf
+  types and the gate finds zero fires: `private` lexes as an ordinary
+  identifier outside a parameter list, and a bare `<` re-parses as
+  JSX/comparison, so type-argument variants only survive under a
+  concrete or holed head (`useQuery<...>`). None of this is *encoded*:
+  the proposer emits both the concrete and the ellipsis variant per
+  selector at every level (deduped when they coincide) and the
+  per-site gate keeps whichever rendering happens to tokenize
+  compatibly with the source. "Context a human would write" and
+  "context the parser needs" coincide, because both resolve a
+  fragment's grammatical role from the same local cues.
+
+- **Ellipsis is the list-shaped member of a tolerance vocabulary.** A
+  rule declines to describe unchanged material in one of three ways,
+  each matched to a shape of that material: a hole (`_H0` — exactly
+  one node; fixed positions), an ellipsis run (ordered siblings, any
+  arity; lists), or omission under `match: field` (optional children;
+  declarations — the expression-body channel). `match: partial`
+  (unordered membership) is the fourth form the pattern language
+  offers and the proposer does not yet use.
+
+The hole-free suppression in variant building ("deeper hole-free
+variants are just the concrete base pair again") exempts
+ellipsis-bearing variants: a deletion has no holes and the deleted
+element usually has children, but eliding the siblings makes it a
+genuine generalization, not the base pair.
+
+Results on the web-xforge corpus (80 ts files, a DestroyRef migration
+with the committer's own codemod as ground truth): 68 → 40 rules. A
+constructor-parameter type rename that fragmented into 13 per-arity
+support-1 rules becomes one support-22 rule; the import-specifier
+deletions become one support-20 rule; the manually-edited sites (a
+different delta) stay correctly separate. Golden fixtures:
+`ts_ctor_param_type_rename`, `ts_import_specifier_delete`.
+
+Known edges, in evidence order. Only the separator-after arm of a
+deletion re-parses usefully inside TS braces (the fragment happens to
+parse as a block; a leading comma degrades the parse), so last-position
+deletions fall to residuals there — propose-and-verify working, not a
+bug. Candidate extensions: a keyword/head-extended variant for
+delimiter-led lists whose parent contributes a fixed token
+(`import {`, `constructor(` — more precise and more readable than bare
+braces); multi-delta runs (`( ... A ... B ... )`); partial-mode
+proposals for genuinely unordered lists (import-specifier sets, JSX
+props), where an ellipsis states an ordered fact about an unordered
+thing and fragments when element order varies across sites.
 
 #### Residual taxonomy from the real soaks (phase 0, 2026-06-12)
 
