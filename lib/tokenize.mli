@@ -30,6 +30,12 @@
     multiple leaves (e.g. a PHP [$x] that splits into [$] + [x]) are not yet
     handled. *)
 
+val is_spread_at : string -> int -> bool
+(** [is_spread_at text i] is true iff the [...] starting at byte [i] of [text]
+    is a spread/rest operator ([...args], [...$rest]) rather than an ellipsis —
+    i.e. it is immediately followed by an identifier character or [$]. Exposed
+    so the transform side classifies a [+]-line [...] with the same rule. *)
+
 val tokenize :
   ctx:Context.t ->
   language:string ->

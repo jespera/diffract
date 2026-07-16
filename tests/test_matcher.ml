@@ -568,6 +568,65 @@ let test_reject_bare_ellipsis_on_edit_line () =
     "nested `bar(...)` on a `-` line is allowed" false
     (raises "@@\nmatch: strict\n@@\n- old(...)\n+ new()")
 
+(* An inline `...` on a `+` line is rejected: the ellipsis is a match-side
+   binder and has nothing to bind in a replacement (it used to be emitted
+   literally into the output). The valid formulation puts the shared `...` on
+   a context line — see the next test. *)
+let test_transform_plus_inline_ellipsis_rejected () =
+  let raises pattern =
+    try
+      ignore (transform ~language:"typescript" ~pattern ~source:"f(a, last);");
+      false
+    with Failure _ -> true
+  in
+  Alcotest.(check bool)
+    "inline `...` on a `+` line rejected" true
+    (raises "@@\nmatch: strict\n@@\n- f(..., last)\n+ g(..., last)");
+  Alcotest.(check bool)
+    "`+`-only inline `...` rejected" true
+    (raises "@@\nmatch: strict\n@@\n- old()\n+ renamed(...)")
+
+(* The valid formulation of "change one element, keep the rest": the shared
+   `...` sits on a context line of its own and only the changing element is
+   marked. The captured siblings are preserved verbatim by the surgical
+   transform — here through type arguments. *)
+let test_transform_context_ellipsis_in_typeargs () =
+  let pattern =
+    "@@\n\
+     match: strict\n\
+     @@\n\
+    \  useQuery<\n\
+    \      ...\n\
+     -     OldUserId\n\
+     + NewUserId\n\
+    \    >(opts)"
+  in
+  let out =
+    transform ~language:"typescript" ~pattern
+      ~source:"useQuery<\"required\", AppUser, OldUserId>(opts);"
+  in
+  Alcotest.(check string)
+    "leading type args preserved"
+    "useQuery<\"required\", AppUser, NewUserId>(opts);" out
+
+(* An inline `...` on a `-` line stays legal: it binds, and the captured run
+   is deliberately dropped by the rewrite. *)
+let test_transform_minus_inline_ellipsis_drops_run () =
+  let pattern =
+    "@@\nmatch: strict\nmetavar x: single\n@@\n- f(..., x)\n+ g(x)"
+  in
+  let out =
+    transform ~language:"typescript" ~pattern ~source:"f(a, b(1), x);"
+  in
+  Alcotest.(check string) "captured run dropped" "g(x);" out
+
+(* A spread (`...args`) on a `+` line is an operator, not an ellipsis — it
+   is emitted verbatim and not rejected. *)
+let test_transform_plus_spread_untouched () =
+  let pattern = "@@\nmatch: strict\n@@\n- g(x)\n+ f(...args)" in
+  let out = transform ~language:"typescript" ~pattern ~source:"g(x);" in
+  Alcotest.(check string) "spread emitted verbatim" "f(...args);" out
+
 (* Adjacent matches are each rewritten once (non-overlapping). *)
 let test_transform_adjacent_matches () =
   let pattern = "@@\nmatch: strict\nmetavar $x: single\n@@\n- wrap($x)\n+ $x" in
@@ -2322,6 +2381,14 @@ let tests =
       `Quick test_transform_whole_container_partial;
     test_case "transform: bare ellipsis on -/+ line rejected" `Quick
       test_reject_bare_ellipsis_on_edit_line;
+    test_case "transform: inline + ellipsis rejected" `Quick
+      test_transform_plus_inline_ellipsis_rejected;
+    test_case "transform: context ellipsis in type args" `Quick
+      test_transform_context_ellipsis_in_typeargs;
+    test_case "transform: - inline ellipsis drops run" `Quick
+      test_transform_minus_inline_ellipsis_drops_run;
+    test_case "transform: + spread untouched" `Quick
+      test_transform_plus_spread_untouched;
     test_case "transform: adjacent matches" `Quick
       test_transform_adjacent_matches;
     test_case "transform: placeholder boundary" `Quick
