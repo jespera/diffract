@@ -370,8 +370,16 @@ let delta_keyed_pair (cp : Tree_diff.change_pair) : edit_pat option =
     under a concrete head kept by anchor mode ([constructor], the generic type
     name), so the emitted rule reads [head( ... delta ... )].
 
+    A one-sided before-run — a contiguous stretch of unmatched children with
+    nothing unmatched on the after side — is a DELETION from the list; the run
+    (the element plus the adjacent separator tree-diff leaves unmatched)
+    renders as [-] lines between the context ellipses, so the separator is
+    deleted explicitly rather than by cleanup magic.
+
     Returns [None] (caller falls back to the concrete form) unless the bracket
-    shape holds and exactly one non-delimiter child is unmatched on each side. *)
+    shape holds and the unmatched children form exactly one changed child on
+    each side (rewrite) or one contiguous before-side run with a named member
+    (deletion). *)
 let ellipsize_level (bn : Tree.src Tree.t) (an : Tree.src Tree.t)
     (b_assign : (Tree.src Tree.child * int option) list)
     (aks : Tree.src Tree.child list) (used : bool array)
@@ -416,31 +424,58 @@ let ellipsize_level (bn : Tree.src Tree.t) (an : Tree.src Tree.t)
       Array.iteri
         (fun i u -> if (not u) && i > 0 && i < na - 1 then unmatched_a := i :: !unmatched_a)
         used;
-      match (!unmatched_b, !unmatched_a) with
+      let unmatched_b = List.rev !unmatched_b in
+      let unmatched_a = List.rev !unmatched_a in
+      let contiguous = function
+        | [] -> false
+        | x :: rest ->
+            let ok = ref true and prev = ref x in
+            List.iter
+              (fun i ->
+                if i <> !prev + 1 then ok := false;
+                prev := i)
+              rest;
+            !ok
+      in
+      (* One child per line: the surgical renderer aligns lines, so the
+         ellipses must sit on lines of their own to become context. *)
+      let mk (node : Tree.src Tree.t) open_c mids close_c =
+        let children =
+          (open_c :: { field_name = None; child = Ellipsis } :: mids)
+          @ [ { field_name = None; child = Ellipsis }; close_c ]
+        in
+        let template =
+          List.concat
+            (List.mapi
+               (fun i _ -> if i = 0 then [ Slot 0 ] else [ Lit "\n"; Slot i ])
+               children)
+        in
+        PNode
+          {
+            node_type = node.node_type;
+            is_named = node.is_named;
+            children;
+            template;
+          }
+      in
+      match (unmatched_b, unmatched_a) with
       | [ bi ], [ ai ] ->
-          let mk (node : Tree.src Tree.t) open_c chain close_c =
-            PNode
-              {
-                node_type = node.node_type;
-                is_named = node.is_named;
-                children =
-                  [
-                    open_c;
-                    { field_name = None; child = Ellipsis };
-                    chain;
-                    { field_name = None; child = Ellipsis };
-                    close_c;
-                  ];
-                template =
-                  [
-                    Slot 0; Lit "\n"; Slot 1; Lit "\n"; Slot 2; Lit "\n";
-                    Slot 3; Lit "\n"; Slot 4;
-                  ];
-              }
-          in
           Some
-            ( mk bn bc.(0) bc.(bi) bc.(nb - 1),
-              mk an ac.(0) ac.(ai) ac.(na - 1) )
+            ( mk bn bc.(0) [ bc.(bi) ] bc.(nb - 1),
+              mk an ac.(0) [ ac.(ai) ] ac.(na - 1) )
+      | (_ :: _ as bis), []
+        when contiguous bis
+             && List.exists (fun i -> (fst ba.(i)).node.is_named) bis ->
+          (* Deletion of a contiguous run — an element plus the adjacent
+             separator tree-diff leaves unmatched. The run stays concrete on
+             [-] lines (so the separator is deleted explicitly, no cleanup
+             magic), the after side is the same list with only the ellipses:
+             [{ ... - DestroyRef - , ... }]. Pure-separator runs are junk,
+             not a deletion — require a named child. Insertions (an
+             after-side-only run) stay un-anchorable (§5.5). *)
+          Some
+            ( mk bn bc.(0) (List.map (fun i -> bc.(i)) bis) bc.(nb - 1),
+              mk an ac.(0) [] ac.(na - 1) )
       | _ -> None
     end
 
@@ -801,7 +836,8 @@ let anchored_variants (cp : Tree_diff.change_pair) :
        support-1 rule, which states the change worse than its residual
        (the §5.5 pure-additions philosophy). *)
     if !b_delta = [] then None
-    else if holes = 0 && not !all_leaves then None
+    else if holes = 0 && (not !all_leaves) && not (contains_ellipsis ep.before)
+    then None
     else if
       has_concrete ep.before && has_concrete_edit ep && no_orphan_after_holes ep
       && no_junk_passthrough ep
