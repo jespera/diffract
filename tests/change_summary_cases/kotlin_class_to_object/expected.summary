@@ -1,0 +1,20 @@
+# rule R1  support=2  language=kotlin
+@@
+match: strict
+metavar _H0: single
+@@
+  @Module
+- class _H0 {
++ object _H0 {
+  ...
+  }
+# sites R1
+a.kt
+b.kt
+
+# residual
+--- a/c.kt
++++ b/c.kt
+@@ -7,1 +7,1 @@
+-class GammaModule {
++object GammaModule {
