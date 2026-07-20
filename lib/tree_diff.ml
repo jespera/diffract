@@ -221,6 +221,46 @@ let align_children mapping ~before_source ~after_source
       end
     end
   done;
+  (* Phase B2: cross-type rewrite recovery. Same-type matching leaves a
+     construct re-worded into a different node type (Kotlin
+     [class Foo { … }] → [object Foo { … }], TS [var x] → [let x]) as an
+     unrelated Removed+Added pair, even though the hash phases have
+     already matched essentially all of its content across the two
+     trees. Pair such leftovers when their pre-matched overlap is
+     near-total. The bar is stricter than Phase B's: dice is noisy on
+     small nodes, so demand substance on both sides as well as a high
+     score, and offer no low-similarity fallback. *)
+  let cross_type_threshold = 0.8 in
+  let cross_type_min_descendants = 4 in
+  for bi = 0 to blen - 1 do
+    if
+      before_anchor.(bi) = -1
+      && (not (is_matched_before mapping before_arr.(bi)))
+      && descendant_count before_arr.(bi) >= cross_type_min_descendants
+    then begin
+      let best_ai = ref (-1) in
+      let best_sim = ref neg_infinity in
+      for ai = 0 to alen - 1 do
+        if
+          (not after_used.(ai))
+          && (not (is_matched_after mapping after_arr.(ai)))
+          && before_arr.(bi).node_type <> after_arr.(ai).node_type
+          && descendant_count after_arr.(ai) >= cross_type_min_descendants
+        then begin
+          let dice = dice_similarity mapping before_arr.(bi) after_arr.(ai) in
+          if dice > !best_sim then begin
+            best_sim := dice;
+            best_ai := ai
+          end
+        end
+      done;
+      if !best_ai >= 0 && !best_sim >= cross_type_threshold then begin
+        before_anchor.(bi) <- !best_ai;
+        after_used.(!best_ai) <- true;
+        add_match mapping before_arr.(bi) after_arr.(!best_ai)
+      end
+    end
+  done;
   (* Phase C: Build result in order *)
   (* Walk through before-children, emitting anchored pairs, removals *)
   let next_after = ref 0 in
