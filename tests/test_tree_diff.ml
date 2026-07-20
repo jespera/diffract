@@ -250,6 +250,75 @@ let test_duplicate_siblings_across_functions () =
   in
   Alcotest.(check bool) "found 2→99 change pair" true found
 
+(* Test: cross-type rewrite recovery (Phase B2) — a construct re-worded into a
+   different node type with near-identical content pairs as a rewrite, not as
+   an unrelated Removed+Added. Kotlin [class Foo { … }] → [object Foo { … }]
+   flips the declaration's node type while the annotation, name, and body are
+   byte-identical; the hash phases pre-match all that content, so the
+   cross-type pass pairs the declarations. *)
+let test_cross_type_rewrite () =
+  let parse_kt source = Diffract.parse_tree ~ctx ~language:"kotlin" source in
+  let before =
+    parse_kt "@Module\nclass Foo {\n    fun bar(x: Int): Int = x + 1\n}\n"
+  in
+  let after =
+    parse_kt "@Module\nobject Foo {\n    fun bar(x: Int): Int = x + 1\n}\n"
+  in
+  let d = Tree_diff.diff ~before ~after in
+  let rec count_ra = function
+    | Tree_diff.Unchanged | Tree_diff.Replaced -> (0, 0)
+    | Tree_diff.Modified { child_changes } ->
+        List.fold_left
+          (fun (r, a) cc ->
+            match cc with
+            | Tree_diff.Removed _ -> (r + 1, a)
+            | Tree_diff.Added _ -> (r, a + 1)
+            | Tree_diff.Changed { change; _ } ->
+                let r2, a2 = count_ra change in
+                (r + r2, a + a2)
+            | Tree_diff.Same _ -> (r, a))
+          (0, 0) child_changes
+  in
+  let removals, additions = count_ra d.root_change in
+  Alcotest.(check int) "no removals" 0 removals;
+  Alcotest.(check int) "no additions" 0 additions;
+  (* The pair surfaces as a whole-declaration Replaced change pair. *)
+  let pairs = Tree_diff.change_pairs d in
+  let found =
+    List.exists
+      (fun (p : Tree_diff.change_pair) ->
+        p.before_node.node_type = "class_declaration"
+        && p.after_node.node_type = "object_declaration")
+      pairs
+  in
+  Alcotest.(check bool) "class_declaration paired with object_declaration" true
+    found
+
+(* Test: the cross-type pass stays conservative — unrelated Removed+Added
+   siblings of different types share no pre-matched content (dice 0.0) and
+   must NOT be paired. *)
+let test_cross_type_unrelated_not_paired () =
+  let before = parse "function f() { compute(alpha, beta, gamma); }" in
+  let after = parse "function f() { return widget.frobnicate.settings; }" in
+  let d = Tree_diff.diff ~before ~after in
+  let rec has_removed_and_added = function
+    | Tree_diff.Unchanged | Tree_diff.Replaced -> (false, false)
+    | Tree_diff.Modified { child_changes } ->
+        List.fold_left
+          (fun (r, a) cc ->
+            match cc with
+            | Tree_diff.Removed _ -> (true, a)
+            | Tree_diff.Added _ -> (r, true)
+            | Tree_diff.Changed { change; _ } ->
+                let r2, a2 = has_removed_and_added change in
+                (r || r2, a || a2)
+            | Tree_diff.Same _ -> (r, a))
+          (false, false) child_changes
+  in
+  let removed, added = has_removed_and_added d.root_change in
+  Alcotest.(check bool) "unrelated removal stays Removed" true removed;
+  Alcotest.(check bool) "unrelated addition stays Added" true added
+
 let tests =
   [
     Alcotest.test_case "identical trees" `Quick test_identical_trees;
@@ -267,4 +336,8 @@ let tests =
     Alcotest.test_case "duplicate subtrees" `Quick test_duplicate_subtrees;
     Alcotest.test_case "duplicate siblings across functions" `Quick
       test_duplicate_siblings_across_functions;
+    Alcotest.test_case "cross-type rewrite recovery" `Quick
+      test_cross_type_rewrite;
+    Alcotest.test_case "cross-type unrelated not paired" `Quick
+      test_cross_type_unrelated_not_paired;
   ]
