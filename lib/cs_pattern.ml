@@ -170,8 +170,17 @@ let edit_hole_list ep =
   let hs = collect_holes hs ep.after in
   List.sort compare hs
 
-(** Render an edit_pat as a .pat-style spatch block body. *)
-let render_pattern_body (ep : edit_pat) : string =
+let rec contains_ellipsis = function
+  | Ellipsis -> true
+  | Hole _ | Leaf _ -> false
+  | PNode { children; _ } ->
+      List.exists (fun c -> contains_ellipsis c.child) children
+
+(** Render an edit_pat as a .pat-style spatch block body, every line marked
+    [-]/[+]. Internal: {!render_pattern_body} below dispatches away from this
+    form when the after side carries an [Ellipsis], which is only legal on a
+    context line. *)
+let render_pattern_body_plain (ep : edit_pat) : string =
   let holes = edit_hole_list ep in
   let buf = Buffer.create 128 in
   Buffer.add_string buf "@@\n";
@@ -197,7 +206,7 @@ let render_pattern_body (ep : edit_pat) : string =
     rule. The unchanged signature children render as a context line, the changed
     child as [-]/[+], and children selected by [omit] (presence-varying or
     edge-positioned optionals — return type, modifiers, annotations) are dropped
-    so field mode ignores them. Falls back to {!render_pattern_body} when the
+    so field mode ignores them. Falls back to {!render_pattern_body_plain} when the
     edit is not a single-child change of a [PNode] pair (so callers can use it
     unconditionally). [omit] receives a child's [field_name]. *)
 let render_pattern_body_field ?(omit = fun (_ : string option) -> false)
@@ -278,8 +287,8 @@ let render_pattern_body_field ?(omit = fun (_ : string option) -> false)
           emit "+ " plus;
           if String.trim suffix <> "" then emit "  " suffix;
           Buffer.contents buf
-      | _ -> render_pattern_body ep)
-  | _ -> render_pattern_body ep
+      | _ -> render_pattern_body_plain ep)
+  | _ -> render_pattern_body_plain ep
 
 (** Surgical render (§3.2 anchored realisations): lines common to both sides
     become context lines, so the transform's edit spans only the changed lines.
@@ -303,7 +312,7 @@ let render_pattern_body_surgical (ep : edit_pat) : string =
   in
   let suffix = List.rev suffix in
   let b_mid = List.rev b_mid_rev and a_mid = List.rev a_mid_rev in
-  if prefix = [] && suffix = [] then render_pattern_body ep
+  if prefix = [] && suffix = [] then render_pattern_body_plain ep
   else begin
     let holes = edit_hole_list ep in
     let buf = Buffer.create 128 in
@@ -324,6 +333,46 @@ let render_pattern_body_surgical (ep : edit_pat) : string =
       suffix;
     Buffer.contents buf
   end
+
+(** Put a collapsed bracket group ({!ellipsis_list_of}'s [{...}] shape) one
+    part per line — [{], [...], [}] — so the surgical render's line alignment
+    can land the shared ellipsis in the common prefix/suffix as context
+    lines. Narrow by design: only the exact single-[Ellipsis] bracket
+    template is rewritten; anything else passes through untouched. *)
+let rec multiline_ellipsis_lists = function
+  | PNode
+      ({
+         children = [ { child = Ellipsis; _ } ];
+         template = [ Lit o; Slot 0; Lit c ];
+         _;
+       } as n) ->
+      PNode { n with template = [ Lit (o ^ "\n"); Slot 0; Lit ("\n" ^ c) ] }
+  | PNode n ->
+      PNode
+        {
+          n with
+          children =
+            List.map
+              (fun c -> { c with child = multiline_ellipsis_lists c.child })
+              n.children;
+        }
+  | (Hole _ | Leaf _ | Ellipsis) as p -> p
+
+(** Render an edit_pat as a .pat-style spatch block body. An [Ellipsis] on the
+    after side is only expressible on a context line (the matcher rejects
+    ['...'] on a ['+'] line — a match-side binder has nothing to bind in a
+    replacement), so such edits render through the surgical line-aligned form
+    with their bracket groups broken one part per line; the shared [{], [...],
+    [}] lines then align into context and only the true delta carries
+    [-]/[+] markers. Everything else keeps the plain whole-construct render. *)
+let render_pattern_body (ep : edit_pat) : string =
+  if contains_ellipsis ep.after then
+    render_pattern_body_surgical
+      {
+        before = multiline_ellipsis_lists ep.before;
+        after = multiline_ellipsis_lists ep.after;
+      }
+  else render_pattern_body_plain ep
 
 (** Render a removal-only pattern as a .pat-style block body containing only [-]
     lines. Used for unpaired Before_side one-sided clusters that survive M1.6
@@ -489,12 +538,6 @@ let node_has_ellipsis = function
         (function { child = Ellipsis; _ } -> true | _ -> false)
         children
   | _ -> false
-
-let rec contains_ellipsis = function
-  | Ellipsis -> true
-  | Hole _ | Leaf _ -> false
-  | PNode { children; _ } ->
-      List.exists (fun c -> contains_ellipsis c.child) children
 
 (** Replace a delimited node's interior with a single [Ellipsis], keeping its
     bracket pair — [(a, b)] / [<S, E>] become [(...)] / [<...>]. *)
