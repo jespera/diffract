@@ -358,21 +358,28 @@ let rec multiline_ellipsis_lists = function
         }
   | (Hole _ | Leaf _ | Ellipsis) as p -> p
 
-(** Render an edit_pat as a .pat-style spatch block body. An [Ellipsis] on the
-    after side is only expressible on a context line (the matcher rejects
+(** Render an edit_pat as a .pat-style spatch block body, through the surgical
+    line-aligned form: lines shared by both sides render as context, only the
+    true delta carries [-]/[+] markers (falling back to the plain
+    whole-construct render when nothing aligns). Two reasons. An [Ellipsis] on
+    the after side is only expressible on a context line (the matcher rejects
     ['...'] on a ['+'] line — a match-side binder has nothing to bind in a
-    replacement), so such edits render through the surgical line-aligned form
-    with their bracket groups broken one part per line; the shared [{], [...],
-    [}] lines then align into context and only the true delta carries
-    [-]/[+] markers. Everything else keeps the plain whole-construct render. *)
+    replacement), so those edits additionally get their collapsed bracket
+    groups broken one part per line first, letting the shared [{], [...], [}]
+    lines align into context. And for everything else the aligned form is
+    simply the more precise statement of the rule — a keyword rewrite of a
+    multi-line construct reads as its one changed line, not as delete-all,
+    reinsert-all. *)
 let render_pattern_body (ep : edit_pat) : string =
-  if contains_ellipsis ep.after then
-    render_pattern_body_surgical
+  let ep =
+    if contains_ellipsis ep.after then
       {
         before = multiline_ellipsis_lists ep.before;
         after = multiline_ellipsis_lists ep.after;
       }
-  else render_pattern_body_plain ep
+    else ep
+  in
+  render_pattern_body_surgical ep
 
 (** Render a removal-only pattern as a .pat-style block body containing only [-]
     lines. Used for unpaired Before_side one-sided clusters that survive M1.6
