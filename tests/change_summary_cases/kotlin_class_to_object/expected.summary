@@ -3,7 +3,7 @@
 match: strict
 metavar _H0: single
 @@
-  @Module
+  @Suite
 - class _H0 {
 + object _H0 {
   ...
@@ -15,6 +15,6 @@ b.kt
 # residual
 --- a/c.kt
 +++ b/c.kt
-@@ -7,1 +7,1 @@
--class GammaModule {
-+object GammaModule {
+@@ -6,1 +6,1 @@
+-class GammaSuite {
++object GammaSuite {

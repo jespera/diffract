@@ -1,24 +1,21 @@
 package com.example.gamma
 
-import com.example.di.Module
-import com.example.di.Provides
+import com.example.testing.Suite
 
-@Module
-object GammaModule {
-    @Provides
-    fun provideGamma(dep: DepService, clock: Clock): GammaService =
-        GammaService(dep, clock, retries = 3)
+@Suite
+object GammaSuite {
+    fun checkConversion(input: Source, clock: Clock): Report =
+        Report(input, clock, retries = 3)
 }
 
-@Module
-class KeeperModule {
+@Suite
+class KeeperSuite {
     companion object {
         private val log = logger { }
     }
 
-    @Provides
-    fun provideKeeper(store: Store): KeeperService {
-        log.info("creating keeper")
-        return KeeperService(store)
+    fun checkKeeper(store: Store): Report {
+        log.info("checking keeper")
+        return Report(store)
     }
 }
