@@ -176,6 +176,43 @@ let rec contains_ellipsis = function
   | PNode { children; _ } ->
       List.exists (fun c -> contains_ellipsis c.child) children
 
+(** Strip the longest common leading whitespace (over non-blank lines) from a
+    line block. The matcher splices a [+] line's text verbatim at the deleted
+    span's column, and the deletion span is token-tight — so structural
+    indentation baked into rendered [-]/[+] lines (site bytes carried by the
+    pattern's template [Lit]s) is applied ON TOP of the source's own
+    indentation, doubling it (the surgical-indentation wart; the rule format
+    expects edit lines to omit the indentation the container supplies, see
+    docs/surgical-transforms.md). Dedent [-] and [+] runs jointly so their
+    relative alignment survives; match-side leading whitespace is
+    insignificant to the tokenizer, so only the splice behaviour changes. *)
+let dedent_block (lines : string list) : string list =
+  let leading_ws l =
+    let n = String.length l in
+    let i = ref 0 in
+    while !i < n && (l.[!i] = ' ' || l.[!i] = '\t') do
+      incr i
+    done;
+    if !i = n then None (* blank line: no vote, stripped by min below *)
+    else Some !i
+  in
+  let common =
+    List.fold_left
+      (fun acc l ->
+        match leading_ws l with
+        | None -> acc
+        | Some w -> ( match acc with None -> Some w | Some a -> Some (min a w)))
+      None lines
+  in
+  match common with
+  | None | Some 0 -> lines
+  | Some c ->
+      List.map
+        (fun l ->
+          if String.length l >= c then String.sub l c (String.length l - c)
+          else l)
+        lines
+
 (** Render an edit_pat as a .pat-style spatch block body, every line marked
     [-]/[+]. Internal: {!render_pattern_body} below dispatches away from this
     form when the after side carries an [Ellipsis], which is only legal on a
@@ -191,14 +228,15 @@ let render_pattern_body_plain (ep : edit_pat) : string =
         (Printf.sprintf "metavar %s: single\n" (hole_name h)))
     holes;
   Buffer.add_string buf "@@\n";
-  let before_text = render_pat_node ep.before in
-  List.iter
-    (fun line -> Buffer.add_string buf (Printf.sprintf "- %s\n" line))
-    (String.split_on_char '\n' before_text);
-  let after_text = render_pat_node ep.after in
-  List.iter
-    (fun line -> Buffer.add_string buf (Printf.sprintf "+ %s\n" line))
-    (String.split_on_char '\n' after_text);
+  let b_lines = String.split_on_char '\n' (render_pat_node ep.before) in
+  let a_lines = String.split_on_char '\n' (render_pat_node ep.after) in
+  let nb = List.length b_lines in
+  let dedented = dedent_block (b_lines @ a_lines) in
+  List.iteri
+    (fun i line ->
+      Buffer.add_string buf
+        (Printf.sprintf "%s %s\n" (if i < nb then "-" else "+") line))
+    dedented;
   Buffer.contents buf
 
 (** Field-mode render (Piece B): render a declaration-anchored [edit_pat] whose
@@ -326,8 +364,13 @@ let render_pattern_body_surgical (ep : edit_pat) : string =
     List.iter
       (fun l -> Buffer.add_string buf (Printf.sprintf "  %s\n" l))
       prefix;
-    List.iter (fun l -> Buffer.add_string buf (Printf.sprintf "- %s\n" l)) b_mid;
-    List.iter (fun l -> Buffer.add_string buf (Printf.sprintf "+ %s\n" l)) a_mid;
+    let nb = List.length b_mid in
+    let dedented = dedent_block (b_mid @ a_mid) in
+    List.iteri
+      (fun i l ->
+        Buffer.add_string buf
+          (Printf.sprintf "%s %s\n" (if i < nb then "-" else "+") l))
+      dedented;
     List.iter
       (fun l -> Buffer.add_string buf (Printf.sprintf "  %s\n" l))
       suffix;
