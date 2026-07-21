@@ -356,6 +356,98 @@ listed rules produce, so rule-id order is application order, and each
 site's change factors as primary ∘ secondary ∘ residual, every tier
 individually safe. (Fixture: `tsx_memo_tiered_deps`.)
 
+### A rewrite that changes the node type
+
+A Kotlin codemod turns annotated, parameterless test-suite classes into
+objects. This flips the declaration's tree-sitter node type outright
+(`class_declaration` → `object_declaration`) — the same shape as TS
+`var` → `let` or `interface` → `type` — and the whole class body rides
+along unchanged:
+
+```
+a.kt  @Suite class AlphaSuite { … }         → object     converted
+b.kt  @Suite class BetaSuite { … }          → object     converted
+      @Suite(includes = [BetaSuite::class])
+      class BetaNightlySuite { … }          → unchanged  argumented annotation
+c.kt  @Suite class GammaSuite { … }         → object     converted — but see the residual
+      @Suite class KeeperSuite {
+          companion object { … } … }        → unchanged  objects can't declare companions
+```
+
+```
+# rule R1  support=2  language=kotlin
+@@
+match: strict
+metavar _H0: single
+@@
+  @Suite
+- class _H0 {
++ object _H0 {
+  ...
+  }
+# sites R1
+a.kt
+b.kt
+
+# residual
+--- a/c.kt
++++ b/c.kt
+@@ -6,1 +6,1 @@
+-class GammaSuite {
++object GammaSuite {
+```
+
+Three things worth noticing. The `{` sitting directly after the name is
+the rule's *precondition*, not decoration: constructor parameters and
+supertype calls would appear between the name and the brace, and both
+make class→object invalid Kotlin — so two lines of concrete syntax state
+"parameterless, no supertype" exactly. Second, `BetaNightlySuite` is
+untouched without any special handling: the pattern addresses the
+annotation, so `@Suite(includes = [...])` — structurally a different
+annotation — simply doesn't match. Third, `c.kt` falls to a residual
+rather than being claimed, even though `GammaSuite`'s change is exactly
+rule-shaped: a rule applies wherever it matches, and `KeeperSuite`
+matches too — but an `object` cannot declare a `companion object`, so
+the original change correctly skipped it, and applying the rule there
+would be wrong. The gate refuses the file rather than claim a site it
+can only reach by also doing damage; the residual is precisely the
+reviewer's "this file deviates from the pattern" queue. (Fixture:
+`kotlin_class_to_object`.)
+
+The same rule can be hand-written as an unbalanced prefix — the
+tokenizer matches leaf runs, so the pattern does not need to be a
+complete syntactic construct:
+
+```
+@@
+match: strict
+metavar C: single
+@@
+  @Suite
+- class C {
++ object C {
+```
+
+And had the codemod also converted the `@Suite(includes = [...])`
+classes, that variant is one more rule away — an inline `...` in the
+annotation's argument list binds the arguments as context:
+
+```
+@@
+match: strict
+metavar C: single
+@@
+  @Suite(...)
+- class C {
++ object C {
+  ...
+  }
+```
+
+The two rules partition the cases (a bare annotation and a parenthesised
+one are structurally distinct, so neither rule fires on the other's
+sites), and both keep the brace-adjacency precondition.
+
 ## How it works, briefly
 
 For every changed file, `summarize` computes an AST-level diff

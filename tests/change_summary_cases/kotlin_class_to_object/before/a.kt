@@ -1,11 +1,9 @@
 package com.example.alpha
 
-import com.example.di.Module
-import com.example.di.Provides
+import com.example.testing.Suite
 
-@Module
-class AlphaModule {
-    @Provides
-    fun provideAlpha(dep: DepService, clock: Clock): AlphaService =
-        AlphaService(dep, clock)
+@Suite
+class AlphaSuite {
+    fun checkParser(input: Source, clock: Clock): Report =
+        Report(input, clock)
 }

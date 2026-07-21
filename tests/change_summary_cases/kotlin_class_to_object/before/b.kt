@@ -1,21 +1,17 @@
 package com.example.beta
 
-import com.example.di.Module
-import com.example.di.Provides
+import com.example.testing.Suite
 
-@Module
-class BetaModule {
+@Suite
+class BetaSuite {
     private val defaultLimit = 42
 
-    @Provides
-    fun provideBeta(registry: Registry): BetaService = BetaService(registry)
+    fun checkRegistry(registry: Registry): Report = Report(registry)
 
-    @Provides
-    fun provideLimit(): Int = defaultLimit
+    fun checkLimit(): Int = defaultLimit
 }
 
-@Module(includes = [BetaModule::class])
-class BetaAggregatorModule {
-    @Provides
-    fun provideAggregate(beta: BetaService): Aggregate = Aggregate(beta)
+@Suite(includes = [BetaSuite::class])
+class BetaNightlySuite {
+    fun checkAggregate(beta: Report): Aggregate = Aggregate(beta)
 }
