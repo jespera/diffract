@@ -52,7 +52,7 @@ let print_pattern_warnings ~pattern_text =
     (Diffract.Matcher.pattern_warnings pattern_text)
 
 let verbose_flag =
-  let doc = "Print phase progress and timing to stderr." in
+  let doc = "Print per-file progress (and phase timing) to stderr." in
   Arg.(value & flag & info [ "v"; "verbose" ] ~doc)
 
 let explain_flag =
@@ -95,14 +95,19 @@ let transform_file ~ctx ~language ~pattern_text ~in_place file_path =
   end
 
 let scan_directory_apply ~ctx ~language ~pattern_text ~include_pattern
-    ~exclude_dirs ~in_place dir_path =
+    ~exclude_dirs ~in_place ~verbose dir_path =
   let files = find_files ~pattern:include_pattern ~exclude_dirs dir_path in
   let total_files = List.length files in
   let total_edits = ref 0 in
   let files_changed = ref 0 in
   let errors = ref [] in
-  List.iter
-    (fun file_path ->
+  (* Diffs are buffered and printed after the scan so they land together at
+     the end, below any per-file progress log (like summarize's output). *)
+  let output = Buffer.create 1024 in
+  List.iteri
+    (fun i file_path ->
+      if verbose then
+        Printf.eprintf "[apply] (%d/%d) %s\n%!" (i + 1) total_files file_path;
       try
         let changed, diff =
           transform_file ~ctx ~language ~pattern_text ~in_place file_path
@@ -110,11 +115,12 @@ let scan_directory_apply ~ctx ~language ~pattern_text ~include_pattern
         if changed then begin
           incr files_changed;
           incr total_edits;
-          if not in_place then print_string diff
+          if not in_place then Buffer.add_string output diff
         end
       with Failure msg | Sys_error msg ->
         errors := (file_path, msg) :: !errors)
     files;
+  Buffer.output_buffer stdout output;
   Printf.printf "Transformed %d file(s) (scanned %d files)\n" !files_changed
     total_files;
   if !errors <> [] then begin
@@ -308,15 +314,21 @@ let search_file ~ctx ~language ~pattern_text file_path =
   with Failure msg | Sys_error msg -> Error msg
 
 let scan_directory_search ~ctx ~language ~pattern_text ~include_pattern
-    ~exclude_dirs ~explain dir_path =
+    ~exclude_dirs ~explain ~verbose dir_path =
   let files = find_files ~pattern:include_pattern ~exclude_dirs dir_path in
   let total_files = List.length files in
   let total_matches = ref 0 in
   let files_with_matches = ref 0 in
   let files_with_parse_errors = ref [] in
   let errors = ref [] in
-  List.iter
-    (fun file_path ->
+  (* Matches are formatted eagerly (so sources aren't retained) but printed
+     after the scan, so they land together at the end, below any per-file
+     progress log (like summarize's output). *)
+  let output = Buffer.create 1024 in
+  List.iteri
+    (fun i file_path ->
+      if verbose then
+        Printf.eprintf "[search] (%d/%d) %s\n%!" (i + 1) total_files file_path;
       match search_file ~ctx ~language ~pattern_text file_path with
       | Error msg -> errors := (file_path, msg) :: !errors
       | Ok (source_text, results, parse_errors) ->
@@ -328,10 +340,12 @@ let scan_directory_search ~ctx ~language ~pattern_text ~include_pattern
             total_matches := !total_matches + List.length results;
             List.iter
               (fun r ->
-                print_string (format_search_match ~file_path ~source_text r))
+                Buffer.add_string output
+                  (format_search_match ~file_path ~source_text r))
               results
           end)
     files;
+  Buffer.output_buffer stdout output;
   Printf.printf "Found %d match(es) in %d file(s) (scanned %d files)\n"
     !total_matches !files_with_matches total_files;
   if !files_with_parse_errors <> [] then begin
@@ -366,7 +380,7 @@ let scan_directory_search ~ctx ~language ~pattern_text ~include_pattern
          files)
 
 let run_search pattern_path target language include_pattern exclude_patterns
-    debug_tokens explain =
+    debug_tokens explain verbose =
   let ctx = Diffract.Context.create () in
   let exclude_dirs =
     if exclude_patterns = [] then default_excludes else exclude_patterns
@@ -387,7 +401,7 @@ let run_search pattern_path target language include_pattern exclude_patterns
               )
         | Some glob ->
             scan_directory_search ~ctx ~language ~pattern_text
-              ~include_pattern:glob ~exclude_dirs ~explain target;
+              ~include_pattern:glob ~exclude_dirs ~explain ~verbose target;
             `Ok ())
       else begin
         let source_text =
@@ -447,12 +461,12 @@ let search_cmd =
     Term.(
       ret
         (const run_search $ pattern $ target $ language $ include_pattern
-       $ exclude_patterns $ debug_tokens_flag $ explain_flag))
+       $ exclude_patterns $ debug_tokens_flag $ explain_flag $ verbose_flag))
 
 (* ── apply subcommand ───────────────────────────────────────────────── *)
 
 let run_apply pattern_path target language include_pattern exclude_patterns
-    in_place debug_tokens =
+    in_place debug_tokens verbose =
   let ctx = Diffract.Context.create () in
   let exclude_dirs =
     if exclude_patterns = [] then default_excludes else exclude_patterns
@@ -473,7 +487,7 @@ let run_apply pattern_path target language include_pattern exclude_patterns
               )
         | Some glob ->
             scan_directory_apply ~ctx ~language ~pattern_text
-              ~include_pattern:glob ~exclude_dirs ~in_place target;
+              ~include_pattern:glob ~exclude_dirs ~in_place ~verbose target;
             `Ok ())
       else begin
         let changed, diff =
@@ -509,7 +523,7 @@ let apply_cmd =
     Term.(
       ret
         (const run_apply $ pattern $ target $ language $ include_pattern
-       $ exclude_patterns $ in_place_flag $ debug_tokens_flag))
+       $ exclude_patterns $ in_place_flag $ debug_tokens_flag $ verbose_flag))
 
 (* ── diff subcommand ────────────────────────────────────────────────── *)
 
