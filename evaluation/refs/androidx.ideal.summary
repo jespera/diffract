@@ -1,0 +1,465 @@
+# ============================================================================
+# ideal.summary — hand-constructed ground-truth summary of this changeset
+# (DuckDuckGo Android, AndroidX migration, 143 changed .kt files).
+#
+# Purpose: the target to refine `summarize` against, and a probe of what the
+# pattern language can/cannot express. Compare with baseline.summary
+# (57 rules + 51 residuals, main @ 38c4951).
+#
+# Conventions:
+#   - support = number of site files (computed textually from the corpus;
+#     not machine-checked through the safety gate).
+#   - Rules are grouped: I* imports, A* API changes, then the per-class
+#     rename table, then residuals.
+#   - Sections marked GAP describe things the current language/proposer
+#     cannot express or would not propose; details at each site.
+# ============================================================================
+
+# ---- Import renames: package-uniform families (class name abstracted) -----
+# These three packages map 1:1 onto their androidx successors, so one rule
+# with a class-name metavar covers the whole family. EXPRESSIBLE today
+# (bare metavar names required for Kotlin). The baseline instead emits one
+# rule per class plus the `- android + androidx` leaf rule.
+
+# rule I1  support=47  language=kotlin
+@@
+match: strict
+metavar NAME: single
+@@
+- import android.arch.lifecycle.NAME
++ import androidx.lifecycle.NAME
+# sites I1
+app/src/androidTest/java/com/duckduckgo/app/TestExtensions.kt
+app/src/androidTest/java/com/duckduckgo/app/bookmarks/ui/BookmarksViewModelTest.kt
+app/src/androidTest/java/com/duckduckgo/app/browser/BrowserTabViewModelTest.kt
+app/src/androidTest/java/com/duckduckgo/app/browser/BrowserViewModelTest.kt
+app/src/androidTest/java/com/duckduckgo/app/feedback/ui/FeedbackViewModelTest.kt
+app/src/androidTest/java/com/duckduckgo/app/launch/LaunchViewModelTest.kt
+app/src/androidTest/java/com/duckduckgo/app/migration/LegacyMigrationTest.kt
+app/src/androidTest/java/com/duckduckgo/app/privacy/ui/PrivacyDashboardViewModelTest.kt
+app/src/androidTest/java/com/duckduckgo/app/privacy/ui/PrivacyPracticesViewModelTest.kt
+app/src/androidTest/java/com/duckduckgo/app/privacy/ui/ScorecardViewModelTest.kt
+app/src/androidTest/java/com/duckduckgo/app/privacy/ui/TrackerNetworksViewModelTest.kt
+app/src/androidTest/java/com/duckduckgo/app/settings/SettingsViewModelTest.kt
+app/src/androidTest/java/com/duckduckgo/app/tabs/model/TabDataRepositoryTest.kt
+app/src/androidTest/java/com/duckduckgo/app/tabs/ui/TabSwitcherViewModelTest.kt
+app/src/main/java/com/duckduckgo/app/bookmarks/db/BookmarksDao.kt
+app/src/main/java/com/duckduckgo/app/bookmarks/ui/BookmarksActivity.kt
+app/src/main/java/com/duckduckgo/app/bookmarks/ui/BookmarksViewModel.kt
+app/src/main/java/com/duckduckgo/app/browser/BrowserActivity.kt
+app/src/main/java/com/duckduckgo/app/browser/BrowserTabFragment.kt
+app/src/main/java/com/duckduckgo/app/browser/BrowserTabViewModel.kt
+app/src/main/java/com/duckduckgo/app/browser/BrowserViewModel.kt
+app/src/main/java/com/duckduckgo/app/feedback/ui/FeedbackActivity.kt
+app/src/main/java/com/duckduckgo/app/feedback/ui/FeedbackViewModel.kt
+app/src/main/java/com/duckduckgo/app/global/DuckDuckGoActivity.kt
+app/src/main/java/com/duckduckgo/app/global/DuckDuckGoApplication.kt
+app/src/main/java/com/duckduckgo/app/global/SingleLiveEvent.kt
+app/src/main/java/com/duckduckgo/app/global/ViewModelFactory.kt
+app/src/main/java/com/duckduckgo/app/global/db/AppConfigurationDao.kt
+app/src/main/java/com/duckduckgo/app/launch/LaunchActivity.kt
+app/src/main/java/com/duckduckgo/app/launch/LaunchViewModel.kt
+app/src/main/java/com/duckduckgo/app/onboarding/ui/OnboardingViewModel.kt
+app/src/main/java/com/duckduckgo/app/privacy/db/NetworkLeaderboardDao.kt
+app/src/main/java/com/duckduckgo/app/privacy/ui/PrivacyDashboardActivity.kt
+app/src/main/java/com/duckduckgo/app/privacy/ui/PrivacyDashboardViewModel.kt
+app/src/main/java/com/duckduckgo/app/privacy/ui/PrivacyPracticesActivity.kt
+app/src/main/java/com/duckduckgo/app/privacy/ui/PrivacyPracticesViewModel.kt
+app/src/main/java/com/duckduckgo/app/privacy/ui/ScorecardActivity.kt
+app/src/main/java/com/duckduckgo/app/privacy/ui/ScorecardViewModel.kt
+app/src/main/java/com/duckduckgo/app/privacy/ui/TrackerNetworksActivity.kt
+app/src/main/java/com/duckduckgo/app/privacy/ui/TrackerNetworksViewModel.kt
+app/src/main/java/com/duckduckgo/app/settings/SettingsActivity.kt
+app/src/main/java/com/duckduckgo/app/settings/SettingsViewModel.kt
+app/src/main/java/com/duckduckgo/app/tabs/db/TabsDao.kt
+app/src/main/java/com/duckduckgo/app/tabs/model/TabDataRepository.kt
+app/src/main/java/com/duckduckgo/app/tabs/model/TabRepository.kt
+app/src/main/java/com/duckduckgo/app/tabs/ui/TabSwitcherActivity.kt
+app/src/main/java/com/duckduckgo/app/tabs/ui/TabSwitcherViewModel.kt
+
+# rule I2  support=38  language=kotlin
+@@
+match: strict
+metavar NAME: single
+@@
+- import android.support.annotation.NAME
++ import androidx.annotation.NAME
+# sites I2
+app/src/main/java/com/duckduckgo/app/browser/BrowserTabFragment.kt
+app/src/main/java/com/duckduckgo/app/browser/BrowserTabViewModel.kt
+app/src/main/java/com/duckduckgo/app/browser/BrowserViewModel.kt
+app/src/main/java/com/duckduckgo/app/browser/BrowserWebViewClient.kt
+app/src/main/java/com/duckduckgo/app/browser/WebViewRequestInterceptor.kt
+app/src/main/java/com/duckduckgo/app/browser/autoComplete/BrowserAutoCompleteSuggestionsAdapter.kt
+app/src/main/java/com/duckduckgo/app/browser/defaultBrowsing/DefaultBrowserInfoActivity.kt
+app/src/main/java/com/duckduckgo/app/browser/defaultBrowsing/DefaultBrowserSystemSettings.kt
+app/src/main/java/com/duckduckgo/app/browser/downloader/DataUriDownloader.kt
+app/src/main/java/com/duckduckgo/app/browser/downloader/FileDownloadNotificationManager.kt
+app/src/main/java/com/duckduckgo/app/browser/downloader/FileDownloader.kt
+app/src/main/java/com/duckduckgo/app/fire/UnsentForgetAllPixelStore.kt
+app/src/main/java/com/duckduckgo/app/global/SingleLiveEvent.kt
+app/src/main/java/com/duckduckgo/app/global/db/AppConfigurationDao.kt
+app/src/main/java/com/duckduckgo/app/global/install/AppInstallStore.kt
+app/src/main/java/com/duckduckgo/app/global/shortcut/AppShortcutCreator.kt
+app/src/main/java/com/duckduckgo/app/global/view/ActivityExtension.kt
+app/src/main/java/com/duckduckgo/app/global/view/ClearPersonalDataAction.kt
+app/src/main/java/com/duckduckgo/app/global/view/ColorCombiner.kt
+app/src/main/java/com/duckduckgo/app/httpsupgrade/HttpsUpgrader.kt
+app/src/main/java/com/duckduckgo/app/httpsupgrade/api/HttpsBloomFilterFactory.kt
+app/src/main/java/com/duckduckgo/app/job/AppConfigurationSyncer.kt
+app/src/main/java/com/duckduckgo/app/migration/LegacyMigration.kt
+app/src/main/java/com/duckduckgo/app/onboarding/ui/ColorChangingPageListener.kt
+app/src/main/java/com/duckduckgo/app/onboarding/ui/OnboardingActivity.kt
+app/src/main/java/com/duckduckgo/app/onboarding/ui/OnboardingPageFragment.kt
+app/src/main/java/com/duckduckgo/app/onboarding/ui/PagerAdapter.kt
+app/src/main/java/com/duckduckgo/app/privacy/renderer/HttpsStatusRendererExtension.kt
+app/src/main/java/com/duckduckgo/app/privacy/renderer/PrivacyGradeRendererExtension.kt
+app/src/main/java/com/duckduckgo/app/privacy/renderer/PrivacyPracticesSummaryRendererExtension.kt
+app/src/main/java/com/duckduckgo/app/privacy/renderer/TrackersRenderer.kt
+app/src/main/java/com/duckduckgo/app/privacy/ui/PrivacyDashboardViewModel.kt
+app/src/main/java/com/duckduckgo/app/privacy/ui/ScorecardActivity.kt
+app/src/main/java/com/duckduckgo/app/statistics/VariantManager.kt
+app/src/main/java/com/duckduckgo/app/surrogates/ResourceSurrogateLoader.kt
+app/src/main/java/com/duckduckgo/app/tabs/ui/TabSwitcherAdapter.kt
+app/src/main/java/com/duckduckgo/app/tabs/ui/TabSwitcherViewModel.kt
+app/src/main/java/com/duckduckgo/app/trackerdetection/TrackerDataLoader.kt
+
+# rule I3  support=24  language=kotlin
+#   NOTE: covers single-segment class names only. The wildcard import (I4) and multi-segment suffixes (room.migration.Migration, room.testing.MigrationTestHelper) need separate rules — see GAP-1/GAP-2.
+@@
+match: strict
+metavar NAME: single
+@@
+- import android.arch.persistence.room.NAME
++ import androidx.room.NAME
+# sites I3
+app/src/androidTest/java/com/duckduckgo/app/bookmarks/db/BookmarksDaoTest.kt
+app/src/androidTest/java/com/duckduckgo/app/browser/BrowserTabViewModelTest.kt
+app/src/androidTest/java/com/duckduckgo/app/di/StubDatabaseModule.kt
+app/src/androidTest/java/com/duckduckgo/app/entities/db/EntityListDaoTest.kt
+app/src/androidTest/java/com/duckduckgo/app/global/db/AppDatabaseTest.kt
+app/src/androidTest/java/com/duckduckgo/app/httpsupgrade/db/HttpsBloomFilterSpecDaoTest.kt
+app/src/androidTest/java/com/duckduckgo/app/httpsupgrade/db/HttpsWhitelistDaoTest.kt
+app/src/androidTest/java/com/duckduckgo/app/migration/LegacyMigrationTest.kt
+app/src/androidTest/java/com/duckduckgo/app/privacy/db/NetworkLeaderboardDaoTest.kt
+app/src/androidTest/java/com/duckduckgo/app/tabs/db/TabsDaoTest.kt
+app/src/androidTest/java/com/duckduckgo/app/trackerdetection/db/TrackerDataDaoTest.kt
+app/src/main/java/com/duckduckgo/app/bookmarks/db/BookmarkEntity.kt
+app/src/main/java/com/duckduckgo/app/di/DatabaseModule.kt
+app/src/main/java/com/duckduckgo/app/entities/db/EntityListEntity.kt
+app/src/main/java/com/duckduckgo/app/global/db/AppDatabase.kt
+app/src/main/java/com/duckduckgo/app/httpsupgrade/db/HttpsBloomFilterSpecDao.kt
+app/src/main/java/com/duckduckgo/app/httpsupgrade/model/HttpsBloomFilterSpec.kt
+app/src/main/java/com/duckduckgo/app/httpsupgrade/model/HttpsWhitelistedDomain.kt
+app/src/main/java/com/duckduckgo/app/privacy/db/NetworkLeaderboardDao.kt
+app/src/main/java/com/duckduckgo/app/privacy/db/NetworkLeaderboardEntry.kt
+app/src/main/java/com/duckduckgo/app/privacy/db/SiteVisitedEntity.kt
+app/src/main/java/com/duckduckgo/app/tabs/model/TabEntitiy.kt
+app/src/main/java/com/duckduckgo/app/tabs/model/TabSelectionEntitiy.kt
+app/src/main/java/com/duckduckgo/app/trackerdetection/model/DisconnectTracker.kt
+
+# rule I4  support=6  language=kotlin
+#   NOTE: GAP-1: a `single` metavar binds an identifier leaf, so NAME in I3 cannot also match the `*` token; the wildcard needs its own concrete rule. A path-tail metavar able to bind `*` would fold I4 into I3.
+@@
+match: strict
+@@
+- import android.arch.persistence.room.*
++ import androidx.room.*
+# sites I4
+app/src/main/java/com/duckduckgo/app/bookmarks/db/BookmarksDao.kt
+app/src/main/java/com/duckduckgo/app/entities/db/EntityListDao.kt
+app/src/main/java/com/duckduckgo/app/global/db/AppConfigurationDao.kt
+app/src/main/java/com/duckduckgo/app/httpsupgrade/db/HttpsWhitelistDao.kt
+app/src/main/java/com/duckduckgo/app/tabs/db/TabsDao.kt
+app/src/main/java/com/duckduckgo/app/trackerdetection/db/TrackerDataDao.kt
+
+# ---- Import renames: high-support concrete rules --------------------------
+
+# rule I5  support=16  language=kotlin
+@@
+match: strict
+@@
+- import android.arch.core.executor.testing.InstantTaskExecutorRule
++ import androidx.arch.core.executor.testing.InstantTaskExecutorRule
+# sites I5
+app/src/androidTest/java/com/duckduckgo/app/bookmarks/db/BookmarksDaoTest.kt
+app/src/androidTest/java/com/duckduckgo/app/bookmarks/ui/BookmarksViewModelTest.kt
+app/src/androidTest/java/com/duckduckgo/app/browser/BrowserTabViewModelTest.kt
+app/src/androidTest/java/com/duckduckgo/app/browser/BrowserViewModelTest.kt
+app/src/androidTest/java/com/duckduckgo/app/entities/db/EntityListDaoTest.kt
+app/src/androidTest/java/com/duckduckgo/app/feedback/ui/FeedbackViewModelTest.kt
+app/src/androidTest/java/com/duckduckgo/app/launch/LaunchViewModelTest.kt
+app/src/androidTest/java/com/duckduckgo/app/onboarding/ui/OnboardingViewModelTest.kt
+app/src/androidTest/java/com/duckduckgo/app/privacy/ui/PrivacyDashboardViewModelTest.kt
+app/src/androidTest/java/com/duckduckgo/app/privacy/ui/PrivacyPracticesViewModelTest.kt
+app/src/androidTest/java/com/duckduckgo/app/privacy/ui/ScorecardViewModelTest.kt
+app/src/androidTest/java/com/duckduckgo/app/privacy/ui/TrackerNetworksViewModelTest.kt
+app/src/androidTest/java/com/duckduckgo/app/settings/SettingsViewModelTest.kt
+app/src/androidTest/java/com/duckduckgo/app/tabs/db/TabsDaoTest.kt
+app/src/androidTest/java/com/duckduckgo/app/tabs/model/TabDataRepositoryTest.kt
+app/src/androidTest/java/com/duckduckgo/app/tabs/ui/TabSwitcherViewModelTest.kt
+
+# rule I6  support=29  language=kotlin
+@@
+match: strict
+@@
+- import android.support.test.InstrumentationRegistry
++ import androidx.test.platform.app.InstrumentationRegistry
+# sites I6
+app/src/androidTest/java/com/duckduckgo/app/TestExtensions.kt
+app/src/androidTest/java/com/duckduckgo/app/bookmarks/db/BookmarksDaoTest.kt
+app/src/androidTest/java/com/duckduckgo/app/browser/BrowserChromeClientTest.kt
+app/src/androidTest/java/com/duckduckgo/app/browser/BrowserTabViewModelTest.kt
+app/src/androidTest/java/com/duckduckgo/app/browser/BrowserWebViewClientTest.kt
+app/src/androidTest/java/com/duckduckgo/app/browser/DuckDuckGoWebViewTest.kt
+app/src/androidTest/java/com/duckduckgo/app/browser/WebViewDataManagerTest.kt
+app/src/androidTest/java/com/duckduckgo/app/browser/WebViewLongPressHandlerTest.kt
+app/src/androidTest/java/com/duckduckgo/app/browser/WebViewRequestInterceptorTest.kt
+app/src/androidTest/java/com/duckduckgo/app/entities/db/EntityListDaoTest.kt
+app/src/androidTest/java/com/duckduckgo/app/global/api/ApiRequestInterceptorTest.kt
+app/src/androidTest/java/com/duckduckgo/app/global/db/AppDatabaseTest.kt
+app/src/androidTest/java/com/duckduckgo/app/global/install/AppInstallSharedPreferencesTest.kt
+app/src/androidTest/java/com/duckduckgo/app/global/view/ClearPersonalDataActionTest.kt
+app/src/androidTest/java/com/duckduckgo/app/httpsupgrade/db/HttpsBloomFilterSpecDaoTest.kt
+app/src/androidTest/java/com/duckduckgo/app/integration/AtbIntegrationTest.kt
+app/src/androidTest/java/com/duckduckgo/app/migration/LegacyMigrationTest.kt
+app/src/androidTest/java/com/duckduckgo/app/privacy/db/NetworkLeaderboardDaoTest.kt
+app/src/androidTest/java/com/duckduckgo/app/privacy/renderer/HttpsStatusRendererExtensionTest.kt
+app/src/androidTest/java/com/duckduckgo/app/privacy/renderer/PrivacyPracticesSummaryTest.kt
+app/src/androidTest/java/com/duckduckgo/app/privacy/renderer/PrivacyUpgradeRendererTest.kt
+app/src/androidTest/java/com/duckduckgo/app/privacy/renderer/TrackersRendererTest.kt
+app/src/androidTest/java/com/duckduckgo/app/privacy/store/PrevalenceRawStoreTest.kt
+app/src/androidTest/java/com/duckduckgo/app/settings/SettingsViewModelTest.kt
+app/src/androidTest/java/com/duckduckgo/app/statistics/api/StatisticsRequesterJsonTest.kt
+app/src/androidTest/java/com/duckduckgo/app/surrogates/ResourceSurrogateLoaderTest.kt
+app/src/androidTest/java/com/duckduckgo/app/tabs/db/TabsDaoTest.kt
+app/src/androidTest/java/com/duckduckgo/app/tabs/ui/TabRendererExtensionKtTest.kt
+app/src/androidTest/java/com/duckduckgo/app/trackerdetection/db/TrackerDataDaoTest.kt
+
+# rule I7  support=7  language=kotlin
+@@
+match: strict
+@@
+- import android.support.test.annotation.UiThreadTest
++ import androidx.test.annotation.UiThreadTest
+# sites I7
+app/src/androidTest/java/com/duckduckgo/app/browser/BrowserChromeClientTest.kt
+app/src/androidTest/java/com/duckduckgo/app/browser/BrowserWebViewClientTest.kt
+app/src/androidTest/java/com/duckduckgo/app/browser/DuckDuckGoWebViewTest.kt
+app/src/androidTest/java/com/duckduckgo/app/browser/WebViewDataManagerTest.kt
+app/src/androidTest/java/com/duckduckgo/app/browser/WebViewRequestInterceptorTest.kt
+app/src/androidTest/java/com/duckduckgo/app/global/view/ClearPersonalDataActionTest.kt
+app/src/androidTest/java/com/duckduckgo/app/tabs/model/TabDataRepositoryTest.kt
+
+# ---- API migrations --------------------------------------------------------
+# The androidx.test 1.0 API reshaped InstrumentationRegistry. Note A1 vs A2:
+# SAME left-hand side, DIFFERENT replacement, DISJOINT site sets — the
+# replacement depends on whether the file imports the top-level
+# `InstrumentationRegistry.getInstrumentation` (A2 sites) or the class (A1).
+# Per-file site scoping makes this pair sound; no single rule could be.
+
+# rule A1  support=20  language=kotlin
+@@
+match: strict
+@@
+- InstrumentationRegistry.getTargetContext()
++ InstrumentationRegistry.getInstrumentation().targetContext
+# sites A1
+app/src/androidTest/java/com/duckduckgo/app/TestExtensions.kt
+app/src/androidTest/java/com/duckduckgo/app/browser/BrowserWebViewClientTest.kt
+app/src/androidTest/java/com/duckduckgo/app/browser/DuckDuckGoWebViewTest.kt
+app/src/androidTest/java/com/duckduckgo/app/browser/WebViewDataManagerTest.kt
+app/src/androidTest/java/com/duckduckgo/app/browser/WebViewLongPressHandlerTest.kt
+app/src/androidTest/java/com/duckduckgo/app/browser/WebViewRequestInterceptorTest.kt
+app/src/androidTest/java/com/duckduckgo/app/global/db/AppDatabaseTest.kt
+app/src/androidTest/java/com/duckduckgo/app/global/install/AppInstallSharedPreferencesTest.kt
+app/src/androidTest/java/com/duckduckgo/app/global/view/ClearPersonalDataActionTest.kt
+app/src/androidTest/java/com/duckduckgo/app/integration/AtbIntegrationTest.kt
+app/src/androidTest/java/com/duckduckgo/app/migration/LegacyMigrationTest.kt
+app/src/androidTest/java/com/duckduckgo/app/privacy/renderer/HttpsStatusRendererExtensionTest.kt
+app/src/androidTest/java/com/duckduckgo/app/privacy/renderer/PrivacyPracticesSummaryTest.kt
+app/src/androidTest/java/com/duckduckgo/app/privacy/renderer/PrivacyUpgradeRendererTest.kt
+app/src/androidTest/java/com/duckduckgo/app/privacy/renderer/TrackersRendererTest.kt
+app/src/androidTest/java/com/duckduckgo/app/privacy/store/PrevalenceRawStoreTest.kt
+app/src/androidTest/java/com/duckduckgo/app/settings/SettingsViewModelTest.kt
+app/src/androidTest/java/com/duckduckgo/app/statistics/api/StatisticsRequesterJsonTest.kt
+app/src/androidTest/java/com/duckduckgo/app/surrogates/ResourceSurrogateLoaderTest.kt
+app/src/androidTest/java/com/duckduckgo/app/tabs/ui/TabRendererExtensionKtTest.kt
+
+# rule A2  support=2  language=kotlin
+@@
+match: strict
+@@
+- InstrumentationRegistry.getTargetContext()
++ getInstrumentation().targetContext
+# sites A2
+app/src/androidTest/java/com/duckduckgo/app/browser/BrowserChromeClientTest.kt
+app/src/androidTest/java/com/duckduckgo/app/browser/BrowserTabViewModelTest.kt
+
+# rule A3  support=6  language=kotlin
+#   NOTE: a semantic consolidation, not a mechanical rename: getContext() was the *instrumentation* context; these sites now use the app-under-test context. The one file that preserved the old semantics (ApiRequestInterceptorTest -> .context) is support-1 and stays residual — see residuals.
+@@
+match: strict
+@@
+- InstrumentationRegistry.getContext()
++ InstrumentationRegistry.getInstrumentation().targetContext
+# sites A3
+app/src/androidTest/java/com/duckduckgo/app/bookmarks/db/BookmarksDaoTest.kt
+app/src/androidTest/java/com/duckduckgo/app/entities/db/EntityListDaoTest.kt
+app/src/androidTest/java/com/duckduckgo/app/httpsupgrade/db/HttpsBloomFilterSpecDaoTest.kt
+app/src/androidTest/java/com/duckduckgo/app/privacy/db/NetworkLeaderboardDaoTest.kt
+app/src/androidTest/java/com/duckduckgo/app/tabs/db/TabsDaoTest.kt
+app/src/androidTest/java/com/duckduckgo/app/trackerdetection/db/TrackerDataDaoTest.kt
+
+# rule A4  support=2  language=kotlin
+#   NOTE: forced by androidx nullability annotations (classLoader became platform-nullable).
+@@
+match: strict
+metavar RES: single
+@@
+- javaClass.classLoader.getResource(RES)
++ javaClass.classLoader!!.getResource(RES)
+# sites A4
+app/src/androidTest/java/com/duckduckgo/app/trackerdetection/AdBlockClientTest.kt
+app/src/androidTest/java/com/duckduckgo/app/trackerdetection/TrackerDetectorListTest.kt
+
+# rule A5  support=2  language=kotlin
+#   NOTE: conjunctive all-removal rule: the runner annotation and both its imports drop together. Expressible as multi-section conjunctive pattern; the proposer has no channel for cross-section removal co-occurrence except fusion — see GAP-4.
+@@
+match: strict
+@@
+- import android.support.test.runner.AndroidJUnit4
+@@
+match: strict
+@@
+- import org.junit.runner.RunWith
+@@
+match: strict
+@@
+- @RunWith(AndroidJUnit4::class)
+# sites A5
+app/src/androidTest/java/com/duckduckgo/app/browser/QueryUrlConverterTest.kt
+app/src/androidTest/java/com/duckduckgo/app/trackerdetection/TrackerDetectorListTest.kt
+
+# ---- The per-class rename table (the irreducible tail) --------------------
+# The packages below do NOT map uniformly: android.support.v4.app splits into
+# androidx.fragment.app vs androidx.core.app; v7.widget splits into
+# recyclerview.widget vs appcompat.widget; support.test fans out per class.
+# The ground truth here is jetifier's finite per-class mapping — a TABLE.
+#
+# GAP-3 (REVISED after discussion): these rows are NOT a systematic edit in
+# summarize's sense. Anti-unifying them yields the vacuous `import _H0 ->
+# import _H1`; the commonality (jetifier's map, the migration intent) is
+# domain knowledge outside the diff. A "table rule" would be memorization,
+# not inference — no compression, no prediction — so support-1 rows are
+# CORRECTLY residuals under §5.5, and support>=2 rows are already honest
+# concrete rules. What's genuinely improvable is presentational: residual
+# GROUPING by hunk shape ("19 residual sites share the form `- import ...` /
+# `+ import ...`"), which aids review without claiming rule-hood. A
+# disjunction construct remains defensible only on the AUTHORING side
+# (writing a jetifier-style patch for `apply`, cf. Coccinelle's ( A | B )),
+# which is a transforms feature, not a summarize gap.
+#
+#  n  old import                                        new import
+#  4  android.support.v4.content.ContextCompat          androidx.core.content.ContextCompat
+#  4  android.support.v7.widget.LinearLayoutManager     androidx.recyclerview.widget.LinearLayoutManager
+#  3  android.support.v7.widget.RecyclerView            androidx.recyclerview.widget.RecyclerView
+#  3  android.support.v4.app.Fragment                   androidx.fragment.app.Fragment
+#  2  android.support.v7.app.AlertDialog                androidx.appcompat.app.AlertDialog
+#  2  android.support.v4.content.pm.ShortcutManagerCompat   androidx.core.content.pm.ShortcutManagerCompat
+#  2  android.support.v4.content.pm.ShortcutInfoCompat  androidx.core.content.pm.ShortcutInfoCompat
+#  2  android.support.v4.graphics.drawable.IconCompat   androidx.core.graphics.drawable.IconCompat
+#  2  android.support.v4.content.LocalBroadcastManager  androidx.localbroadcastmanager.content.LocalBroadcastManager
+#  1  android.support.test.runner.AndroidJUnitRunner    androidx.test.runner.AndroidJUnitRunner
+#  1  android.support.test.filters.LargeTest            androidx.test.filters.LargeTest
+#  1  android.support.test.InstrumentationRegistry.getInstrumentation
+#                                                       androidx.test.platform.app.InstrumentationRegistry.getInstrumentation
+#  1  android.support.v7.util.DiffUtil                  androidx.recyclerview.widget.DiffUtil
+#  1  android.support.v7.widget.RecyclerView.Adapter    androidx.recyclerview.widget.RecyclerView.Adapter
+#  1  android.support.v7.widget.RecyclerView.*          androidx.recyclerview.widget.RecyclerView.*
+#  1  android.support.v7.widget.DividerItemDecoration   androidx.recyclerview.widget.DividerItemDecoration
+#  1  android.support.v7.widget.AppCompatEditText       androidx.appcompat.widget.AppCompatEditText
+#  1  android.support.v7.widget.SwitchCompat            androidx.appcompat.widget.SwitchCompat
+#  1  android.support.v7.app.AppCompatActivity          androidx.appcompat.app.AppCompatActivity
+#  1  android.support.v4.app.DialogFragment             androidx.fragment.app.DialogFragment
+#  1  android.support.v4.app.FragmentManager            androidx.fragment.app.FragmentManager
+#  1  android.support.v4.app.FragmentPagerAdapter       androidx.fragment.app.FragmentPagerAdapter
+#  1  android.support.v4.app.FragmentActivity           androidx.fragment.app.FragmentActivity
+#  1  android.support.v4.app.NotificationCompat         androidx.core.app.NotificationCompat
+#  1  android.support.v4.app.ActivityOptionsCompat      androidx.core.app.ActivityOptionsCompat
+#  1  android.support.v4.view.ViewCompat                androidx.core.view.ViewCompat
+#  1  android.support.v4.view.NestedScrollingChild      androidx.core.view.NestedScrollingChild
+#  1  android.support.v4.view.NestedScrollingChildHelper    androidx.core.view.NestedScrollingChildHelper
+#  1  android.support.v4.view.ViewPager                 androidx.viewpager.widget.ViewPager
+#  1  android.support.v4.util.PatternsCompat            androidx.core.util.PatternsCompat
+#  1  android.support.design.widget.Snackbar            com.google.android.material.snackbar.Snackbar
+#  1  android.support.design.widget.BottomSheetDialog   com.google.android.material.bottomsheet.BottomSheetDialog
+#  1  android.arch.persistence.db.SupportSQLiteDatabase androidx.sqlite.db.SupportSQLiteDatabase
+#  1  android.arch.persistence.db.framework.FrameworkSQLiteOpenHelperFactory
+#                                                       androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
+#  1  android.arch.persistence.room.migration.Migration androidx.room.migration.Migration
+#  1  android.arch.persistence.room.testing.MigrationTestHelper
+#                                                       androidx.room.testing.MigrationTestHelper
+#
+# GAP-2: rows like arch.persistence.db.framework.* and room.migration.* are
+# package-PREFIX renames with a multi-segment tail. `import
+# android.arch.persistence.room.TAIL` with TAIL spanning `migration.Migration`
+# needs a sequence-shaped metavar inside a dotted path; `single` cannot span
+# segments, and sequence metavars only match sibling lists today.
+
+# ---- Semi-systematic ride-alongs (support 2, rule-or-residual borderline) --
+# GAP-5 (proposer, known): the InstantTaskExecutorRule additions are PURE
+# INSERTIONS — a new @get:Rule property + org.junit.Rule import added to two
+# test classes (AppDatabaseTest, NetworkLeaderboardDaoTest), required by the
+# androidx test runner. As a pattern this needs a positional anchor
+# ("first member of the class body"), which context lines cannot express
+# when the surrounding members differ — and the anchored proposer excludes
+# pure insertions by design. Residual today; arguably rule-worthy.
+#
+# Also support-2: the PrivacyPractices test refactor (TermsOfService ->
+# Summary.UNKNOWN import + argument reshuffle) — left as residual here
+# because the two sites' code edits differ in shape.
+
+# ---- Residuals (the ride-alongs a reviewer should actually read) ----------
+# Listed as file -> what happened; full diffs omitted in this hand-written
+# document (baseline.summary carries the exact hunks).
+#
+# FileUtilities.kt                 -> unused loadLines() DELETED (pure ride-along)
+# FileChooserIntentBuilderTest.kt  -> clipData -> clipData?.  (behaviour: nullability)
+# UserAgentProviderTest.kt         -> regex-escaping edits in two test strings
+# QueryUrlConverterTest.kt         -> encodedQuery null-handling rework (assertNotNull + !!),
+#                                     Assert.* wildcard import swap
+# HttpsBloomFilterSpecDaoTest.kt   -> specification!! -> specification (smart-cast cleanup)
+# ApiRequestInterceptorTest.kt     -> getContext() -> getInstrumentation().context — the ONE
+#                                     site keeping instrumentation-context semantics (cf. A3)
+# UnsentForgetAllPixelStoreSharedPreferencesTest.kt -> fully-qualified androidx
+#                                     InstrumentationRegistry usage (import dropped)
+# SingleLiveEvent.kt               -> Observer<T> -> Observer<in T> (variance, androidx API)
+# TabSwitcherAdapter.kt            -> RecyclerView.ViewHolder(root) -> ViewHolder(root) + import
+# TestExtensions.kt                -> @UiThread annotation + import added
+# TestRunner.kt                    -> @Suppress("unused") added
+# AppDatabaseTest.kt, NetworkLeaderboardDaoTest.kt -> InstantTaskExecutorRule @get:Rule
+#                                     insertion (GAP-5); NetworkLeaderboardDaoTest also gains
+#                                     .allowMainThreadQueries()
+# TrackerDetectorTest.kt           -> wildcard import expanded to 3 explicit; const removed
+# TrackerDetectorListTest.kt       -> unused imports dropped (PrevalenceStore, Mock)
+# PredefinedGradeTest.kt           -> unused imports dropped; Input class reformat
+# PrivacyPracticesTest.kt          -> private val added; mock setup reformat; imports dropped
+# PrivacyDashboardViewModelTest.kt, PrivacyPracticesViewModelTest.kt ->
+#                                     TermsOfService -> PrivacyPractices.Summary refactor
+# OnboardingViewModelTest.kt       -> unused VariantManager mock + import removed
+# TabDataRepositoryTest.kt         -> unused TermsOfServiceStore import removed
+# PrevalenceRawStoreTest.kt        -> unused org.junit.Assert import removed
+# SiteMonitorTest.kt, TrackerDataDaoTest.kt, BloomFilterTest.kt ->
+#                                     private/val visibility-style tweaks
+# WebViewDataManagerTest.kt        -> trailing-lambda style: (mockCookieManager, {}) -> (mockCookieManager) {}
+# WebViewLongPressHandlerTest.kt, ClearPersonalDataActionTest.kt, TabsDaoTest.kt,
+# AppDatabaseTest.kt               -> multi-line call re-wrapping (formatting-only;
+#                                     should vanish under --ignore-formatting)
+#
+# GAP-6 (residual noise, not expressiveness): after-side import blocks are
+# re-SORTED (androidx sorts differently than android.arch/android.support).
+# Rules rewrite lines in place, so pure reorder moves leak into residuals
+# even when every line is rule-explained. An order-insensitive treatment of
+# import blocks (normalize order before residual computation, or declare
+# import lists unordered regions) would eliminate this class of noise.
