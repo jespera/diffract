@@ -2,14 +2,15 @@
 @@
 match: strict
 metavar _H0: single
+metavar _H1: single
 @@
-  <Foo
+  <_H1
   ...
-- oldName={_H0}
-+ newName={_H0}
+- priority=_H0
++ variant=_H0
   ...
   />
 # sites R1
-Card.tsx
-Header.tsx
-Sidebar.tsx
+alpha.tsx
+beta.tsx
+gamma.tsx

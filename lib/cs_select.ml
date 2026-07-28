@@ -342,6 +342,51 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
         | None -> false)
       anchored_raw
   in
+  (* §3.2 anchor generalization: distinct realisations of one pooled delta
+     that share a structural shape and differ only in named anchor leaves
+     anti-unify into the pool's general realisation (e.g. the holed-head JSX
+     rule). It joins the same stream — exempt marking, delta-needle
+     prefilter, lazy round-2 gating — where the fewest-concrete-nodes
+     tie-break prefers it exactly where it is safe, and re-specialization
+     collapses the hole back to a literal wherever the surviving sites do
+     not vary. *)
+  let anchored_pooled =
+    let groups :
+        ( string * string * string,
+          (string * (int * int) * cluster) list ref )
+        Hashtbl.t =
+      Hashtbl.create 32
+    in
+    List.iter
+      (fun ((key, _, c) as entry) ->
+        let gk = (lang_of c, key, anchor_shape_key c.pattern) in
+        match Hashtbl.find_opt groups gk with
+        | Some l -> l := entry :: !l
+        | None -> Hashtbl.add groups gk (ref [ entry ]))
+      anchored_pooled;
+    let merged =
+      Hashtbl.fold
+        (fun _ entries acc ->
+          let distinct =
+            List.sort_uniq compare
+              (List.map (fun (_, _, c) -> c.pattern) !entries)
+          in
+          if List.length distinct < 2 then acc
+          else
+            match
+              generalize_realisations (List.map (fun (_, _, c) -> c) !entries)
+            with
+            | Some c -> (
+                match !entries with
+                | (key, span, _) :: _ -> (key, span, c) :: acc
+                | [] -> acc)
+            | None -> acc)
+        groups []
+    in
+    Cs_trace.trace "anchor-generalize: %d merged realisation(s)\n%!"
+      (List.length merged);
+    anchored_pooled @ merged
+  in
   let needle_of_pat =
     (* Identical patterns carry identical delta keys; the needle (the
        delta's first before-side text) prefilters evaluation. *)

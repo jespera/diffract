@@ -833,6 +833,144 @@ let rec max_hole_node = function
 
 let max_hole ep = max (max_hole_node ep.before) (max_hole_node ep.after)
 
+(* ── Anchor generalization over pooled realisations (§3.2) ──────────── *)
+
+(** Structural shape of an [edit_pat] with named-leaf values erased. A leaf
+    whose [value] differs from its [node_type] (an identifier, a string — a
+    leaf that could generalize to a hole) contributes only its node type;
+    keyword and punctuation leaves ([value = node_type]) stay verbatim. So
+    realisations sharing a key differ only in named-leaf anchor text, and
+    anti-unifying such a group holes nothing but those anchors — brackets,
+    keywords, and the pooled delta (identical across the pool by delta-key
+    construction) all stay concrete. *)
+let anchor_shape_key (ep : edit_pat) : string =
+  let buf = Buffer.create 128 in
+  let rec go = function
+    | Hole _ -> Buffer.add_string buf "H;"
+    | Ellipsis -> Buffer.add_string buf "E;"
+    | Leaf l ->
+        if String.equal l.value l.node_type then (
+          Buffer.add_string buf "T:";
+          Buffer.add_string buf l.value;
+          Buffer.add_char buf ';')
+        else (
+          Buffer.add_string buf "L:";
+          Buffer.add_string buf l.node_type;
+          Buffer.add_char buf ';')
+    | PNode n ->
+        Buffer.add_string buf "N:";
+        Buffer.add_string buf n.node_type;
+        Buffer.add_char buf '(';
+        List.iter
+          (fun c ->
+            (match c.field_name with
+            | Some f ->
+                Buffer.add_string buf f;
+                Buffer.add_char buf '='
+            | None -> ());
+            go c.child)
+          n.children;
+        Buffer.add_char buf ')'
+  in
+  go ep.before;
+  Buffer.add_char buf '\x00';
+  go ep.after;
+  Buffer.contents buf
+
+(** Anti-unify a pool's same-shape realisations into one more-general
+    candidate. Admitted only when the merge introduces at most ONE hole
+    beyond the realisations' own — the single generalized anchor (e.g. the
+    JSX element head); a group diverging at several anchor positions stays
+    per-site. Instances are the union: the merged rule is the pool's general
+    realisation, and instance re-specialization collapses the hole back to
+    the literal wherever the surviving sites do not vary. *)
+let generalize_realisations (cs : cluster list) : cluster option =
+  match cs with
+  | [] | [ _ ] -> None
+  | c0 :: rest ->
+      (* NOT [anti_unify_edits]: its arity-collapsing rule folds a level that
+         already carries an Ellipsis into a bare [(...)], destroying the
+         anchor and the delta. The shape key guarantees lockstep structure,
+         so merge positionally: only a pair of differing named leaves may
+         become a hole. New hole indices start past the realisations' own
+         (they all share the same hole layout), and a (v1,v2) memo keeps the
+         before- and after-side occurrences of one generalized anchor on the
+         same index. *)
+      let base =
+        List.fold_left
+          (fun m (c : cluster) ->
+            max m
+              (max
+                 (max_hole_node c.pattern.before)
+                 (max_hole_node c.pattern.after)))
+          (-1) cs
+      in
+      let next = ref (base + 1) in
+      let memo : (string * string, int) Hashtbl.t = Hashtbl.create 8 in
+      let exception Shape_mismatch in
+      let rec zip p1 p2 =
+        match (p1, p2) with
+        | Hole h, Hole _ -> Hole h
+        | Hole h, Leaf _ | Leaf _, Hole h ->
+            (* a fold-introduced hole absorbing a further site's anchor *)
+            Hole h
+        | Ellipsis, Ellipsis -> Ellipsis
+        | Leaf l1, Leaf l2 when l1.node_type = l2.node_type ->
+            if String.equal l1.value l2.value then Leaf l1
+            else (
+              match Hashtbl.find_opt memo (l1.value, l2.value) with
+              | Some h -> Hole h
+              | None ->
+                  let h = !next in
+                  incr next;
+                  Hashtbl.add memo (l1.value, l2.value) h;
+                  Hole h)
+        | PNode n1, PNode n2
+          when n1.node_type = n2.node_type
+               && List.length n1.children = List.length n2.children ->
+            let children =
+              List.map2
+                (fun c1 c2 ->
+                  { field_name = c1.field_name; child = zip c1.child c2.child })
+                n1.children n2.children
+            in
+            PNode { n1 with children }
+        | _ -> raise Shape_mismatch
+      in
+      let merged =
+        try
+          Some
+            (List.fold_left
+               (fun (acc : edit_pat) (c : cluster) ->
+                 {
+                   before = zip acc.before c.pattern.before;
+                   after = zip acc.after c.pattern.after;
+                 })
+               c0.pattern rest)
+        with Shape_mismatch -> None
+      in
+      match merged with
+      | None -> None
+      | Some _ when Hashtbl.length memo > 1 ->
+          (* budget: exactly one generalized anchor (one leaf-value pair; the
+             same pair on both sides — or at paired positions like an
+             opening/closing tag — shares its hole) *)
+          None
+      | Some merged ->
+        let seen = Hashtbl.create 16 in
+        let instances =
+          List.concat_map (fun (c : cluster) -> c.instances) cs
+          |> List.filter (fun (i : instance) ->
+                 let k = (i.file, i.site_start, i.site_end) in
+                 if Hashtbl.mem seen k then false
+                 else begin
+                   Hashtbl.add seen k ();
+                   true
+                 end)
+        in
+        Some { pattern = merged; instances }
+
+
 let rec shift_holes_node offset = function
   | Hole h -> Hole (h + offset)
   | Ellipsis -> Ellipsis
