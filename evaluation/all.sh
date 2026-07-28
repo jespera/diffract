@@ -4,6 +4,6 @@
 #   ./evaluation/drupal-attr.sh > evaluation/drupal-attr.baseline
 set -euo pipefail
 dir="$(cd "$(dirname "$0")" && pwd)"
-for c in androidx webxforge; do
+for c in androidx webxforge sentry-prop-rename sentry-prop-manual; do
   "$dir/$c.sh" | tee "$dir/$c.baseline"
 done

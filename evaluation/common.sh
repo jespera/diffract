@@ -80,7 +80,7 @@ run_summarize text-minimal "$WORK/summary.min.txt"
 # ── metrics ──────────────────────────────────────────────────────────────
 RULES=$(grep -c '^# rule ' "$WORK/summary.txt" || true)
 RESIDUALS=$(grep -c '^# residual' "$WORK/summary.txt" || true)
-RESIDUAL_FILES=$(grep '^--- a/' "$WORK/summary.txt" | sort -u | wc -l)
+RESIDUAL_FILES=$( (grep '^--- a/' "$WORK/summary.txt" || true) | sort -u | wc -l)
 FACTORED=$((PAIRS - RESIDUAL_FILES))
 
 # Description length: rendered-summary bytes (minimal render) over raw-diff
