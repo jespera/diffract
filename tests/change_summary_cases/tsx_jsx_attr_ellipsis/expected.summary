@@ -1,0 +1,14 @@
+# rule R1  support=2  language=tsx
+@@
+match: strict
+metavar _H0: single
+@@
+  <Button
+  ...
+- priority=_H0
++ variant=_H0
+  ...
+  />
+# sites R1
+a.tsx
+b.tsx
