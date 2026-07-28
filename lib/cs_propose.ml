@@ -393,7 +393,8 @@ let ellipsize_level (bn : Tree.src Tree.t) (an : Tree.src Tree.t)
     | _ -> '\x00'
   in
   let bracket_leaf (c : Tree.src Tree.child) =
-    (not c.node.is_named) && String.length c.node.node_type = 1
+    (not c.node.is_named)
+    && (String.length c.node.node_type = 1 || c.node.node_type = "/>")
   in
   let ba = Array.of_list b_assign in
   let bc = Array.of_list b_children in
@@ -406,15 +407,33 @@ let ellipsize_level (bn : Tree.src Tree.t) (an : Tree.src Tree.t)
     and blast, _ = ba.(nb - 1)
     and a0 = aa.(0)
     and alast = aa.(na - 1) in
+    let closes opener (closer : string) =
+      closer = String.make 1 (closer_of opener)
+      || (opener = '<' && closer = "/>")
+    in
     let shape_ok =
       bracket_leaf b0 && bracket_leaf blast && bracket_leaf a0
       && bracket_leaf alast
+      && String.length b0.node.node_type = 1
       && String.contains "([{<" b0.node.node_type.[0]
-      && blast.node.node_type.[0] = closer_of b0.node.node_type.[0]
+      && closes b0.node.node_type.[0] blast.node.node_type
       && a0.node.node_type = b0.node.node_type
       && alast.node.node_type = blast.node.node_type
     in
-    if not shape_ok then None
+    (* [<]-opened levels (JSX elements): a bare [<] re-parses as
+       comparison/JSX-fragment junk, so the variant must also keep the
+       element head concrete, glued to the bracket ([<Button ... >]) — the
+       same re-parse argument that keeps the brackets themselves. Without a
+       kept head aligned on both sides there is no viable render: emit
+       nothing rather than a candidate the gate can never fire. *)
+    let angle = shape_ok && b0.node.node_type = "<" in
+    let head_kept =
+      angle
+      && Array.length ba >= 4
+      && Array.length aa >= 4
+      && match ba.(1) with _, Some 1 -> true | _ -> false
+    in
+    if (not shape_ok) || (angle && not head_kept) then None
     else begin
       let unmatched_b = ref [] in
       Array.iteri
@@ -443,15 +462,20 @@ let ellipsize_level (bn : Tree.src Tree.t) (an : Tree.src Tree.t)
       in
       (* One child per line: the surgical renderer aligns lines, so the
          ellipses must sit on lines of their own to become context. *)
-      let mk (node : Tree.src Tree.t) open_c mids close_c =
+      let mk (node : Tree.src Tree.t) open_c heads mids close_c =
+        let nheads = List.length heads in
         let children =
-          (open_c :: { field_name = None; child = Ellipsis } :: mids)
+          (open_c :: heads)
+          @ ({ field_name = None; child = Ellipsis } :: mids)
           @ [ { field_name = None; child = Ellipsis }; close_c ]
         in
         let template =
           List.concat
             (List.mapi
-               (fun i _ -> if i = 0 then [ Slot 0 ] else [ Lit "\n"; Slot i ])
+               (fun i _ ->
+                 if i = 0 then [ Slot 0 ]
+                 else if i <= nheads then [ Slot i ] (* glued: [<Button] *)
+                 else [ Lit "\n"; Slot i ])
                children)
         in
         PNode
@@ -462,11 +486,14 @@ let ellipsize_level (bn : Tree.src Tree.t) (an : Tree.src Tree.t)
             template;
           }
       in
+      let b_heads = if head_kept then [ bc.(1) ] else [] in
+      let a_heads = if head_kept then [ ac.(1) ] else [] in
       match (unmatched_b, unmatched_a) with
-      | [ bi ], [ ai ] ->
+      | [ bi ], [ ai ] when bi > List.length b_heads && ai > List.length a_heads
+        ->
           Some
-            ( mk bn bc.(0) [ bc.(bi) ] bc.(nb - 1),
-              mk an ac.(0) [ ac.(ai) ] ac.(na - 1) )
+            ( mk bn bc.(0) b_heads [ bc.(bi) ] bc.(nb - 1),
+              mk an ac.(0) a_heads [ ac.(ai) ] ac.(na - 1) )
       | (_ :: _ as bis), []
         when contiguous bis
              && List.exists (fun i -> (fst ba.(i)).node.is_named) bis ->
@@ -478,8 +505,8 @@ let ellipsize_level (bn : Tree.src Tree.t) (an : Tree.src Tree.t)
              not a deletion — require a named child. Insertions (an
              after-side-only run) stay un-anchorable (§5.5). *)
           Some
-            ( mk bn bc.(0) (List.map (fun i -> bc.(i)) bis) bc.(nb - 1),
-              mk an ac.(0) [] ac.(na - 1) )
+            ( mk bn bc.(0) b_heads (List.map (fun i -> bc.(i)) bis) bc.(nb - 1),
+              mk an ac.(0) a_heads [] ac.(na - 1) )
       | _ -> None
     end
 
