@@ -12,21 +12,21 @@
 
 include Cursor.S
 
-val of_tree : Tree.src Tree.tree -> t
 (** [of_tree tree] returns a cursor positioned at the tree's root. The source
     string is taken from [tree.source]. *)
+val of_tree : Tree.src Tree.tree -> t
 
-val of_node : source:string -> Tree.src Tree.t -> t
 (** [of_node ~source node] returns a cursor positioned at [node]. Use when
     matching against a subtree rather than a full file. *)
+val of_node : source:string -> Tree.src Tree.t -> t
 
-val node_type : t -> string
 (** [node_type c] is the tree-sitter node type of the node at [c]'s current
     position (e.g. ["method_definition"]). Unlike {!Cursor.S.leaf_node_type}
     this works for interior nodes, not just leaves. Used by field-mode
     source-context tokenization to key its per-context cache. *)
+val node_type : t -> string
 
-val source : t -> string
 (** [source c] is the full source string the cursor was built over. Used by
     field-mode source-context tokenization to build the context string into
     which the pattern is spliced. *)
+val source : t -> string

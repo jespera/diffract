@@ -441,7 +441,7 @@ let rec derive_change mapping ~before_source ~after_source
                (fun b a -> Tree.equal before_source b after_source a)
                before_children after_children
         in
-        if pairwise_equal then (
+        if pairwise_equal then
           (* Named children agree but the parents differ — the difference is
              unnamed tokens only. Refine over all children so it surfaces as
              Added/Removed instead of a coarse Replaced. Fall back to Replaced
@@ -468,7 +468,7 @@ let rec derive_change mapping ~before_source ~after_source
               List.exists (function Same _ -> true | _ -> false) all_cc
               && List.exists (function Same _ -> false | _ -> true) all_cc
             then Modified { child_changes = all_cc }
-            else Replaced)
+            else Replaced
         else Unchanged
       else Modified { child_changes }
 

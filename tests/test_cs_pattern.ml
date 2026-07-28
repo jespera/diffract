@@ -35,14 +35,14 @@ let differing_arity_yields_ellipsis () =
   in
   Alcotest.(check bool)
     (Printf.sprintf "differing arity yields (...) — got %S" r)
-    true
-    (contains ~sub:"(...)" r)
+    true (contains ~sub:"(...)" r)
 
 let same_arity_keeps_holes_no_ellipsis () =
   (* Same arity (one param each), differing names: the param list recurses to
      per-element holes — no ellipsis is introduced. *)
   let r =
-    render (au (pat "fun f(a: Int) { return a }") (pat "fun g(b: Int) { return b }"))
+    render
+      (au (pat "fun f(a: Int) { return a }") (pat "fun g(b: Int) { return b }"))
   in
   Alcotest.(check bool)
     (Printf.sprintf "same arity does not introduce '...' — got %S" r)
@@ -68,14 +68,15 @@ let ellipsis_convergence_across_three_arities () =
      third instance of yet another arity must KEEP (...), not regress to a bare
      hole — otherwise a dendrogram could not merge a whole arity-varying family. *)
   let e12 =
-    au (pat "fun f(x: Int) { return x }") (pat "fun f(x: Int, y: Int) { return x }")
+    au
+      (pat "fun f(x: Int) { return x }")
+      (pat "fun f(x: Int, y: Int) { return x }")
   in
   let e123 = au e12 (pat "fun f(a: Int, b: Int, c: Int) { return a }") in
   let r = render e123 in
   Alcotest.(check bool)
     (Printf.sprintf "convergence keeps (...) — got %S" r)
-    true
-    (contains ~sub:"(...)" r)
+    true (contains ~sub:"(...)" r)
 
 (* ── Call argument lists ──────────────────────────────────────────── *)
 
@@ -84,8 +85,7 @@ let call_arity_yields_ellipsis () =
   let r = render (au (pat "val z = foo(a)") (pat "val z = foo(a, b, c)")) in
   Alcotest.(check bool)
     (Printf.sprintf "call arity yields (...) — got %S" r)
-    true
-    (contains ~sub:"(...)" r)
+    true (contains ~sub:"(...)" r)
 
 (* ── Field-mode rendering (Piece B, increment 1) ──────────────────── *)
 
@@ -104,9 +104,12 @@ let field_render_shape () =
     }
   in
   let r = Cs_pattern.render_pattern_body_field ep in
-  Alcotest.(check bool) (Printf.sprintf "match: field — got %S" r) true
+  Alcotest.(check bool)
+    (Printf.sprintf "match: field — got %S" r)
+    true
     (contains ~sub:"match: field" r);
-  Alcotest.(check bool) "signature is a context line" true
+  Alcotest.(check bool)
+    "signature is a context line" true
     (contains ~sub:"\n  fun f(x: Int)" r || contains ~sub:"  fun f(x: Int)" r);
   Alcotest.(check bool) "body removed" true (contains ~sub:"- {" r);
   Alcotest.(check bool) "expression body added" true (contains ~sub:"+ = x" r)
@@ -149,11 +152,14 @@ let field_align_return_type_presence () =
   in
   (* merged (not collapsed to a bare hole), field mode, body is the edit, and
      the return type is dropped (no `): Int` after the params). *)
-  Alcotest.(check bool) (Printf.sprintf "field rule — got %S" r) true
+  Alcotest.(check bool)
+    (Printf.sprintf "field rule — got %S" r)
+    true
     (contains ~sub:"match: field" r);
-  Alcotest.(check bool) "signature survived as context (fun _H)" true
-    (contains ~sub:"fun _H" r);
-  Alcotest.(check bool) "body is the edit" true
+  Alcotest.(check bool)
+    "signature survived as context (fun _H)" true (contains ~sub:"fun _H" r);
+  Alcotest.(check bool)
+    "body is the edit" true
     (contains ~sub:"- {" r && contains ~sub:"+ = " r);
   Alcotest.(check bool) "return type dropped" false (contains ~sub:"): Int" r)
 
@@ -176,10 +182,12 @@ let field_align_arity_and_return_type () =
   let r =
     Cs_pattern.render_pattern_body_field (Cs_pattern.anti_unify_edits ep1 ep2)
   in
-  Alcotest.(check bool) (Printf.sprintf "field rule — got %S" r) true
+  Alcotest.(check bool)
+    (Printf.sprintf "field rule — got %S" r)
+    true
     (contains ~sub:"match: field" r);
-  Alcotest.(check bool) "params generalised to (...)" true
-    (contains ~sub:"(...)" r);
+  Alcotest.(check bool)
+    "params generalised to (...)" true (contains ~sub:"(...)" r);
   Alcotest.(check bool) "return type dropped" false (contains ~sub:"): Int" r);
   (* round-trip: the merged rule converts a concrete site, preserving its own
      params and return type (field mode ignores the latter). *)
@@ -200,7 +208,8 @@ let find_node ty src =
   let rec go (n : Tree.src Tree.t) =
     if n.Tree.node_type = ty then Some n
     else
-      List.find_map (fun (c : Tree.src Tree.child) -> go c.Tree.node)
+      List.find_map
+        (fun (c : Tree.src Tree.child) -> go c.Tree.node)
         n.Tree.children
   in
   (go t.Tree.root, t)
@@ -215,8 +224,14 @@ let fbody src =
    single-return conversions. *)
 let body_cluster () =
   Cs_pattern.anti_unify_edits
-    { Cs_types.before = fbody "fun a() { return p }"; after = fbody "fun a() = p" }
-    { Cs_types.before = fbody "fun b() { return q }"; after = fbody "fun b() = q" }
+    {
+      Cs_types.before = fbody "fun a() { return p }";
+      after = fbody "fun a() = p";
+    }
+    {
+      Cs_types.before = fbody "fun b() { return q }";
+      after = fbody "fun b() = q";
+    }
 
 let anchored_decl_round_trips () =
   let body_ep = body_cluster () in
@@ -224,23 +239,25 @@ let anchored_decl_round_trips () =
   let decl, t = find_node "function_declaration" src in
   let body, _ = find_node "function_body" src in
   match (decl, body) with
-  | Some decl, Some body ->
+  | Some decl, Some body -> (
       ignore t;
-      (match
-         Cs_pattern.build_anchored_decl src decl
-           ~body_start:body.Tree.start_byte ~body_end:body.Tree.end_byte body_ep
-       with
+      match
+        Cs_pattern.build_anchored_decl src decl ~body_start:body.Tree.start_byte
+          ~body_end:body.Tree.end_byte body_ep
+      with
       | None -> Alcotest.fail "expected an anchored field rule, got None"
       | Some ep ->
           let r = Cs_pattern.render_pattern_body_field ep in
-          Alcotest.(check bool) (Printf.sprintf "field mode — got %S" r) true
+          Alcotest.(check bool)
+            (Printf.sprintf "field mode — got %S" r)
+            true
             (contains ~sub:"match: field" r);
-          Alcotest.(check bool) "fun keyword anchor in context" true
-            (contains ~sub:"fun" r);
-          Alcotest.(check bool) "params generalised to (...)" true
-            (contains ~sub:"(...)" r);
-          Alcotest.(check bool) "return type dropped" false
-            (contains ~sub:"): Int" r);
+          Alcotest.(check bool)
+            "fun keyword anchor in context" true (contains ~sub:"fun" r);
+          Alcotest.(check bool)
+            "params generalised to (...)" true (contains ~sub:"(...)" r);
+          Alcotest.(check bool)
+            "return type dropped" false (contains ~sub:"): Int" r);
           (* applies to a different function, preserving its own return type
              (field mode ignores the omitted one) and converting the body. *)
           let out =
@@ -258,9 +275,10 @@ let realign_orphan_holes_aligns () =
      realigned so the after hole reuses the before's — no orphan. *)
   let ep = { Cs_types.before = Cs_types.Hole 0; after = Cs_types.Hole 1 } in
   let r = Cs_pattern.realign_orphan_holes ep in
-  Alcotest.(check string) "after hole renamed onto before" "_H0"
-    (render r.Cs_types.after);
-  Alcotest.(check bool) "no orphan after realign" true
+  Alcotest.(check string)
+    "after hole renamed onto before" "_H0" (render r.Cs_types.after);
+  Alcotest.(check bool)
+    "no orphan after realign" true
     (Cs_pattern.no_orphan_after_holes r)
 
 let anchored_decl_strips_comment () =
@@ -280,8 +298,7 @@ let anchored_decl_strips_comment () =
           let r = Cs_pattern.render_pattern_body_field ep in
           Alcotest.(check bool)
             (Printf.sprintf "comment stripped — got %S" r)
-            false
-            (contains ~sub:"//" r))
+            false (contains ~sub:"//" r))
   | _ -> Alcotest.fail "could not locate declaration/body"
 
 (* ── no_junk_passthrough (geodesic-gate plan §3.3) ────────────────────
@@ -314,8 +331,7 @@ let block kids : pat_node =
       node_type = "statements";
       is_named = true;
       children = List.map (fun c -> { field_name = None; child = c }) kids;
-      template =
-        List.concat (List.mapi (fun i _ -> [ Slot i; Lit "\n" ]) kids);
+      template = List.concat (List.mapi (fun i _ -> [ Slot i; Lit "\n" ]) kids);
     }
 
 let check_junk name expected ep =
@@ -333,7 +349,10 @@ let junk_passthrough_cases () =
     pnode "import" [ kw "import"; ident "androidx"; Hole 1; Hole 2 ]
   in
   check_junk "umbrella with hole-only neighbours rejected" false
-    { before = block [ imp_b; junk3; junk4 ]; after = block [ imp_a; junk3; junk4 ] };
+    {
+      before = block [ imp_b; junk3; junk4 ];
+      after = block [ imp_a; junk3; junk4 ];
+    };
   (* The same edit with no pass-through wrapping is fine. *)
   check_junk "bare edit kept" true { before = imp_b; after = imp_a };
   (* A call's argument list [(_H0)] is identical and hole-only on both
@@ -367,8 +386,14 @@ let junk_passthrough_cases () =
      — kept. [$this->_H0($data, _H1::decode($string));] *)
   let ctx_line =
     pnode "expression_statement"
-      [ ident "$this"; Hole 0; ident "$data"; Hole 1; ident "decode";
-        ident "$string" ]
+      [
+        ident "$this";
+        Hole 0;
+        ident "$data";
+        Hole 1;
+        ident "decode";
+        ident "$string";
+      ]
   in
   let meth_b = pnode "method" [ kw "public"; ident "testDecode" ] in
   let meth_a =

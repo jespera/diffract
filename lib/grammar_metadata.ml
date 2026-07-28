@@ -278,11 +278,6 @@ let extract_string_defs (grammar : Yojson.Safe.t)
 
 (* ----- Per-language extensions ----- *)
 
-type extensions = {
-  extra_strings : string_def list;
-  extra_line_comments : string list;
-  extra_block_comments : (string * string) list;
-}
 (** Per-language additions to the auto-derived DEL definition.
 
     Languages whose string handling is in tree-sitter's external scanner
@@ -296,6 +291,11 @@ type extensions = {
     matching, prefix-based string interpolation, count-aware multi-dollar
     strings) are deliberately left out at this layer; they'd need specialised
     lexer code rather than declarative data. *)
+type extensions = {
+  extra_strings : string_def list;
+  extra_line_comments : string list;
+  extra_block_comments : (string * string) list;
+}
 
 let no_extensions =
   { extra_strings = []; extra_line_comments = []; extra_block_comments = [] }

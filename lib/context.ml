@@ -17,10 +17,7 @@ type parse_memo = {
   mutable cap : int;
 }
 
-type t = {
-  lang_cache : (string, nativeint) Hashtbl.t;
-  parse_memo : parse_memo;
-}
+type t = { lang_cache : (string, nativeint) Hashtbl.t; parse_memo : parse_memo }
 
 let create ?(parse_cache_cap = 512) () =
   {
@@ -58,4 +55,5 @@ let parse_memo_add ctx key v =
    re-evaluating every candidate against the changeset's files) calls this once
    the set's size is known, so the cap never falls below it however large the
    changeset. Only ever raises the cap. *)
-let ensure_parse_cap ctx n = if n > ctx.parse_memo.cap then ctx.parse_memo.cap <- n
+let ensure_parse_cap ctx n =
+  if n > ctx.parse_memo.cap then ctx.parse_memo.cap <- n

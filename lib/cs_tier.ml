@@ -2,8 +2,9 @@
     core ({!Cs_select.tier_rules}) over successive tiers — each tier re-runs on
     the (intermediate, after) pairs the earlier tiers leave unexplained — number
     the rules, prune rules an earlier tier's edits consume, account for the
-    chain effect per site, and emit the residuals that rules + residuals together
-    reproduce the changeset exactly. [summarize] is the public entry point. *)
+    chain effect per site, and emit the residuals that rules + residuals
+    together reproduce the changeset exactly. [summarize] is the public entry
+    point. *)
 
 open Cs_types
 open Cs_evaluate
@@ -22,7 +23,7 @@ let summarize ?progress ?(ignore_formatting = false) ~ctx (cs : changeset) :
   let apply_claiming rules path ~language src =
     List.fold_left
       (fun s (r : rule) ->
-        if r.language = language && List.mem path r.sites then
+        if r.language = language && List.mem path r.sites then (
           try
             Matcher.transform ~ctx ~language:r.language
               ~pattern_text:r.pattern_text ~source_text:s
@@ -31,7 +32,7 @@ let summarize ?progress ?(ignore_formatting = false) ~ctx (cs : changeset) :
           | e ->
               Cs_trace.trace "apply_claiming rule %s: %s\n%!" r.id
                 (Printexc.to_string e);
-              s
+              s)
         else s)
       src rules
   in
@@ -176,7 +177,9 @@ let summarize ?progress ?(ignore_formatting = false) ~ctx (cs : changeset) :
             | _ ->
                 (* Invariant: [apply_claiming !kept] equals [full] — every
                    accepted drop preserved the intermediate. *)
-                let full = apply_claiming claiming path ~language before_source in
+                let full =
+                  apply_claiming claiming path ~language before_source
+                in
                 let kept = ref claiming in
                 List.iter
                   (fun (r : rule) ->
@@ -231,7 +234,7 @@ let summarize ?progress ?(ignore_formatting = false) ~ctx (cs : changeset) :
           let inter =
             List.fold_left
               (fun s (r : rule) ->
-                if r.language = language && List.mem path r.sites then
+                if r.language = language && List.mem path r.sites then (
                   try
                     let edits =
                       Matcher.transform_edits ~ctx ~language:r.language
@@ -248,7 +251,7 @@ let summarize ?progress ?(ignore_formatting = false) ~ctx (cs : changeset) :
                   | e ->
                       Cs_trace.trace "chain-apply rule %s: %s\n%!" r.id
                         (Printexc.to_string e);
-                      s
+                      s)
                 else s)
               before_source combined
           in

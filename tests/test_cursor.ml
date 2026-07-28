@@ -11,13 +11,13 @@ open Diffract
 (* Tree representation                                                       *)
 (* ========================================================================= *)
 
+(** A simple n-ary tree. Each node has a node type; leaves additionally carry
+    text. Internal nodes' [text] field is unused. *)
 type tree = {
   node_type : string;
   text : string; (* meaningful only for leaves *)
   children : tree list;
 }
-(** A simple n-ary tree. Each node has a node type; leaves additionally carry
-    text. Internal nodes' [text] field is unused. *)
 
 let leaf node_type text = { node_type; text; children = [] }
 let node node_type children = { node_type; text = ""; children }

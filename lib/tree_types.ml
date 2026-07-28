@@ -5,12 +5,14 @@
     ([src]/[pat]/[any]) stay in [Tree] — they are an mli-level abstraction and
     nothing below [Tree] needs them. *)
 
-type point = { row : int; column : int }
 (** Position in source code *)
+type point = { row : int; column : int }
 
-type 'kind child = { field_name : string option; node : 'kind t }
 (** A child node with optional field name *)
+type 'kind child = { field_name : string option; node : 'kind t }
 
+(** A tree node with all data copied from tree-sitter. The [hash] field is a
+    precomputed structural hash that excludes positional information. *)
 and 'kind t = {
   node_type : string;
   is_named : bool;
@@ -27,9 +29,7 @@ and 'kind t = {
   children : 'kind child list;
   named_children : 'kind t list;
 }
-(** A tree node with all data copied from tree-sitter. The [hash] field is a
-    precomputed structural hash that excludes positional information. *)
 
-type 'kind tree = { root : 'kind t; source : string }
 (** A complete parsed tree with source. The 'kind parameter is a phantom type —
     it's never used at runtime. *)
+type 'kind tree = { root : 'kind t; source : string }

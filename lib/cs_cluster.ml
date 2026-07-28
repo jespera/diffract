@@ -1,9 +1,9 @@
 (** Change-summary clustering (PROPOSE-side, design §4.1): build the
     anti-unification dendrogram over change pairs, cut it at the
-    coarsest-still-coherent level, coarsen orphan holes, re-specialize survivors,
-    and cluster one-sided (Added/Removed) candidates for fusion. Depends on
-    {!Cs_types}, {!Cs_pattern}, and {!Cs_evaluate} (the removal-group safety
-    check). *)
+    coarsest-still-coherent level, coarsen orphan holes, re-specialize
+    survivors, and cluster one-sided (Added/Removed) candidates for fusion.
+    Depends on {!Cs_types}, {!Cs_pattern}, and {!Cs_evaluate} (the removal-group
+    safety check). *)
 
 open Cs_types
 open Cs_pattern
@@ -437,7 +437,8 @@ let build_os_dendrogram (initial : (one_sided_instance * pat_node) list) :
   done;
   List.hd !nodes
 
-let cut_os_dendrogram ?(threshold = Cs_config.default.max_hole_fraction) min_size side root =
+let cut_os_dendrogram ?(threshold = Cs_config.default.max_hole_fraction)
+    min_size side root =
   let is_coherent p =
     let s = pat_size p in
     has_concrete p
@@ -513,8 +514,9 @@ let removal_body_of_text (text : string) : string =
     (intermediate generalisations between the hole and the concrete texts are
     not currently recovered). Returns [(pattern_text, instances)] groups to
     emit. *)
-let safe_removal_groups ~ctx ~site_db ?(min_support = Cs_config.default.min_support) (c : one_sided_cluster)
-    : (string * one_sided_instance list) list =
+let safe_removal_groups ~ctx ~site_db
+    ?(min_support = Cs_config.default.min_support) (c : one_sided_cluster) :
+    (string * one_sided_instance list) list =
   let safe_with pattern_text (i : one_sided_instance) =
     i.os_language <> ""
     &&
@@ -546,4 +548,3 @@ let safe_removal_groups ~ctx ~site_db ?(min_support = Cs_config.default.min_supp
       groups []
     |> List.sort (fun (a, _) (b, _) -> compare a b)
   end
-

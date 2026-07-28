@@ -30,12 +30,15 @@
     multiple leaves (e.g. a PHP [$x] that splits into [$] + [x]) are not yet
     handled. *)
 
-val is_spread_at : string -> int -> bool
 (** [is_spread_at text i] is true iff the [...] starting at byte [i] of [text]
     is a spread/rest operator ([...args], [...$rest]) rather than an ellipsis —
     i.e. it is immediately followed by an identifier character or [$]. Exposed
     so the transform side classifies a [+]-line [...] with the same rule. *)
+val is_spread_at : string -> int -> bool
 
+(** [tokenize ~ctx ~language ~single_metavars ~sequence_metavars body] returns
+    the token list for [body]. Extras (comments, whitespace tokens) are skipped.
+*)
 val tokenize :
   ctx:Context.t ->
   language:string ->
@@ -43,10 +46,12 @@ val tokenize :
   sequence_metavars:string list ->
   string ->
   Stmatch.pattern_token list
-(** [tokenize ~ctx ~language ~single_metavars ~sequence_metavars body] returns
-    the token list for [body]. Extras (comments, whitespace tokens) are skipped.
-*)
 
+(** Like {!tokenize}, but pairs each token with the 0-based line index of its
+    leaf in [body]. Ellipsis preprocessing preserves newlines, so the index
+    matches the line in the original [body] — letting a caller recover the
+    [-]/context role of each token from the pattern line it came from
+    (surgical-transforms groundwork). *)
 val tokenize_with_lines :
   ctx:Context.t ->
   language:string ->
@@ -54,21 +59,7 @@ val tokenize_with_lines :
   sequence_metavars:string list ->
   string ->
   (Stmatch.pattern_token * int) list
-(** Like {!tokenize}, but pairs each token with the 0-based line index of its
-    leaf in [body]. Ellipsis preprocessing preserves newlines, so the index
-    matches the line in the original [body] — letting a caller recover the
-    [-]/context role of each token from the pattern line it came from
-    (surgical-transforms groundwork). *)
 
-val tokenize_span :
-  ctx:Context.t ->
-  language:string ->
-  single_metavars:string list ->
-  sequence_metavars:string list ->
-  lo:int ->
-  hi:int ->
-  string ->
-  Stmatch.pattern_token list
 (** [tokenize_span ~ctx ~language ~single_metavars ~sequence_metavars ~lo ~hi
      text] tokenizes [text] but keeps only the leaves whose start byte is in the
     half-open range [\[lo, hi)]. No ellipsis preprocessing is performed, so byte
@@ -80,3 +71,12 @@ val tokenize_span :
     would have in that context — e.g. an object key as [property_identifier]
     rather than the standalone [statement_identifier]), then the fragment's own
     leaves are extracted by their byte span. *)
+val tokenize_span :
+  ctx:Context.t ->
+  language:string ->
+  single_metavars:string list ->
+  sequence_metavars:string list ->
+  lo:int ->
+  hi:int ->
+  string ->
+  Stmatch.pattern_token list

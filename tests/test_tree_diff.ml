@@ -291,8 +291,8 @@ let test_cross_type_rewrite () =
         && p.after_node.node_type = "object_declaration")
       pairs
   in
-  Alcotest.(check bool) "class_declaration paired with object_declaration" true
-    found
+  Alcotest.(check bool)
+    "class_declaration paired with object_declaration" true found
 
 (* Test: the cross-type pass stays conservative — unrelated Removed+Added
    siblings of different types share no pre-matched content (dice 0.0) and

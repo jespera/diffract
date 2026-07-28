@@ -1,12 +1,12 @@
 (** Tree-sitter node traversal API *)
 
-type tree
 (** Abstract types for tree and node *)
+type tree
 
 type t (* node *)
 
-type point = { row : int; column : int }
 (** Position in source code *)
+type point = { row : int; column : int }
 
 (** {1 Tree operations} *)
 

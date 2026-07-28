@@ -1,9 +1,9 @@
 (** Change-summary proposal (design §3.1, §3.2): extract change pairs from a
     per-file {!Tree_diff} at every level of each change chain, and build the
-    candidate channels — multi-level pairs, content-extraction pairs, delta-keyed
-    pairs, and anchored lattice-descent variants. A weak proposer costs recall,
-    never honesty (design §3.3); semantics are decided later by {!Cs_evaluate}.
-    Depends on {!Cs_types} and {!Cs_pattern}. *)
+    candidate channels — multi-level pairs, content-extraction pairs,
+    delta-keyed pairs, and anchored lattice-descent variants. A weak proposer
+    costs recall, never honesty (design §3.3); semantics are decided later by
+    {!Cs_evaluate}. Depends on {!Cs_types} and {!Cs_pattern}. *)
 
 open Cs_types
 open Cs_pattern
@@ -113,8 +113,9 @@ let extraction_pairs (child_changes : Tree_diff.child_change list) :
         addeds)
     removeds
 
-let collect_change_pairs_multi ?(emission_threshold = Cs_config.default.emission_threshold) (d : Tree_diff.diff)
-    : Tree_diff.change_pair list =
+let collect_change_pairs_multi
+    ?(emission_threshold = Cs_config.default.emission_threshold)
+    (d : Tree_diff.diff) : Tree_diff.change_pair list =
   let out = ref [] in
   let emitted : (int * int, unit) Hashtbl.t = Hashtbl.create 16 in
   let emit (b : Tree.src Tree.t) (a : Tree.src Tree.t) =
@@ -327,8 +328,7 @@ let delta_keyed_pair (cp : Tree_diff.change_pair) : edit_pat option =
       let ep = { before; after } in
       if
         has_concrete ep.before && has_concrete_edit ep
-        && no_orphan_after_holes ep
-        && no_junk_passthrough ep
+        && no_orphan_after_holes ep && no_junk_passthrough ep
         && hole_frac ep < Cs_config.default.max_hole_fraction
       then Some ep
       else None
@@ -341,9 +341,9 @@ let delta_keyed_pair (cp : Tree_diff.change_pair) : edit_pat option =
     changed-child chain is a bracket-delimited list — its first and last kept
     children are a matching anonymous bracket pair — and exactly one child
     between the brackets changed, the list's other children collapse into
-    [Ellipsis] runs around the changed child instead of staying concrete
-    (anchor mode) or becoming per-child holes (inner mode). Both alternatives
-    bake the list's ARITY into the pattern, so a one-parameter type rename in
+    [Ellipsis] runs around the changed child instead of staying concrete (anchor
+    mode) or becoming per-child holes (inner mode). Both alternatives bake the
+    list's ARITY into the pattern, so a one-parameter type rename in
     constructors of different arities fragments into per-arity rules; the
     ellipsis form renders as
 
@@ -357,24 +357,24 @@ let delta_keyed_pair (cp : Tree_diff.change_pair) : edit_pat option =
 
     which is arity- and position-independent (a leading/trailing [...] matches
     zero siblings, and absorbs the separator next to the changed child), so the
-    realisation is textually identical across sites and pools by identity.
-    The synthetic template puts every part on its own line: the surgical
-    renderer aligns lines, and the [...] lines must land in the common
-    prefix/suffix to render as context — a [+ ...] line would be a fresh
-    unbound sequence binding.
+    realisation is textually identical across sites and pools by identity. The
+    synthetic template puts every part on its own line: the surgical renderer
+    aligns lines, and the [...] lines must land in the common prefix/suffix to
+    render as context — a [+ ...] line would be a fresh unbound sequence
+    binding.
 
     Keeping the brackets concrete is load-bearing beyond readability: a bare
-    fragment without them re-parses with neutral-context leaf types and the
-    gate finds zero fires (the §3.2 re-parse mismatch); [<] is worst — bare
-    angle brackets re-parse as JSX/comparison. The bracket level typically sits
-    under a concrete head kept by anchor mode ([constructor], the generic type
-    name), so the emitted rule reads [head( ... delta ... )].
+    fragment without them re-parses with neutral-context leaf types and the gate
+    finds zero fires (the §3.2 re-parse mismatch); [<] is worst — bare angle
+    brackets re-parse as JSX/comparison. The bracket level typically sits under
+    a concrete head kept by anchor mode ([constructor], the generic type name),
+    so the emitted rule reads [head( ... delta ... )].
 
     A one-sided before-run — a contiguous stretch of unmatched children with
     nothing unmatched on the after side — is a DELETION from the list; the run
-    (the element plus the adjacent separator tree-diff leaves unmatched)
-    renders as [-] lines between the context ellipses, so the separator is
-    deleted explicitly rather than by cleanup magic.
+    (the element plus the adjacent separator tree-diff leaves unmatched) renders
+    as [-] lines between the context ellipses, so the separator is deleted
+    explicitly rather than by cleanup magic.
 
     Returns [None] (caller falls back to the concrete form) unless the bracket
     shape holds and the unmatched children form exactly one changed child on
@@ -418,11 +418,15 @@ let ellipsize_level (bn : Tree.src Tree.t) (an : Tree.src Tree.t)
     else begin
       let unmatched_b = ref [] in
       Array.iteri
-        (fun i (_, m) -> if m = None && i > 0 && i < nb - 1 then unmatched_b := i :: !unmatched_b)
+        (fun i (_, m) ->
+          if m = None && i > 0 && i < nb - 1 then
+            unmatched_b := i :: !unmatched_b)
         ba;
       let unmatched_a = ref [] in
       Array.iteri
-        (fun i u -> if (not u) && i > 0 && i < na - 1 then unmatched_a := i :: !unmatched_a)
+        (fun i u ->
+          if (not u) && i > 0 && i < na - 1 then
+            unmatched_a := i :: !unmatched_a)
         used;
       let unmatched_b = List.rev !unmatched_b in
       let unmatched_a = List.rev !unmatched_a in
@@ -480,11 +484,11 @@ let ellipsize_level (bn : Tree.src Tree.t) (an : Tree.src Tree.t)
     end
 
 (** Anchored lattice-descent variants (§3.2): the pair's own preserved children
-    stay CONCRETE — they are the anchor that discriminates a context-dependent change
-    — while preserved content *inside* the changed-child chain becomes shared
-    holes, recursively along the single-changed-child path. For a rename applied
-    at [state = X(args)] this yields [state = X(_H0) ⤳ state = Y(_H0)]: the
-    [state =] anchor literal, the site-specific args holed.
+    stay CONCRETE — they are the anchor that discriminates a context-dependent
+    change — while preserved content *inside* the changed-child chain becomes
+    shared holes, recursively along the single-changed-child path. For a rename
+    applied at [state = X(args)] this yields [state = X(_H0) ⤳ state = Y(_H0)]:
+    the [state =] anchor literal, the site-specific args holed.
 
     Each variant carries a *delta key* — the changed leaves' source text on both
     sides — so that support can be pooled on the delta across sites whose
@@ -820,11 +824,9 @@ let anchored_variants (cp : Tree_diff.change_pair) :
       in
       if not ellipsis_lists then concrete_level ()
       else
-        (match
-           ellipsize_level bn an b_assign aks used b_children a_children
-         with
+        match ellipsize_level bn an b_assign aks used b_children a_children with
         | Some pair -> pair
-        | None -> concrete_level ())
+        | None -> concrete_level ()
     in
     let before, after =
       level ~holed_preserved:false cp.before_node cp.after_node
@@ -866,7 +868,11 @@ let anchored_variants (cp : Tree_diff.change_pair) :
   then []
   else begin
     let sels = enum_selectors b a 0 in
-    let sels = List.filteri (fun i _ -> i < Cs_config.default.max_selectors_per_pair) sels in
+    let sels =
+      List.filteri
+        (fun i _ -> i < Cs_config.default.max_selectors_per_pair)
+        sels
+    in
     let seen = Hashtbl.create 8 in
     List.concat_map
       (fun s ->
@@ -973,8 +979,8 @@ let collect_initial_clusters ?on_file ~ctx (cs : changeset) :
           with
           | (Stack_overflow | Out_of_memory | Sys.Break) as e -> raise e
           | e ->
-              Cs_trace.trace "collect_initial_clusters: skipping %s: %s\n%!" path
-                (Printexc.to_string e))
+              Cs_trace.trace "collect_initial_clusters: skipping %s: %s\n%!"
+                path (Printexc.to_string e))
       | Added _ | Deleted _ -> ())
     modified;
   (!initial, !delta, !anchored)

@@ -106,7 +106,9 @@ let generate_diff ?(context = 3) ?keep_hunk ~file_path ~original ~transformed ()
             0 hunk
         in
         let keep =
-          match keep_hunk with None -> true | Some f -> f ~orig_start ~orig_len
+          match keep_hunk with
+          | None -> true
+          | Some f -> f ~orig_start ~orig_len
         in
         if keep then begin
           emitted := true;

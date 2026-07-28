@@ -3,11 +3,15 @@
 
 (** {1 DEL definition (from grammar.json)} *)
 
-type string_def = { opener : string; closer : string; escape : char option }
 (** A string literal's lexical shape: opening and closing delimiters, plus the
     escape character if any. Interior content is treated as opaque by the DEL
     lexer. *)
+type string_def = { opener : string; closer : string; escape : char option }
 
+(** The lexical metadata needed by the DEL pattern lexer: which characters open
+    and close brackets, strings, and comments. Auto-derived from each language's
+    [grammar.json] where possible; per-language extensions may add string
+    definitions for cases handled by external scanners. *)
 type del_definition = {
   bracket_pairs : (string * string) list;
       (** Pairs of opening and closing bracket strings, e.g. [("(",")")]. *)
@@ -22,18 +26,14 @@ type del_definition = {
       (** Pairs of opening and closing markers for block comments, e.g.
           [("/*","*/")]. *)
 }
-(** The lexical metadata needed by the DEL pattern lexer: which characters open
-    and close brackets, strings, and comments. Auto-derived from each language's
-    [grammar.json] where possible; per-language extensions may add string
-    definitions for cases handled by external scanners. *)
 
-val del_definition : language:string -> del_definition
 (** [del_definition ~language] returns the DEL definition for the given
     language. Memoized; first call per language parses the embedded
     [grammar.json]. Returns an empty definition for unknown languages. *)
+val del_definition : language:string -> del_definition
 
 (** {1 General accessors} *)
 
-val all_languages : unit -> string list
 (** Returns the list of language names for which embedded metadata is available.
 *)
+val all_languages : unit -> string list

@@ -1,7 +1,7 @@
 (** Change-summary fusion (M1.6): combine independently-clustered changes that
-    co-occur across the same files into conjunctive multi-section rules
-    (design §4.2). Jaccard file-set overlap groups candidates; [materialise_group]
-    emits the fused rule. Depends on {!Cs_types} and {!Cs_pattern}. *)
+    co-occur across the same files into conjunctive multi-section rules (design
+    §4.2). Jaccard file-set overlap groups candidates; [materialise_group] emits
+    the fused rule. Depends on {!Cs_types} and {!Cs_pattern}. *)
 
 open Cs_types
 open Cs_pattern
@@ -86,6 +86,12 @@ let pair_one_sided_clusters ?(threshold = Cs_config.default.jaccard_threshold)
 
 (* ── M1.6 cases 2 & 3: conjunctive multi-section fusion ──────────── *)
 
+(** A node feeding the fusion graph: a two-sided edit pattern plus the file set
+    it fires in. Two-sided clusters and one-sided swap pairs feed in identically
+    — once a swap pair has been widened to two-sided by [fuse_swap], the
+    downstream fusion treats it the same as any other two-sided cluster. Cases 2
+    (one-sided + two-sided) and 3 (two-sided + two-sided) of §4.2 differ only in
+    input shape; the output mechanics are uniform. *)
 type fusion_node = {
   fn_pattern : edit_pat;
   fn_files : string list;  (** sorted unique *)
@@ -95,12 +101,6 @@ type fusion_node = {
           (matches the prior single-rule conventions). *)
   fn_language : string;
 }
-(** A node feeding the fusion graph: a two-sided edit pattern plus the file set
-    it fires in. Two-sided clusters and one-sided swap pairs feed in identically
-    — once a swap pair has been widened to two-sided by [fuse_swap], the
-    downstream fusion treats it the same as any other two-sided cluster. Cases 2
-    (one-sided + two-sided) and 3 (two-sided + two-sided) of §4.2 differ only in
-    input shape; the output mechanics are uniform. *)
 
 let intersect_sorted (a : string list) (b : string list) : string list =
   List.filter (fun x -> List.mem x b) a
@@ -148,8 +148,8 @@ let fusion_node_of_swap (ep : edit_pat) (insts : one_sided_instance list) :
 (** Group fusion nodes into connected components by Jaccard ≥ threshold over
     their file sets. Union-find: an edge [i—j] exists iff
     [J(files_i, files_j) ≥ threshold]; components are reachable sets. *)
-let group_by_jaccard ?(threshold = Cs_config.default.jaccard_threshold) (nodes : fusion_node list) :
-    fusion_node list list =
+let group_by_jaccard ?(threshold = Cs_config.default.jaccard_threshold)
+    (nodes : fusion_node list) : fusion_node list list =
   let arr = Array.of_list nodes in
   let n = Array.length arr in
   let parent = Array.init n (fun i -> i) in
@@ -187,7 +187,8 @@ let group_by_jaccard ?(threshold = Cs_config.default.jaccard_threshold) (nodes :
     all-way intersection is empty; standalone emission preserves coverage).
     Sections inside a fused rule are ordered by their rendered body for
     deterministic output. *)
-let materialise_group ?(min_support = Cs_config.default.min_support) (group : fusion_node list) :
+let materialise_group ?(min_support = Cs_config.default.min_support)
+    (group : fusion_node list) :
     (edit_pat list * string list * string * int) list =
   match group with
   | [] -> []

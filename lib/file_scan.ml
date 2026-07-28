@@ -10,9 +10,9 @@
     single [*] wildcard:
     - ["*.ts"] — suffix match (any basename ending in [.ts])
     - ["test_*"] — prefix match (any basename starting with [test_])
-    - ["a*c"] — prefix [a] and suffix [c]
-    A pattern with no [*] is an exact basename match. A pattern with more than
-    one [*] falls back to an exact (literal) match. *)
+    - ["a*c"] — prefix [a] and suffix [c] A pattern with no [*] is an exact
+      basename match. A pattern with more than one [*] falls back to an exact
+      (literal) match. *)
 let glob_match pattern filename =
   let basename = Filename.basename filename in
   if String.contains pattern '*' then

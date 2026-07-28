@@ -22,14 +22,12 @@ type site_info = {
           well-formedness guard tolerates these in a rule's output — they
           predate the rule — while rejecting any error the rule invents. *)
   si_before_leaves : Leaf_metric.stream;
-      (** leaf stream of the before-source, cached for the geodesic check —
-          the gate evaluates many candidates per site against the same
-          endpoints. *)
+      (** leaf stream of the before-source, cached for the geodesic check — the
+          gate evaluates many candidates per site against the same endpoints. *)
   si_after_leaves : Leaf_metric.stream;  (** leaf stream of the after-source *)
   si_d_endpoints : int;
-      (** [Leaf_metric.distance si_before_leaves si_after_leaves] — the
-          site's own edit distance, the geodesic equation's right-hand
-          side. *)
+      (** [Leaf_metric.distance si_before_leaves si_after_leaves] — the site's
+          own edit distance, the geodesic equation's right-hand side. *)
 }
 
 (** A bare separator token — a childless [,]/[;] node. Added or removed alone it
@@ -72,11 +70,16 @@ let changed_regions ?(ignore_separators = false) (d : Tree_diff.diff) :
                 go before after change;
                 cursor := before.end_byte
             | Tree_diff.Removed { node } ->
-                if not (ignore_separators && is_separator_token d.before_source node)
+                if
+                  not
+                    (ignore_separators
+                    && is_separator_token d.before_source node)
                 then add node.start_byte node.end_byte "";
                 cursor := node.end_byte
             | Tree_diff.Added { node } ->
-                if not (ignore_separators && is_separator_token d.after_source node)
+                if
+                  not
+                    (ignore_separators && is_separator_token d.after_source node)
                 then add !cursor !cursor (after_text node))
           child_changes
   in
@@ -134,10 +137,10 @@ let string_mem ~sub s =
     line spans are each widened by one line before intersecting, and an
     unparseable side falls back to the unfiltered diff.
 
-    With [ignore_formatting], the changed-region oracle also treats added/removed
-    bare separators (trailing commas, redundant semicolons) as trivia, so a hunk
-    that is only reflow — re-indentation plus a trailing separator — is dropped
-    too, not just pure-whitespace hunks. *)
+    With [ignore_formatting], the changed-region oracle also treats
+    added/removed bare separators (trailing commas, redundant semicolons) as
+    trivia, so a hunk that is only reflow — re-indentation plus a trailing
+    separator — is dropped too, not just pure-whitespace hunks. *)
 let residual_diff ?(ignore_formatting = false) ~ctx ~language ~file_path
     ~original ~transformed () =
   if original = transformed then ""
@@ -147,9 +150,7 @@ let residual_diff ?(ignore_formatting = false) ~ctx ~language ~file_path
         let bt = Tree.parse ~ctx ~language original in
         let at = Tree.parse ~ctx ~language transformed in
         let d = Tree_diff.diff ~before:bt ~after:at in
-        let regions =
-          changed_regions ~ignore_separators:ignore_formatting d
-        in
+        let regions = changed_regions ~ignore_separators:ignore_formatting d in
         let line_starts =
           let acc = ref [ 0 ] in
           String.iteri
@@ -211,9 +212,7 @@ let build_site_db ~ctx (cs : changeset) : (string, site_info) Hashtbl.t =
      (plus headroom for the transformed intermediates churning through), so the
      cache adapts to the changeset rather than a fixed cap. *)
   let modified =
-    List.fold_left
-      (fun n -> function Modified _ -> n + 1 | _ -> n)
-      0 cs.files
+    List.fold_left (fun n -> function Modified _ -> n + 1 | _ -> n) 0 cs.files
   in
   Context.ensure_parse_cap ctx ((2 * modified) + 128);
   let tbl = Hashtbl.create 16 in
@@ -263,44 +262,6 @@ let spans_overlap s e rs re =
   || (s = e && rs <= s && s <= re)
   || (rs = re && s <= rs && rs <= e)
 
-type site_evaluation = {
-  ev_exact : bool;
-      (** the gate verdict: the candidate fires and fully explains every region
-          it touches (no remaining change in its landing zones). *)
-  ev_decomposable : bool;
-      (** M1.9b: the candidate fires and makes safe-but-*partial* progress
-          within a region — [t''] differs from the after inside a landing zone,
-          but the rule stays on the geodesic (§2.3):
-          [d(t,t'') + d(t'',t') = d(t,t')] on the leaf-stream metric
-          ([Leaf_metric]), so the gap is an honest residual step rather than
-          a detour that must be undone. A decomposable site counts toward
-          support and coverage; its in-zone gap is emitted as a
-          [rule=]-attributed residual (§4.4) by the re-diff in [summarize].
-          Mutually exclusive with [ev_exact]. *)
-  ev_fires : int;  (** number of edits the candidate makes at the site *)
-  ev_resolved : int list;
-      (** indices into [si_regions] of the changed regions the candidate fully
-          resolves: regions an edit touches whose t''-image carries no remaining
-          change after application. The selector's coverage unit (§3.3). A
-          decomposable site lists only the regions it fully resolves; partial
-          ones fall to the residual. Empty unless [ev_exact] or
-          [ev_decomposable]. *)
-  ev_clean : bool;
-      (** the candidate, applied alone, reproduces the site's after-source
-          (modulo whitespace) — i.e. it leaves no residual here. Used by
-          selection to prefer a rule that reconstructs over one that only
-          partially resolves the same regions (e.g. an extraction
-          [box($H).get() ⤳ $H] over a bare removal [box($H).get()] that deletes
-          and defers the rest to a residual). Always false for a
-          decomposable-only site. *)
-  ev_overfire : bool;
-      (** the candidate fired here (produced edits) but at least one edit fell
-          outside every changed region — the placement leg failed. Distinct from
-          a plain no-match: it marks a context-stripped pattern matching code the
-          changeset did not touch. Declaration anchoring keys on this — a body
-          rule that over-fires is the one worth re-anchoring under its enclosing
-          declaration. *)
-}
 (** Per-site safety gate: the operational form of the safety property (design
     §2.3) — with [t'' = apply(rule, t)], [d(t,t'') + d(t'',t') = d(t,t')]. Two
     legs (§3.1):
@@ -329,6 +290,44 @@ type site_evaluation = {
     or residuals' business. A site where the rule makes safe-but-partial
     progress {e within} a region (the residual case, §4.4) is shed until M1.9b
     can attach residuals to state the gap honestly. *)
+type site_evaluation = {
+  ev_exact : bool;
+      (** the gate verdict: the candidate fires and fully explains every region
+          it touches (no remaining change in its landing zones). *)
+  ev_decomposable : bool;
+      (** M1.9b: the candidate fires and makes safe-but-*partial* progress
+          within a region — [t''] differs from the after inside a landing zone,
+          but the rule stays on the geodesic (§2.3):
+          [d(t,t'') + d(t'',t') = d(t,t')] on the leaf-stream metric
+          ([Leaf_metric]), so the gap is an honest residual step rather than a
+          detour that must be undone. A decomposable site counts toward support
+          and coverage; its in-zone gap is emitted as a [rule=]-attributed
+          residual (§4.4) by the re-diff in [summarize]. Mutually exclusive with
+          [ev_exact]. *)
+  ev_fires : int;  (** number of edits the candidate makes at the site *)
+  ev_resolved : int list;
+      (** indices into [si_regions] of the changed regions the candidate fully
+          resolves: regions an edit touches whose t''-image carries no remaining
+          change after application. The selector's coverage unit (§3.3). A
+          decomposable site lists only the regions it fully resolves; partial
+          ones fall to the residual. Empty unless [ev_exact] or
+          [ev_decomposable]. *)
+  ev_clean : bool;
+      (** the candidate, applied alone, reproduces the site's after-source
+          (modulo whitespace) — i.e. it leaves no residual here. Used by
+          selection to prefer a rule that reconstructs over one that only
+          partially resolves the same regions (e.g. an extraction
+          [box($H).get() ⤳ $H] over a bare removal [box($H).get()] that deletes
+          and defers the rest to a residual). Always false for a
+          decomposable-only site. *)
+  ev_overfire : bool;
+      (** the candidate fired here (produced edits) but at least one edit fell
+          outside every changed region — the placement leg failed. Distinct from
+          a plain no-match: it marks a context-stripped pattern matching code
+          the changeset did not touch. Declaration anchoring keys on this — a
+          body rule that over-fires is the one worth re-anchoring under its
+          enclosing declaration. *)
+}
 
 let no_fire =
   {

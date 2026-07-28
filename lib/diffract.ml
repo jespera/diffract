@@ -13,6 +13,7 @@ module Tokenize = Tokenize
 module Matcher = Matcher
 module Text_diff = Text_diff
 module Change_summary = Change_summary
+
 (* Internal change-summary modules, exposed for unit testing of the pattern
    layer (anti-unification, rendering). Not part of the stable public API. *)
 module Cs_types = Cs_types

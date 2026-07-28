@@ -37,11 +37,6 @@ module Make (C : Cursor.S) : sig
     | Single of { name : string; cursor : C.t }
     | Sequence of { name : string; cursors : C.t list }
 
-  val match_at :
-    ?initial_bindings:binding list ->
-    pattern_token list ->
-    C.t ->
-    (C.t * binding list) option
   (** [match_at pattern cursor] tries to match [pattern] starting at [cursor]'s
       current position.
 
@@ -67,27 +62,24 @@ module Make (C : Cursor.S) : sig
       The input cursor is mutated during the attempt; on failure its final
       position is unspecified (use {!Cursor.S.clone} on the input cursor if you
       need to retry from the same position). *)
-
-  val match_at_spans :
+  val match_at :
     ?initial_bindings:binding list ->
     pattern_token list ->
     C.t ->
-    (C.t * binding list * (int * int) array) option
+    (C.t * binding list) option
+
   (** Like {!match_at}, but additionally returns, per pattern-token index, the
       source byte range [\[start, end)] that token consumed in the committed
       match. [Concrete] and [Subtree] entries are exact; [Siblings] entries are
       left as [(-1, -1)] (their span is recoverable from the sequence binding).
       Used by surgical transforms to locate the spans of `-`-marked regions
       within the matched node. *)
-
-  val match_prefix :
+  val match_at_spans :
     ?initial_bindings:binding list ->
-    ?ignore_node_type:bool ->
-    ?descend:bool ->
-    ?spans:(int * int) array option ->
     pattern_token list ->
     C.t ->
-    (pattern_token list * C.t * binding list) option
+    (C.t * binding list * (int * int) array) option
+
   (** [match_prefix pattern cursor] tries to match a prefix of [pattern] against
       [cursor]'s sub-tree, succeeding when the sub-tree is exhausted.
 
@@ -131,14 +123,15 @@ module Make (C : Cursor.S) : sig
 
       Like {!match_at}, the input cursor is mutated; clone first if you need to
       retry from the same position. *)
-
-  val match_set_at :
+  val match_prefix :
     ?initial_bindings:binding list ->
+    ?ignore_node_type:bool ->
+    ?descend:bool ->
     ?spans:(int * int) array option ->
-    ?offset:int ->
     pattern_token list ->
     C.t ->
-    (C.t * binding list) option
+    (pattern_token list * C.t * binding list) option
+
   (** [match_set_at pattern cursor] is the low-level set-match primitive: it
       consumes [pattern] by repeated {!match_prefix} calls against the source's
       named children (via {!Cursor.S.named_children}), with set semantics —
@@ -172,13 +165,14 @@ module Make (C : Cursor.S) : sig
       Returns [Some (cursor, bindings)] on success (cursor unchanged at the
       container; bindings accumulated). Returns [None] if any pattern element
       fails to match an unused source child. *)
-
-  val match_partial_at :
+  val match_set_at :
     ?initial_bindings:binding list ->
     ?spans:(int * int) array option ->
+    ?offset:int ->
     pattern_token list ->
     C.t ->
     (C.t * binding list) option
+
   (** [match_partial_at pattern cursor] is the partial-mode entry point for a
       {b real} set-like container. [pattern] is the {b full} token stream —
       including whatever bracket/punctuation tokens the source's grammar
@@ -219,14 +213,13 @@ module Make (C : Cursor.S) : sig
       anonymous-leaf helpers; against those, [match_partial_at] always returns
       [None]. Use {!match_set_at} directly for fixture-based tests of the
       set-match logic. *)
-
-  val match_field_at :
+  val match_partial_at :
     ?initial_bindings:binding list ->
-    ?ignore_node_type:bool ->
     ?spans:(int * int) array option ->
     pattern_token list ->
     C.t ->
     (C.t * binding list) option
+
   (** [match_field_at pattern cursor] is the field-mode entry point. It aligns
       the ordered [pattern] token stream to a {b subsequence} of the node's
       named children ({!Cursor.S.named_children}), left to right.
@@ -257,7 +250,15 @@ module Make (C : Cursor.S) : sig
       punctuation is matched inside a child by [match_prefix]. Returns [None]
       when the pattern cannot be fully consumed. On success the cursor is
       returned unchanged at the node. *)
+  val match_field_at :
+    ?initial_bindings:binding list ->
+    ?ignore_node_type:bool ->
+    ?spans:(int * int) array option ->
+    pattern_token list ->
+    C.t ->
+    (C.t * binding list) option
 
+  (** A successful match found by the outer-loop search functions. *)
   type match_result = {
     start_byte : int;
     end_byte : int;
@@ -270,15 +271,7 @@ module Make (C : Cursor.S) : sig
             transforms read it to locate `-`-marked regions; an empty array
             means "fall back to whole-span replacement". *)
   }
-  (** A successful match found by the outer-loop search functions. *)
 
-  val find_matches :
-    ?overlapping:bool ->
-    ?initial_bindings:binding list ->
-    ?ignore_node_type:bool ->
-    pattern_token list ->
-    C.t ->
-    match_result list
   (** [find_matches pattern source_cursor] returns matches of [pattern] in the
       tree accessible via [source_cursor], in document order. Walks the source
       tree in pre-order, attempting [match_at]. The caller's cursor is not
@@ -303,7 +296,16 @@ module Make (C : Cursor.S) : sig
       match that share a name with a seeded binding must bind to a
       structurally-equal subtree, otherwise the attempt fails. Used by the
       multi-section driver to enforce cross-section non-linearity. *)
+  val find_matches :
+    ?overlapping:bool ->
+    ?initial_bindings:binding list ->
+    ?ignore_node_type:bool ->
+    pattern_token list ->
+    C.t ->
+    match_result list
 
+  (** Lazy variant of {!find_matches}. Pull match results on demand from the
+      sequence; stops walking the tree when consumers stop pulling. *)
   val find_matches_iter :
     ?overlapping:bool ->
     ?initial_bindings:binding list ->
@@ -311,14 +313,7 @@ module Make (C : Cursor.S) : sig
     pattern_token list ->
     C.t ->
     match_result Seq.t
-  (** Lazy variant of {!find_matches}. Pull match results on demand from the
-      sequence; stops walking the tree when consumers stop pulling. *)
 
-  val find_partial_matches :
-    ?initial_bindings:binding list ->
-    pattern_token list ->
-    C.t ->
-    match_result list
   (** [find_partial_matches pattern source_cursor] is the partial-mode outer
       loop: at every source node it attempts {!match_partial_at}, treating the
       node as a candidate set-like container.
@@ -332,37 +327,37 @@ module Make (C : Cursor.S) : sig
 
       Spans are de-duplicated and the walk descends into matches, so nested
       containers are found. *)
+  val find_partial_matches :
+    ?initial_bindings:binding list ->
+    pattern_token list ->
+    C.t ->
+    match_result list
 
+  (** Lazy variant of {!find_partial_matches}. *)
   val find_partial_matches_iter :
     ?initial_bindings:binding list ->
     pattern_token list ->
     C.t ->
     match_result Seq.t
-  (** Lazy variant of {!find_partial_matches}. *)
 
-  val find_field_matches :
-    ?initial_bindings:binding list ->
-    pattern_token list ->
-    C.t ->
-    match_result list
   (** [find_field_matches pattern source_cursor] is the field-mode outer loop:
       at every source node it attempts {!match_field_at}, treating the node as a
       candidate declaration. Nodes whose named children can't be aligned to the
       pattern fail cleanly — no explicit declaration classification is needed.
       Spans are de-duplicated and the walk descends into matches. *)
+  val find_field_matches :
+    ?initial_bindings:binding list ->
+    pattern_token list ->
+    C.t ->
+    match_result list
 
+  (** Lazy variant of {!find_field_matches}. *)
   val find_field_matches_iter :
     ?initial_bindings:binding list ->
     pattern_token list ->
     C.t ->
     match_result Seq.t
-  (** Lazy variant of {!find_field_matches}. *)
 
-  val find_field_matches_with :
-    ?initial_bindings:binding list ->
-    tokens_for:(C.t -> pattern_token list) ->
-    C.t ->
-    match_result list
   (** Like {!find_field_matches}, but the pattern is computed per candidate node
       by [tokens_for] rather than fixed. This is the hook for field-mode
       {b source-context tokenization}: the caller re-tokenizes the pattern in
@@ -370,11 +365,16 @@ module Make (C : Cursor.S) : sig
       a class method name as [property_identifier], not [identifier]) come out
       right, while the matcher stays agnostic about tokenization. A [tokens_for]
       returning [[]] makes that node a non-match. *)
+  val find_field_matches_with :
+    ?initial_bindings:binding list ->
+    tokens_for:(C.t -> pattern_token list) ->
+    C.t ->
+    match_result list
 
+  (** Lazy variant of {!find_field_matches_with}. *)
   val find_field_matches_with_iter :
     ?initial_bindings:binding list ->
     tokens_for:(C.t -> pattern_token list) ->
     C.t ->
     match_result Seq.t
-  (** Lazy variant of {!find_field_matches_with}. *)
 end

@@ -38,9 +38,9 @@ let touch path = Out_channel.with_open_bin path (fun _ -> ())
 
 let rec rm_rf path =
   match Sys.is_directory path with
-  | true ->
+  | true -> (
       Array.iter (fun e -> rm_rf (Filename.concat path e)) (Sys.readdir path);
-      (try Unix.rmdir path with Sys_error _ | Unix.Unix_error _ -> ())
+      try Unix.rmdir path with Sys_error _ | Unix.Unix_error _ -> ())
   | false -> ( try Sys.remove path with Sys_error _ -> ())
   (* a broken symlink raises here; remove the link itself (no follow) *)
   | exception Sys_error _ -> ( try Sys.remove path with Sys_error _ -> ())
@@ -101,8 +101,9 @@ let walk_tests =
                leaf — the point is the walk completes instead of aborting on
                [Sys.is_directory] of a broken link. *)
             let got =
-              F.walk ~exclude_dirs:[ "node_modules" ] ~pred:(fun _ -> true) root
-                []
+              F.walk ~exclude_dirs:[ "node_modules" ]
+                ~pred:(fun _ -> true)
+                root []
               |> basenames
             in
             Alcotest.(check (list string))

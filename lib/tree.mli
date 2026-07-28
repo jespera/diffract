@@ -13,14 +13,14 @@
     These types have no runtime representation but distinguish trees and nodes
     at compile time. *)
 
-type src
 (** Phantom type for source code trees/nodes *)
+type src
 
-type pat
 (** Phantom type for pattern trees/nodes (containing metavariables) *)
+type pat
 
-type any
 (** Phantom type for trees/nodes of unknown kind *)
+type any
 
 (** {1 Tree types}
 
@@ -29,16 +29,19 @@ type any
     so [Tree.point]/[Tree.t]/[Tree.tree] are the same types with their fields
     visible, and a [Tree_types.tree] is interchangeable with a [Tree.tree]. *)
 
-type point = Tree_types.point = { row : int; column : int }
 (** Position in source code *)
+type point = Tree_types.point = { row : int; column : int }
 
+(** A child node with optional field name. The ['kind] parameter matches the
+    parent node's kind. *)
 type 'kind child = 'kind Tree_types.child = {
   field_name : string option;
   node : 'kind t;
 }
-(** A child node with optional field name. The ['kind] parameter matches the
-    parent node's kind. *)
 
+(** A tree node with all data from the parse. The ['kind] parameter
+    distinguishes source nodes from pattern nodes. The [hash] field is a
+    precomputed structural hash that excludes positional information. *)
 and 'kind t = 'kind Tree_types.t = {
   node_type : string;
   is_named : bool;
@@ -55,13 +58,10 @@ and 'kind t = 'kind Tree_types.t = {
   children : 'kind child list;
   named_children : 'kind t list;
 }
-(** A tree node with all data from the parse. The ['kind] parameter
-    distinguishes source nodes from pattern nodes. The [hash] field is a
-    precomputed structural hash that excludes positional information. *)
 
-type 'kind tree = 'kind Tree_types.tree = { root : 'kind t; source : string }
 (** A complete parsed tree with source text. The ['kind] parameter distinguishes
     source trees from pattern trees. *)
+type 'kind tree = 'kind Tree_types.tree = { root : 'kind t; source : string }
 
 (** {1 Accessors} *)
 
@@ -75,83 +75,82 @@ val end_point : _ t -> point
 val children : 'kind t -> 'kind child list
 val named_children : 'kind t -> 'kind t list
 
-val text : string -> _ t -> string
 (** [text source node] extracts the source text for a node *)
+val text : string -> _ t -> string
 
-val hash : _ t -> int
 (** [hash node] returns a precomputed structural hash. Two nodes with different
     hashes are guaranteed to be structurally different. Two nodes with the same
     hash are very likely (but not guaranteed) to be structurally equal. The hash
     excludes positional information (byte offsets, line/column). *)
+val hash : _ t -> int
 
-val equal : string -> _ t -> string -> _ t -> bool
 (** [equal source1 node1 source2 node2] returns true if two nodes are
     structurally equal (same node types, same leaf text, same children
     structure). Ignores positions/formatting. Uses hash for fast rejection. *)
+val equal : string -> _ t -> string -> _ t -> bool
 
 (** {1 Child access} *)
 
 val child_count : _ t -> int
 val named_child_count : _ t -> int
 
-val child : 'kind t -> int -> 'kind t option
 (** [child t i] returns the i-th child, or None if out of bounds *)
+val child : 'kind t -> int -> 'kind t option
 
-val named_child : 'kind t -> int -> 'kind t option
 (** [named_child t i] returns the i-th named child, or None if out of bounds *)
+val named_child : 'kind t -> int -> 'kind t option
 
-val child_by_field_name : 'kind t -> string -> 'kind t option
 (** [child_by_field_name t name] returns the child at the given field, or None
 *)
+val child_by_field_name : 'kind t -> string -> 'kind t option
 
-val field : 'kind t -> string -> 'kind t option
 (** Alias for [child_by_field_name] *)
+val field : 'kind t -> string -> 'kind t option
 
-val field_name_for_child : _ t -> int -> string option
 (** [field_name_for_child t i] returns the field name for child at index i *)
+val field_name_for_child : _ t -> int -> string option
 
-val named_children_with_fields : 'kind t -> (string option * 'kind t) list
 (** [named_children_with_fields t] returns named children paired with their
     field names *)
+val named_children_with_fields : 'kind t -> (string option * 'kind t) list
 
 (** {1 Traversal} *)
 
-val iter_children : ('kind t -> unit) -> 'kind t -> unit
 (** [iter_children f t] applies f to all children *)
+val iter_children : ('kind t -> unit) -> 'kind t -> unit
 
-val iter_named_children : ('kind t -> unit) -> 'kind t -> unit
 (** [iter_named_children f t] applies f to all named children *)
+val iter_named_children : ('kind t -> unit) -> 'kind t -> unit
 
-val fold_children : ('a -> 'kind t -> 'a) -> 'a -> 'kind t -> 'a
 (** [fold_children f init t] folds f over all children *)
+val fold_children : ('a -> 'kind t -> 'a) -> 'a -> 'kind t -> 'a
 
-val traverse : ('kind t -> unit) -> 'kind t -> unit
 (** [traverse f node] recursively traverses in pre-order, applying f to named
     nodes *)
+val traverse : ('kind t -> unit) -> 'kind t -> unit
 
-val find_all : ('kind t -> bool) -> 'kind t -> 'kind t list
 (** [find_all pred node] returns all nodes matching the predicate *)
+val find_all : ('kind t -> bool) -> 'kind t -> 'kind t list
 
-val find_by_type : string -> 'kind t -> 'kind t list
 (** [find_by_type type_name node] returns all nodes of the given type *)
+val find_by_type : string -> 'kind t -> 'kind t list
 
 (** {1 Parse error detection} *)
 
-val is_error : _ t -> bool
 (** [is_error node] returns true if the node is an ERROR node (parse failure) *)
+val is_error : _ t -> bool
 
-val has_errors : _ tree -> bool
 (** [has_errors tree] returns true if the tree contains any ERROR nodes *)
+val has_errors : _ tree -> bool
 
-val error_count : _ tree -> int
 (** [error_count tree] returns the number of ERROR nodes in the tree *)
+val error_count : _ tree -> int
 
-val get_errors : 'kind tree -> 'kind t list
 (** [get_errors tree] returns all ERROR nodes with their positions *)
+val get_errors : 'kind tree -> 'kind t list
 
 (** {1 Formatting} *)
 
-val format_tree : _ tree -> string
 (** [format_tree tree] formats a tree as an indented string showing:
     - Node types with [line:col-line:col] positions
     - Field names for children where applicable
@@ -168,36 +167,37 @@ val format_tree : _ tree -> string
           value:
             number [1:11-1:12] "42"
     v} *)
+val format_tree : _ tree -> string
 
 (** {1 Phantom type conversion} *)
 
-val forget_node : _ t -> any t
 (** [forget_node node] erases the source/pattern distinction on a node. *)
+val forget_node : _ t -> any t
 
-val forget : _ tree -> any tree
 (** [forget tree] erases the source/pattern distinction. Use when you need to
     treat trees uniformly (e.g., generic utilities). *)
+val forget : _ tree -> any tree
 
 (** {1 Conversion from tree-sitter} *)
 
-val of_ts_node : string -> Node.t -> src t
 (** [of_ts_node source ts_node] converts a tree-sitter node to internal format.
 *)
+val of_ts_node : string -> Node.t -> src t
 
-val of_ts_tree : string -> Node.tree -> src tree
 (** [of_ts_tree source ts_tree] converts a tree-sitter tree to internal format
 *)
+val of_ts_tree : string -> Node.tree -> src tree
 
 (** {1 Parsing} *)
 
-val parse : ctx:Context.t -> language:string -> string -> src tree
 (** [parse ~ctx ~language source] parses source code and returns a source tree
 *)
+val parse : ctx:Context.t -> language:string -> string -> src tree
 
-val parse_file : ctx:Context.t -> language:string -> string -> src tree
 (** [parse_file ~ctx ~language path] parses a file and returns a source tree *)
+val parse_file : ctx:Context.t -> language:string -> string -> src tree
 
-val parse_as_pattern : ctx:Context.t -> language:string -> string -> pat tree
 (** [parse_as_pattern ~ctx ~language source] parses pattern code and returns a
     pattern tree. The parsing is identical to [parse], but the result is typed
     as a pattern tree. *)
+val parse_as_pattern : ctx:Context.t -> language:string -> string -> pat tree

@@ -34,6 +34,11 @@ type rule = {
           tier-1 rules; a site absent from the list has no predecessors. *)
 }
 
+(** The change at a site that the rules do not explain (design §4.4, M1.9). For
+    every Modified file, applying its claiming rules and diffing against the
+    after-source either yields nothing (fully explained) or this gap. Rules +
+    residuals together account for the whole changeset — the Covering
+    desideratum of §2.3. *)
 type residual = {
   res_file : string;  (** relative path of the file the gap lives in *)
   res_rules : string list;
@@ -45,15 +50,13 @@ type residual = {
           real after-source; for added/deleted files the absent side is
           [/dev/null] *)
 }
-(** The change at a site that the rules do not explain (design §4.4, M1.9). For
-    every Modified file, applying its claiming rules and diffing against the
-    after-source either yields nothing (fully explained) or this gap. Rules +
-    residuals together account for the whole changeset — the Covering
-    desideratum of §2.3. *)
 
 type summary = { rules : rule list; residuals : residual list }
 type side = Before_side | After_side
 
+(** A single Added or Removed subtree at a site. Scaffolding for M1.6 fusion;
+    not emitted as rules in M1. The byte range is used to suppress removal-only
+    rule emission for subtrees already covered by a two-sided rule's site. *)
 type one_sided_instance = {
   os_file : string;
   os_line : int;
@@ -63,25 +66,30 @@ type one_sided_instance = {
   os_start_byte : int;
   os_end_byte : int;
 }
-(** A single Added or Removed subtree at a site. Scaffolding for M1.6 fusion;
-    not emitted as rules in M1. The byte range is used to suppress removal-only
-    rule emission for subtrees already covered by a two-sided rule's site. *)
 
-type one_sided_candidate
 (** Opaque — pairs a [one_sided_instance] with its structural shape for later
     clustering. *)
+type one_sided_candidate
 
 val one_sided_candidate_instance : one_sided_candidate -> one_sided_instance
 
+(** Extracts every [Added]/[Removed] subtree across [Modified] files in the
+    changeset. M1.5 plumbing; M1.6 will cluster and fuse these. [on_file], if
+    provided, is called once per [Modified] file just before parsing it. *)
 val collect_one_sided_candidates :
   ?on_file:(idx:int -> total:int -> path:string -> unit) ->
   ctx:Context.t ->
   changeset ->
   one_sided_candidate list
-(** Extracts every [Added]/[Removed] subtree across [Modified] files in the
-    changeset. M1.5 plumbing; M1.6 will cluster and fuse these. [on_file], if
-    provided, is called once per [Modified] file just before parsing it. *)
 
+(** Residual diff from a post-rule intermediate ([original]) to the real
+    after-source ([transformed]): a zero-context unified diff with layout-only
+    hunks dropped — a hunk is kept only when it touches a tree-level changed
+    region of the (original, transformed) diff, since layout (re-indentation,
+    spacing, line splits) is invisible to the parse tree and states nothing
+    about the change. Returns [""] when the gap is entirely layout. This is the
+    renderer [summarize] uses for residuals; exposed so tests can recompute a
+    residual the same way. *)
 val residual_diff :
   ?ignore_formatting:bool ->
   ctx:Context.t ->
@@ -91,21 +99,7 @@ val residual_diff :
   transformed:string ->
   unit ->
   string
-(** Residual diff from a post-rule intermediate ([original]) to the real
-    after-source ([transformed]): a zero-context unified diff with layout-only
-    hunks dropped — a hunk is kept only when it touches a tree-level changed
-    region of the (original, transformed) diff, since layout (re-indentation,
-    spacing, line splits) is invisible to the parse tree and states nothing
-    about the change. Returns [""] when the gap is entirely layout. This is the
-    renderer [summarize] uses for residuals; exposed so tests can recompute a
-    residual the same way. *)
 
-val summarize :
-  ?progress:(stage:string -> idx:int -> total:int -> path:string -> unit) ->
-  ?ignore_formatting:bool ->
-  ctx:Context.t ->
-  changeset ->
-  summary
 (** [summarize ~ctx cs] runs the clustering pipeline and returns the summary:
     rules plus residuals (M1.9). Only Modified files contribute change pairs;
     Added/Deleted files appear as unattributed [/dev/null] residuals (M1.7).
@@ -120,15 +114,20 @@ val summarize :
     the shape a formatter like ktlint/prettier produces — are dropped from the
     residuals rather than reported as unexplained changes. Structural changes
     (e.g. an inserted brace block) are still kept. *)
+val summarize :
+  ?progress:(stage:string -> idx:int -> total:int -> path:string -> unit) ->
+  ?ignore_formatting:bool ->
+  ctx:Context.t ->
+  changeset ->
+  summary
 
-val format_summary : ?sites:[ `Full | `Count ] -> summary -> string
 (** [format_summary s] serialises [s] in the [.summary] format defined in §9 of
     the design doc. [?sites] (default [`Full]) controls the [# sites] blocks:
     [`Count] replaces each file list with a one-line count
     ([# sites R1  8 file(s)]) — the CLI's [--format text-minimal], a reading
     mode; the full text remains the canonical format. *)
+val format_summary : ?sites:[ `Full | `Count ] -> summary -> string
 
-val format_summary_json : summary -> string
 (** [format_summary_json s] serialises [s] as a single compact JSON object, for
     filtering with tools like [jq]:
     [{"rules": [{"id", "support", "language", "pattern", "sites": [{"file",
@@ -137,7 +136,13 @@ val format_summary_json : summary -> string
     whose output the rule's pattern matched there). The [.summary] text
     ([format_summary]) remains the canonical format; this is a projection of the
     same data. *)
+val format_summary_json : summary -> string
 
+(** [load_from_dirs ~before_dir ~after_dir ~default_language ()] pairs files
+    under [before_dir] and [after_dir] by relative path. Files only in
+    [before_dir] become [Deleted]; only in [after_dir] become [Added]; differing
+    contents become [Modified]. Extension lookup via [ext_language] (defaults to
+    .tsx/.ts) falls back to [default_language]. *)
 val load_from_dirs :
   before_dir:string ->
   after_dir:string ->
@@ -147,8 +152,3 @@ val load_from_dirs :
   default_language:string ->
   unit ->
   changeset
-(** [load_from_dirs ~before_dir ~after_dir ~default_language ()] pairs files
-    under [before_dir] and [after_dir] by relative path. Files only in
-    [before_dir] become [Deleted]; only in [after_dir] become [Added]; differing
-    contents become [Modified]. Extension lookup via [ext_language] (defaults to
-    .tsx/.ts) falls back to [default_language]. *)

@@ -48,6 +48,8 @@ type scope =
           a sequence; mismatches are parse errors. [name] is taken verbatim
           (sigil-free or with [$]). *)
 
+(** One [@@]-delimited section of a pattern file. Multi-section patterns have a
+    list of these; single-section patterns have one. *)
 type section = {
   mode : mode;
   scope : scope;
@@ -59,19 +61,16 @@ type section = {
           the default (no directive) is the empty string. *)
   body : string;
 }
-(** One [@@]-delimited section of a pattern file. Multi-section patterns have a
-    list of these; single-section patterns have one. *)
 
-type parsed_pattern = { sections : section list }
 (** A parsed pattern file. Always non-empty: a file with no [@@] delimiters or
     no sections raises a parse error. *)
+type parsed_pattern = { sections : section list }
 
-type composite_match = { sections : M.match_result list }
 (** One conjunctive match across all sections of a multi-section pattern.
     [sections] is in declaration order, one entry per section in the pattern.
     For single-section patterns this is a 1-element list. *)
+type composite_match = { sections : M.match_result list }
 
-val parse_pattern : string -> parsed_pattern
 (** Parse a pattern's sections. Each section's preamble carries [match: …],
     optional [metavar <name>: <kind>] declarations, and an optional [on <name>]
     directive. Metavar names are arbitrary — no [$] prefix is required or
@@ -85,6 +84,7 @@ val parse_pattern : string -> parsed_pattern
 
     Raises [Failure] on a malformed preamble, missing match mode, kind
     contradictions, or unresolved [on $VAR] references. *)
+val parse_pattern : string -> parsed_pattern
 
 type spatch_line =
   | Ctx of string
@@ -95,21 +95,20 @@ type spatch_line =
           marker is column 0 (unified-diff style); a context line has at most
           one leading role-indicator space stripped. *)
 
-val classify_spatch : string -> spatch_line list
 (** [classify_spatch body] parses a body into its per-line spatch roles. This is
     the structured form from which {!match_side} and {!replace_side} derive, and
     the basis surgical transforms build on (the [- ] lines locate what to
     delete, the [+ ] lines what to insert). *)
+val classify_spatch : string -> spatch_line list
 
-val match_side : string -> string
 (** [match_side body] extracts the match side of a pattern body following
     diffract's spatch conventions: [- ] lines contribute their content, [+ ]
     lines are dropped, and any other line is context (one leading role-indicator
     space stripped if present). A pure-match body (no [-]/[+] lines) is returned
     with at most a leading space removed per line. Equal to the [Ctx]/[Del]
     content of {!classify_spatch}. *)
+val match_side : string -> string
 
-val replace_side : string -> string option
 (** [replace_side body] extracts the replace side of a pattern body — the mirror
     of {!match_side} with the [-]/[+] roles swapped: [+ ] lines contribute their
     content, [- ] lines are dropped, context lines have a leading role-indicator
@@ -119,9 +118,8 @@ val replace_side : string -> string option
     match-only guard. A body with any [- ] or [+ ] line is a transform; in
     particular a body with [- ] lines and no [+ ] is a removal ([- foo] alone
     replaces the matched span with the empty string), per spatch convention. *)
+val replace_side : string -> string option
 
-val debug_tokens :
-  ctx:Context.t -> language:string -> pattern_text:string -> string
 (** [debug_tokens ~ctx ~language ~pattern_text] returns a human-readable dump of
     how each section's match body tokenizes: the [Concrete]/[Subtree]/
     [Siblings] tokens, plus the declared metavars with an [(ABSENT!)] marker for
@@ -129,8 +127,9 @@ val debug_tokens :
     diagnose why a pattern matches nothing. Unlike {!find}/ {!transform} it does
     {b not} run the declared-but-absent validation, so it works on malformed
     patterns (which is precisely when it is useful). *)
+val debug_tokens :
+  ctx:Context.t -> language:string -> pattern_text:string -> string
 
-val pattern_warnings : string -> string list
 (** [pattern_warnings pattern_text] returns non-fatal warnings from a static
     look at the parsed pattern (no source needed). Transforms are surgical, so a
     [-]/[+] on a sub-part is no longer a footgun; this flags only a partial- or
@@ -141,36 +140,31 @@ val pattern_warnings : string -> string list
     rewrite, but an easy mistake, so it warns rather than fails. A sub-part edit
     (context lines preserved) or a [foreach]-scoped edit is exempt. Intended for
     the CLI to print before applying. *)
+val pattern_warnings : string -> string list
 
+(** Like {!find}, but against an already-parsed source tree. Useful when the
+    caller also wants parse diagnostics ({!Tree.error_count}) from the same
+    parse, avoiding a second parse of the source. *)
 val find_in_tree :
   ctx:Context.t ->
   language:string ->
   pattern_text:string ->
   Tree.src Tree.tree ->
   composite_match list
-(** Like {!find}, but against an already-parsed source tree. Useful when the
-    caller also wants parse diagnostics ({!Tree.error_count}) from the same
-    parse, avoiding a second parse of the source. *)
 
-val text_only_find_in_tree :
-  ctx:Context.t ->
-  language:string ->
-  pattern_text:string ->
-  Tree.src Tree.tree ->
-  composite_match list
 (** Matches of a {b single-section strict} pattern comparing [Concrete] leaves
     on text alone (ignoring node-type). Backs the [search --explain] hint: when
     a strict search finds nothing, these are the locations whose tokens occur as
     text but in a different syntactic role (why strict rejected them). Returns
     [[]] for anything but a single global strict section — the hint is scoped to
     where that context-sensitivity bites, not partial/field/multi-section. *)
-
-val find :
+val text_only_find_in_tree :
   ctx:Context.t ->
   language:string ->
   pattern_text:string ->
-  source_text:string ->
+  Tree.src Tree.tree ->
   composite_match list
+
 (** [find ~ctx ~language ~pattern_text ~source_text] parses the pattern, runs
     each section in declaration order, and returns composite matches: tuples of
     per-section matches where all sections matched successfully with consistent
@@ -183,21 +177,21 @@ val find :
     scoped to the subtree bound by [$VAR] in a prior section.
 
     Strict, partial, and field sections are all supported. *)
+val find :
+  ctx:Context.t ->
+  language:string ->
+  pattern_text:string ->
+  source_text:string ->
+  composite_match list
 
+(** Like {!find}, but reads the pattern text from the file at [pattern_file]. *)
 val find_file :
   ctx:Context.t ->
   language:string ->
   pattern_file:string ->
   source_text:string ->
   composite_match list
-(** Like {!find}, but reads the pattern text from the file at [pattern_file]. *)
 
-val transform :
-  ctx:Context.t ->
-  language:string ->
-  pattern_text:string ->
-  source_text:string ->
-  string
 (** [transform ~ctx ~language ~pattern_text ~source_text] applies the pattern's
     replacement side to [source_text] and returns the rewritten source. Each
     section's [+] lines form a replace template; single metavar placeholders
@@ -223,27 +217,33 @@ val transform :
     edit applied to each element of a sequence), and element removal (a
     [foreach] element with an empty replacement is deleted, and one adjacent
     separator is consumed so the list stays well-formed). *)
-
-type edit = { start_byte : int; end_byte : int; replacement : string }
-(** One edit {!transform} would apply: replace [source_text]'s bytes
-    [\[start_byte, end_byte)] with [replacement]. *)
-
-val transform_edits :
+val transform :
   ctx:Context.t ->
   language:string ->
   pattern_text:string ->
   source_text:string ->
-  edit list
+  string
+
+(** One edit {!transform} would apply: replace [source_text]'s bytes
+    [\[start_byte, end_byte)] with [replacement]. *)
+type edit = { start_byte : int; end_byte : int; replacement : string }
+
 (** The edits {!transform} would apply, without applying them — the same
     matching and template instantiation, surfaced as spans. Sorted by
     [start_byte], deduplicated. Used by callers that need to *inspect* a
     transform's effect against other information about the source (e.g. the
     change-summary safety gate comparing edits against a diff's changed regions)
     rather than the rewritten text. *)
+val transform_edits :
+  ctx:Context.t ->
+  language:string ->
+  pattern_text:string ->
+  source_text:string ->
+  edit list
 
-val apply_edits : string -> edit list -> string
 (** Apply an edit list to a source text.
     [apply_edits src (transform_edits ... src)] equals [transform ... src] —
     callers that already hold the edits (the safety gate inspects them first)
     can apply them without re-running the match. Edits are deduplicated and must
     be non-overlapping; a nested or conflicting pair raises [Failure]. *)
+val apply_edits : string -> edit list -> string

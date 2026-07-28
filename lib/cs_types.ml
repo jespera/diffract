@@ -129,22 +129,22 @@ type one_sided_instance = {
   os_end_byte : int;
 }
 
+(** Internal candidate for M1.6 fusion: carries the structural shape alongside
+    its site metadata. Not emitted as rules in M1. *)
 type one_sided_candidate = {
   os_pat : pat_node;
   os_instance : one_sided_instance;
 }
-(** Internal candidate for M1.6 fusion: carries the structural shape alongside
-    its site metadata. Not emitted as rules in M1. *)
 
 let one_sided_candidate_instance (c : one_sided_candidate) : one_sided_instance
     =
   c.os_instance
 
+(** A cluster of Added-only or Removed-only candidates that share a common
+    pat_node shape. Internal — built by one-sided clustering ({!Cs_cluster}),
+    consumed by M1.6b fusion ({!Cs_fusion}). *)
 type one_sided_cluster = {
   os_cluster_pattern : pat_node;
   os_cluster_side : side;
   os_cluster_instances : one_sided_instance list;
 }
-(** A cluster of Added-only or Removed-only candidates that share a common
-    pat_node shape. Internal — built by one-sided clustering ({!Cs_cluster}),
-    consumed by M1.6b fusion ({!Cs_fusion}). *)

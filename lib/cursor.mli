@@ -16,56 +16,55 @@
     success/failure. Use {!clone} to snapshot a cursor for backtracking. *)
 
 module type S = sig
-  type t
   (** A position in the tree. Mutable: navigation operations modify [t] in
       place. *)
+  type t
 
-  type leaf
   (** A leaf node, carrying both its text and its node type. *)
+  type leaf
 
-  val move_first_leaf : t -> leaf
   (** [move_first_leaf c] descends [c] to its leftmost leaf and returns the leaf
       data. If [c] is already a leaf, returns the leaf at [c] without moving.
       Always succeeds. *)
+  val move_first_leaf : t -> leaf
 
-  val move_first_child : t -> bool
   (** [move_first_child c] descends one level to the first named child of [c],
       skipping extras (whitespace / comments). Returns [false] if [c] has no
       children to descend into (i.e. is a leaf). *)
+  val move_first_child : t -> bool
 
-  val move_next_subtree : t -> bool
   (** [move_next_subtree c] advances [c] past its current subtree to the next
       subtree in pre-order. Climbs ancestors as needed to find a next sibling.
       Returns [false] if no more subtrees exist in the enclosing root. Skips
       extras. *)
+  val move_next_subtree : t -> bool
 
-  val move_next_sibling : t -> bool
   (** [move_next_sibling c] advances [c] to its next sibling within its parent.
       Returns [false] if [c] is the last child. Does not climb ancestors. Skips
       extras. *)
+  val move_next_sibling : t -> bool
 
-  val clone : t -> t
   (** [clone c] returns an independent snapshot of [c]. Used to save cursor
       state before mutating navigation, so that backtracking can restore the
       prior position. Implementations should make this cheap (a shallow copy of
       cursor state, not the underlying tree). *)
+  val clone : t -> t
 
-  val narrow : t -> t
   (** [narrow c] returns a fresh cursor positioned at the same node as [c] but
       rescoped: navigation operations (especially {!move_next_subtree}) cannot
       climb above the current node. This is the operation used by multi-section
       search to scope a section's [find_matches] walk to the subtree bound by
       [on $VAR], without leaking into the surrounding source. The original
       cursor is unchanged. *)
+  val narrow : t -> t
 
-  val leaf_text : leaf -> string
   (** [leaf_text l] returns the source text of the leaf [l]. *)
+  val leaf_text : leaf -> string
 
-  val leaf_node_type : leaf -> string
   (** [leaf_node_type l] returns the tree-sitter node type of the leaf [l] (e.g.
       ["identifier"], ["string_content"], [","]). *)
+  val leaf_node_type : leaf -> string
 
-  val subtree_equal : t -> t -> bool
   (** [subtree_equal c1 c2] returns true iff the subtrees at [c1]'s and [c2]'s
       current positions are structurally equal — same node types, same leaf
       text, same children structure. Used by the matcher for non-linear pattern
@@ -76,15 +75,15 @@ module type S = sig
       The comparison is content-equality, not position-equality: two
       structurally identical subtrees at different source positions compare
       equal. *)
+  val subtree_equal : t -> t -> bool
 
-  val is_named : t -> bool
   (** [is_named c] is true iff the node at [c]'s current position is a named
       node — not an anonymous token like punctuation (commas, brackets). Used by
       transforms to filter separator leaves out of a sequence binding when
       rendering its elements. Implementations without the named/anonymous
       distinction (hand-built test trees) return [true]. *)
+  val is_named : t -> bool
 
-  val byte_range : t -> int * int
   (** [byte_range c] returns the source byte range [(start_byte, end_byte)] of
       the subtree at [c]'s current position. The half-open convention applies:
       the subtree spans bytes [\[start_byte, end_byte\)] in the source.
@@ -93,8 +92,8 @@ module type S = sig
       positions. For test cursors over hand-built trees, the range is computed
       synthetically based on the implied rendering of the tree (concatenated
       leaf text in pre-order). *)
+  val byte_range : t -> int * int
 
-  val named_children : t -> t list
   (** [named_children c] returns sub-cursors, one per named non-extra child of
       the node at [c]'s current position. Each returned cursor is independent
       and scoped to its child's subtree — navigation from it does not escape
@@ -108,8 +107,8 @@ module type S = sig
       grammars), only named children are returned — punctuation like braces and
       commas are skipped. Implementations over hand-built tree fixtures with no
       named/anonymous distinction return all children. *)
+  val named_children : t -> t list
 
-  val all_children : t -> t list
   (** [all_children c] returns sub-cursors for {b every} non-extra child of the
       node at [c] — named children {b and} anonymous leaves (keywords,
       punctuation) — in document order. Like {!named_children} each returned
@@ -121,8 +120,8 @@ module type S = sig
       keyword) — these are invisible to {!named_children} but the pattern
       addresses them. Implementations without the named/anonymous distinction
       return the same list as {!named_children}. *)
+  val all_children : t -> t list
 
-  val leading_anonymous_leaves : t -> leaf list
   (** [leading_anonymous_leaves c] returns the leaves contributed by the run of
       anonymous (non-named) non-extra children that precede the first named
       non-extra child of the node at [c]. For a typical bracketed container this
@@ -141,16 +140,16 @@ module type S = sig
       delimiter tokens align with whatever the source grammar actually produced.
       Hand-built test fixtures with no named/anonymous distinction should return
       [[]] (no opening delimiter inference). *)
+  val leading_anonymous_leaves : t -> leaf list
 
-  val trailing_anonymous_leaves : t -> leaf list
   (** [trailing_anonymous_leaves c] is the symmetric counterpart of
       {!leading_anonymous_leaves}: the run of anonymous non-extra children that
       follow the last named non-extra child. For a bracketed container this is
       the closing delimiter run — e.g. [[/>]] for a JSX self-closing element,
       [[}]] for a TS object literal. Returns [[]] if there's no trailing
       anonymous run. *)
+  val trailing_anonymous_leaves : t -> leaf list
 
-  val source_substring : t -> int -> int -> string
   (** [source_substring c start_byte end_byte] returns the source text in the
       half-open byte range [\[start_byte, end_byte\)]. The cursor's current
       position is irrelevant — the slice comes from the underlying source.
@@ -159,4 +158,5 @@ module type S = sig
       given the byte ranges of two adjacent named children, the driver reads the
       bytes between them to determine what separator (if any) the source uses.
   *)
+  val source_substring : t -> int -> int -> string
 end

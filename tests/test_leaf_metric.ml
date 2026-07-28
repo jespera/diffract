@@ -14,8 +14,7 @@ let check_dist name expected a b =
   Alcotest.test_case name `Quick (fun () ->
       Alcotest.(check int) name expected (Leaf_metric.distance (lv a) (lv b));
       Alcotest.(check int)
-        (name ^ " (symmetric)")
-        expected
+        (name ^ " (symmetric)") expected
         (Leaf_metric.distance (lv b) (lv a)))
 
 (* Check [geodesic] both without and with a caller-cached endpoint
@@ -49,8 +48,8 @@ let tests =
       ~after:"f(9); h(2);";
     check_geo "mid = after" true ~before:"f(1); g(2);" ~mid:"f(9); h(2);"
       ~after:"f(9); h(2);";
-    check_geo "identity site: mid = endpoints" true ~before:"f(1);"
-      ~mid:"f(1);" ~after:"f(1);";
+    check_geo "identity site: mid = endpoints" true ~before:"f(1);" ~mid:"f(1);"
+      ~after:"f(1);";
     check_geo "identity site: mid deviates" false ~before:"f(1);" ~mid:"f(2);"
       ~after:"f(1);";
     (* ── composite subset: applying one of two independent changes ── *)
@@ -71,14 +70,14 @@ let tests =
        rule deletes and the residual must re-add in place pays twice
        (emptied-body soak shape). Inclusion blessed this as pure insertion
        and only net_progress caught it; the metric rejects it outright. ── *)
-    check_geo "delete-then-readd in place" false ~before:"a(); b();"
-      ~mid:"a();" ~after:"a(); b(); c();";
+    check_geo "delete-then-readd in place" false ~before:"a(); b();" ~mid:"a();"
+      ~after:"a(); b(); c();";
     (* ── delete-then-readd as a move: ON the geodesic. The change moves
        [a] to the back; a mid that has only deleted [a] sits between the
        endpoints. Policing wasted-but-metric-neutral work stays
        net_progress's job — this test documents the division of labour. ── *)
-    check_geo "delete-then-readd of a moved element" true
-      ~before:"[a, b, c];" ~mid:"[b, c];" ~after:"[b, c, a];";
+    check_geo "delete-then-readd of a moved element" true ~before:"[a, b, c];"
+      ~mid:"[b, c];" ~after:"[b, c, a];";
     (* ── distance_upto: the cutoff ── *)
     Alcotest.test_case "distance_upto bounds" `Quick (fun () ->
         let a = lv "f(x);" and b = lv "g(y);" in

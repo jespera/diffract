@@ -754,11 +754,11 @@ let has_ellipsis_occurrence line =
   let len = String.length line in
   let rec go i =
     i + 2 < len
-    && ((line.[i] = '.'
-         && line.[i + 1] = '.'
-         && line.[i + 2] = '.'
-         && not (Tokenize.is_spread_at line i))
-        || go (i + 1))
+    && (line.[i] = '.'
+        && line.[i + 1] = '.'
+        && line.[i + 2] = '.'
+        && not (Tokenize.is_spread_at line i)
+       || go (i + 1))
   in
   go 0
 
@@ -784,11 +784,11 @@ let validate_no_ellipsis_in_edits (p : parsed_pattern) =
                  changing part. *)
               failwith
                 (Printf.sprintf
-                   "Section %d: a '...' (ellipsis) cannot appear on a '+' \
-                    line — it is a match-side binder and has nothing to bind \
-                    in a replacement. Put the '...' on a context line of its \
-                    own (the source it captures is preserved) and mark only \
-                    the part you are changing."
+                   "Section %d: a '...' (ellipsis) cannot appear on a '+' line \
+                    — it is a match-side binder and has nothing to bind in a \
+                    replacement. Put the '...' on a context line of its own \
+                    (the source it captures is preserved) and mark only the \
+                    part you are changing."
                    (i + 1))
           | _ -> ())
         (classify_spatch s.body))

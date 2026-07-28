@@ -1,7 +1,7 @@
 (** Change-summary pattern layer: convert a tree-sitter node to the internal
-    [pat_node] representation ([of_src]), render an [edit_pat] back to .pat-style
-    spatch text ([render_*]), and anti-unify pattern pairs ([anti_unify_*]).
-    Depends only on {!Cs_types} and {!Tree}. *)
+    [pat_node] representation ([of_src]), render an [edit_pat] back to
+    .pat-style spatch text ([render_*]), and anti-unify pattern pairs
+    ([anti_unify_*]). Depends only on {!Cs_types} and {!Tree}. *)
 
 open Cs_types
 
@@ -45,24 +45,24 @@ let is_ws c = c = ' ' || c = '\t' || c = '\n' || c = '\r'
 (** True if a byte at the node's EDGES (before its first child or after its
     last) that is not covered by a child is non-whitespace. These are
     "silently-consumed wrapping delimiters" — bytes the grammar embeds in the
-    parent node's text but does not expose as children, and that wrap the
-    node's content into one surface token (e.g. the surrounding quotes of a
-    string literal in Kotlin/TS, the slashes of a regex literal). Treat such
-    nodes as leaves during [of_src]: anti-unification then holes the whole
-    node when its content varies, rather than holing inside the delimiters
-    and rendering a placeholder embedded inside a string literal — which the
-    pattern parser would misread as the literal characters of the delimited
-    token rather than as a metavariable.
+    parent node's text but does not expose as children, and that wrap the node's
+    content into one surface token (e.g. the surrounding quotes of a string
+    literal in Kotlin/TS, the slashes of a regex literal). Treat such nodes as
+    leaves during [of_src]: anti-unification then holes the whole node when its
+    content varies, rather than holing inside the delimiters and rendering a
+    placeholder embedded inside a string literal — which the pattern parser
+    would misread as the literal characters of the delimited token rather than
+    as a metavariable.
 
-    INTERIOR-only silent bytes do not count: they are separators *between*
-    real tokens (the hidden [.] of a Kotlin dotted [identifier], whose only
-    exposed children are the [simple_identifier] segments). Recursing into
-    such a node is safe — the separators survive in the template's [Lit]
-    segments, and a hole at a child renders as its own leaf ([import
-    android.arch.lifecycle._H0] lexes [_H0] as one identifier). Flattening
-    them instead makes the whole path an opaque leaf, which blocks
-    anti-unification from generalising across sites that vary only in one
-    segment (per-class import rules instead of one class-name-metavar rule). *)
+    INTERIOR-only silent bytes do not count: they are separators *between* real
+    tokens (the hidden [.] of a Kotlin dotted [identifier], whose only exposed
+    children are the [simple_identifier] segments). Recursing into such a node
+    is safe — the separators survive in the template's [Lit] segments, and a
+    hole at a child renders as its own leaf ([import android.arch.lifecycle._H0]
+    lexes [_H0] as one identifier). Flattening them instead makes the whole path
+    an opaque leaf, which blocks anti-unification from generalising across sites
+    that vary only in one segment (per-class import rules instead of one
+    class-name-metavar rule). *)
 let has_silent_concrete_delimiters ~source ~(node : Tree.src Tree.t) : bool =
   let non_ws_in a b =
     let found = ref false in
@@ -75,9 +75,7 @@ let has_silent_concrete_delimiters ~source ~(node : Tree.src Tree.t) : bool =
   | [] -> false (* childless named nodes are already leaves in [of_src] *)
   | (first : _ Tree.child) :: _ ->
       let last =
-        List.fold_left
-          (fun (acc : _ Tree.child) c -> c)
-          first node.children
+        List.fold_left (fun (acc : _ Tree.child) c -> c) first node.children
       in
       non_ws_in node.start_byte first.node.start_byte
       || non_ws_in last.node.end_byte node.end_byte
@@ -184,8 +182,8 @@ let rec contains_ellipsis = function
     indentation, doubling it (the surgical-indentation wart; the rule format
     expects edit lines to omit the indentation the container supplies, see
     docs/surgical-transforms.md). Dedent [-] and [+] runs jointly so their
-    relative alignment survives; match-side leading whitespace is
-    insignificant to the tokenizer, so only the splice behaviour changes. *)
+    relative alignment survives; match-side leading whitespace is insignificant
+    to the tokenizer, so only the splice behaviour changes. *)
 let dedent_block (lines : string list) : string list =
   let leading_ws l =
     let n = String.length l in
@@ -201,7 +199,8 @@ let dedent_block (lines : string list) : string list =
       (fun acc l ->
         match leading_ws l with
         | None -> acc
-        | Some w -> ( match acc with None -> Some w | Some a -> Some (min a w)))
+        | Some w -> (
+            match acc with None -> Some w | Some a -> Some (min a w)))
       None lines
   in
   match common with
@@ -244,15 +243,15 @@ let render_pattern_body_plain (ep : edit_pat) : string =
     rule. The unchanged signature children render as a context line, the changed
     child as [-]/[+], and children selected by [omit] (presence-varying or
     edge-positioned optionals — return type, modifiers, annotations) are dropped
-    so field mode ignores them. Falls back to {!render_pattern_body_plain} when the
-    edit is not a single-child change of a [PNode] pair (so callers can use it
-    unconditionally). [omit] receives a child's [field_name]. *)
+    so field mode ignores them. Falls back to {!render_pattern_body_plain} when
+    the edit is not a single-child change of a [PNode] pair (so callers can use
+    it unconditionally). [omit] receives a child's [field_name]. *)
 let render_pattern_body_field ?(omit = fun (_ : string option) -> false)
     (ep : edit_pat) : string =
   match (ep.before, ep.after) with
   | PNode b, PNode a
     when b.node_type = a.node_type
-         && List.length b.children = List.length a.children ->
+         && List.length b.children = List.length a.children -> (
       let bch = Array.of_list b.children in
       let ach = Array.of_list a.children in
       let n = Array.length bch in
@@ -263,7 +262,7 @@ let render_pattern_body_field ?(omit = fun (_ : string option) -> false)
       let omit_idx i =
         (not (List.mem i changed_idxs)) && omit bch.(i).field_name
       in
-      (match changed_idxs with
+      match changed_idxs with
       | [ ci ] ->
           (* Drop omitted slots and one adjacent separator [Lit] each
              (preceding if present — the [": "] of a return type — else the
@@ -285,7 +284,8 @@ let render_pattern_body_field ?(omit = fun (_ : string option) -> false)
             List.iter
               (function
                 | Lit s -> Buffer.add_string buf s
-                | Slot j -> Buffer.add_string buf (render_pat_node bch.(j).child))
+                | Slot j ->
+                    Buffer.add_string buf (render_pat_node bch.(j).child))
               parts;
             Buffer.contents buf
           in
@@ -317,7 +317,8 @@ let render_pattern_body_field ?(omit = fun (_ : string option) -> false)
           Buffer.add_string buf "@@\n";
           let emit marker text =
             List.iter
-              (fun l -> Buffer.add_string buf (Printf.sprintf "%s%s\n" marker l))
+              (fun l ->
+                Buffer.add_string buf (Printf.sprintf "%s%s\n" marker l))
               (String.split_on_char '\n' text)
           in
           if prefix <> "" then emit "  " prefix;
@@ -377,11 +378,11 @@ let render_pattern_body_surgical (ep : edit_pat) : string =
     Buffer.contents buf
   end
 
-(** Put a collapsed bracket group ({!ellipsis_list_of}'s [{...}] shape) one
-    part per line — [{], [...], [}] — so the surgical render's line alignment
-    can land the shared ellipsis in the common prefix/suffix as context
-    lines. Narrow by design: only the exact single-[Ellipsis] bracket
-    template is rewritten; anything else passes through untouched. *)
+(** Put a collapsed bracket group ({!ellipsis_list_of}'s [{...}] shape) one part
+    per line — [{], [...], [}] — so the surgical render's line alignment can
+    land the shared ellipsis in the common prefix/suffix as context lines.
+    Narrow by design: only the exact single-[Ellipsis] bracket template is
+    rewritten; anything else passes through untouched. *)
 let rec multiline_ellipsis_lists = function
   | PNode
       ({
@@ -407,12 +408,11 @@ let rec multiline_ellipsis_lists = function
     whole-construct render when nothing aligns). Two reasons. An [Ellipsis] on
     the after side is only expressible on a context line (the matcher rejects
     ['...'] on a ['+'] line — a match-side binder has nothing to bind in a
-    replacement), so those edits additionally get their collapsed bracket
-    groups broken one part per line first, letting the shared [{], [...], [}]
-    lines align into context. And for everything else the aligned form is
-    simply the more precise statement of the rule — a keyword rewrite of a
-    multi-line construct reads as its one changed line, not as delete-all,
-    reinsert-all. *)
+    replacement), so those edits additionally get their collapsed bracket groups
+    broken one part per line first, letting the shared [{], [...], [}] lines
+    align into context. And for everything else the aligned form is simply the
+    more precise statement of the rule — a keyword rewrite of a multi-line
+    construct reads as its one changed line, not as delete-all, reinsert-all. *)
 let render_pattern_body (ep : edit_pat) : string =
   let ep =
     if contains_ellipsis ep.after then
@@ -510,8 +510,7 @@ let has_adjacent_holes p =
         let arr = Array.of_list children in
         List.fold_left
           (fun a -> function
-            | Lit _ -> false :: a
-            | Slot i -> toks a arr.(i).child)
+            | Lit _ -> false :: a | Slot i -> toks a arr.(i).child)
           acc template
   in
   let rec adjacent = function
@@ -669,14 +668,12 @@ let mk_anti_unify ?(allow_ellipsis = true) hole_for =
         Leaf l1
     | PNode n1, PNode n2
       when n1.node_type = n2.node_type && n1.is_named = n2.is_named -> (
-        let same_count =
-          List.length n1.children = List.length n2.children
-        in
+        let same_count = List.length n1.children = List.length n2.children in
         match seq_brackets p1 with
         | Some delims
           when allow_ellipsis
                && ((not same_count) || node_has_ellipsis p1
-                  || node_has_ellipsis p2) ->
+                 || node_has_ellipsis p2) ->
             (* Piece C: a delimited list whose arity differs across the two
                sides (or that one side already generalised) becomes [(...)] —
                the interior is a sequence wildcard, the brackets are kept as the
@@ -696,7 +693,7 @@ let mk_anti_unify ?(allow_ellipsis = true) hole_for =
                     })
                 n1.children n2.children
             in
-        (* Collapse-to-single-hole: if anti-unifying a node's children leaves it
+            (* Collapse-to-single-hole: if anti-unifying a node's children leaves it
            rendering as adjacent holes ([_H0_H1]) — two holes with no token
            between them — the fragment is unmatchable and the safety gate rejects
            it (safe=0), forcing the dendrogram cut down to shape-homogeneous
@@ -729,8 +726,8 @@ let mk_anti_unify ?(allow_ellipsis = true) hole_for =
             in
             if
               has_adjacent_holes node
-              || (multi_child && contains_ellipsis node
-                 && not (has_concrete node))
+              || multi_child && contains_ellipsis node
+                 && not (has_concrete node)
             then Hole (hole_for p1 p2)
             else node
         | _ ->
@@ -748,8 +745,7 @@ let mk_anti_unify ?(allow_ellipsis = true) hole_for =
                  (dropping an argument would diverge from the other side). *)
               seq_brackets p1 = None
               && pairs <> []
-              && List.length pairs
-                 = min (Array.length a) (Array.length b)
+              && List.length pairs = min (Array.length a) (Array.length b)
             then
               field_align ~node_type:n1.node_type ~is_named:n1.is_named
                 ~template:n1.template a b pairs
@@ -765,8 +761,7 @@ let mk_anti_unify ?(allow_ellipsis = true) hole_for =
           let c1 = a.(i) and c2 = b.(j) in
           if c1.field_name = c2.field_name then
             { field_name = c1.field_name; child = go c1.child c2.child }
-          else
-            { field_name = None; child = Hole (hole_for c1.child c2.child) })
+          else { field_name = None; child = Hole (hole_for c1.child c2.child) })
         pairs
     in
     let kept = List.map fst pairs in
@@ -808,7 +803,9 @@ let anti_unify_edits (e1 : edit_pat) (e2 : edit_pat) : edit_pat =
      that instead. Both calls share one [hole_for] so hole indices still align
      across the two sides. *)
   let hole_for = make_hole_for () in
-  let before = mk_anti_unify ~allow_ellipsis:true hole_for e1.before e2.before in
+  let before =
+    mk_anti_unify ~allow_ellipsis:true hole_for e1.before e2.before
+  in
   (* The replace side may ellipsize only when the match side did — a preserved
      list (e.g. function params, present on both sides) then gets matching
      [(...)] and binds; an added, arity-varying list (e.g. a useCallback
@@ -929,29 +926,25 @@ let no_orphan_after_holes (ep : edit_pat) : bool =
 
 (** No pass-through junk line. In a multi-child edit, a child that
 
-    (a) renders as its own line — the root's [template] separates it from
-    its siblings by newline [Lit]s (or the pattern boundary), so it is an
-    independent statement-level sibling, not a grammatical constituent
-    like a call's argument list;
-    (b) appears structurally identical — same hole indices — on both
-    sides, so its rewrite is the identity;
-    (c) contains at least one hole, none of whose indices occur anywhere
-    else in the pattern (an index shared with another child would make
-    this child a binding source); and
-    (d) carries no named leaf — only holes and keyword/punctuation tokens
+    (a) renders as its own line — the root's [template] separates it from its
+    siblings by newline [Lit]s (or the pattern boundary), so it is an
+    independent statement-level sibling, not a grammatical constituent like a
+    call's argument list; (b) appears structurally identical — same hole indices
+    — on both sides, so its rewrite is the identity; (c) contains at least one
+    hole, none of whose indices occur anywhere else in the pattern (an index
+    shared with another child would make this child a binding source); and (d)
+    carries no named leaf — only holes and keyword/punctuation tokens
 
-    states nothing about the edit: it is anti-unification residue of
-    unrelated adjacent nodes (the [import _H3] neighbours of a changed
-    import, holed because each instance file had different neighbours) and
-    constrains only adjacency. Umbrella candidates carrying such lines
-    reach the support floor by aggregating unrelated stragglers across
-    change families, out-rank the per-family rules on concrete-token
-    specificity (so they apply first and consume those rules' matches), and
-    re-create the tier-2 echo shape the specificity ordering exists to
-    prevent. A passthrough line with a named leaf
-    ([import android.content._H2]) is a selective guard and survives; so
-    does one whose hole is a binding source, and any line that actually
-    edits. *)
+    states nothing about the edit: it is anti-unification residue of unrelated
+    adjacent nodes (the [import _H3] neighbours of a changed import, holed
+    because each instance file had different neighbours) and constrains only
+    adjacency. Umbrella candidates carrying such lines reach the support floor
+    by aggregating unrelated stragglers across change families, out-rank the
+    per-family rules on concrete-token specificity (so they apply first and
+    consume those rules' matches), and re-create the tier-2 echo shape the
+    specificity ordering exists to prevent. A passthrough line with a named leaf
+    ([import android.content._H2]) is a selective guard and survives; so does
+    one whose hole is a binding source, and any line that actually edits. *)
 let no_junk_passthrough (ep : edit_pat) : bool =
   match (ep.before, ep.after) with
   | PNode b, PNode a ->
@@ -965,7 +958,10 @@ let no_junk_passthrough (ep : edit_pat) : bool =
           | Lit s :: rest -> go (prev_nl || nl s) rest
           | Slot j :: rest ->
               let next_nl =
-                match rest with [] -> true | Lit s :: _ -> nl s | Slot _ :: _ -> false
+                match rest with
+                | [] -> true
+                | Lit s :: _ -> nl s
+                | Slot _ :: _ -> false
               in
               if prev_nl && next_nl then Hashtbl.replace eligible j ();
               go false rest
@@ -1001,8 +997,10 @@ let no_junk_passthrough (ep : edit_pat) : bool =
              (fun i -> count (Lazy.force global) i = 2 * count local i)
              (List.sort_uniq compare local)
       in
-      not (List.exists (fun (j, c) -> junk j c)
-             (List.mapi (fun j c -> (j, c)) b.children))
+      not
+        (List.exists
+           (fun (j, c) -> junk j c)
+           (List.mapi (fun j c -> (j, c)) b.children))
   | _ -> true
 
 (* ── Declaration anchoring ─────────────────────────────────────────── *)
@@ -1013,13 +1011,14 @@ let no_junk_passthrough (ep : edit_pat) : bool =
     ([{ return _H } ⤳ = _H], a [function_body]) be re-anchored under its
     enclosing declaration ([function_declaration]). *)
 
-(** Drop whole-line [//] comments from a node's template [Lit]s, recursively.
-    A comment that fell between two children is absorbed into a [Lit] by
+(** Drop whole-line [//] comments from a node's template [Lit]s, recursively. A
+    comment that fell between two children is absorbed into a [Lit] by
     {!build_template}; it then renders into the pattern body, where the matcher
     treats it as skippable trivia anyway — but it is incidental to one instance
     and pollutes the rule text. Stripping it leaves the rule matching the same
     sites (a comment-free body pattern still matches comment-bearing bodies; the
-    comment is an [extra]). Line comments only; block comments are left intact. *)
+    comment is an [extra]). Line comments only; block comments are left intact.
+*)
 let strip_line_comments (ep : edit_pat) : edit_pat =
   let strip_lit s =
     String.split_on_char '\n' s
@@ -1076,8 +1075,8 @@ let find_enclosing_parent (root : Tree.src Tree.t) (s : int) (e : int) :
     the signature so the resulting rule fires only on declarations of that shape
     rather than on every single-return block anywhere in the file (the
     over-firing that forces a context-stripped body rule to fragment into
-    signature-anchored pieces). The declaration's kept children are classified by
-    surface shape — language-general, no node-type allowlist:
+    signature-anchored pieces). The declaration's kept children are classified
+    by surface shape — language-general, no node-type allowlist:
 
     - the body child ([(body_start, body_end)]) → [body_ep]'s two sides;
     - a named leaf (the name) → a fresh hole;
@@ -1087,14 +1086,14 @@ let find_enclosing_parent (root : Tree.src Tree.t) (s : int) (e : int) :
       mode tolerates the omission when the rule is applied.
 
     A dropped child takes one keyword-free adjacent separator [Lit] with it, but
-    never a [Lit] carrying an alphabetic keyword: Kotlin's [fun] is silent source
-    text in the [Lit] following [modifiers], and that is the anchor. The result
-    is rendered as a [match: field] rule by {!render_pattern_body_field}.
+    never a [Lit] carrying an alphabetic keyword: Kotlin's [fun] is silent
+    source text in the [Lit] following [modifiers], and that is the anchor. The
+    result is rendered as a [match: field] rule by {!render_pattern_body_field}.
 
-    Returns [None] unless the span is a direct child of [parent], the result is a
-    coherent edit, and a concrete keyword survives in the signature — the latter
-    is what keeps anchoring to genuine declarations ([fun]/[def]/[val]) rather
-    than to bracket scaffolding like a class body. *)
+    Returns [None] unless the span is a direct child of [parent], the result is
+    a coherent edit, and a concrete keyword survives in the signature — the
+    latter is what keeps anchoring to genuine declarations ([fun]/[def]/[val])
+    rather than to bracket scaffolding like a class body. *)
 
 (** Rename the after side's orphan holes onto the before side's, pairing them in
     first-appearance order. A body change pair anti-unifies its two sides
@@ -1239,7 +1238,9 @@ let build_anchored_decl source (parent : Tree.src Tree.t) ~body_start ~body_end
        and the rule would not be anchored to a real definition. *)
     let signature_anchor =
       Array.exists (function `Keep p -> has_concrete p | _ -> false) cls
-      || List.exists (function Lit l -> has_keyword_text l | _ -> false) template
+      || List.exists
+           (function Lit l -> has_keyword_text l | _ -> false)
+           template
     in
     if not signature_anchor then None
     else

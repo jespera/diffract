@@ -39,7 +39,9 @@ let myers ~max_d (a : int array) (b : int array) : int option =
   else
     let n = Array.length a and m = Array.length b in
     let pre = ref 0 in
-    while !pre < n && !pre < m && a.(!pre) = b.(!pre) do incr pre done;
+    while !pre < n && !pre < m && a.(!pre) = b.(!pre) do
+      incr pre
+    done;
     let suf = ref 0 in
     while
       !suf < n - !pre && !suf < m - !pre && a.(n - 1 - !suf) = b.(m - 1 - !suf)
@@ -94,7 +96,7 @@ let distance_upto ~bound a b =
 
 let geodesic ?d_endpoints ~before ~mid ~after () =
   match intern [ before; mid; after ] with
-  | [ ib; im; ia ] ->
+  | [ ib; im; ia ] -> (
       let d_ba =
         match d_endpoints with
         | Some d -> d
@@ -102,7 +104,7 @@ let geodesic ?d_endpoints ~before ~mid ~after () =
             Option.get
               (myers ~max_d:(Array.length before + Array.length after) ib ia)
       in
-      (match myers ~max_d:d_ba ib im with
+      match myers ~max_d:d_ba ib im with
       | None -> false
       | Some d1 ->
           (* Triangle inequality: d(mid,after) ≥ d_ba − d1, so a search cut

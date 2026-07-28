@@ -1,8 +1,8 @@
 (** Internal OCaml tree representation for parsed source code *)
 
-type src = unit
 (** Phantom type markers - these have no runtime representation. We use unit as
     the representation since the type is never constructed. *)
+type src = unit
 
 type pat = unit
 type any = unit
