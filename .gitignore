@@ -23,6 +23,9 @@ grammars/**/*.a
 .DS_Store
 Thumbs.db
 
+# evaluation corpora are materialized locally from pinned public commits
+evaluation/_work/
+
 # tmp, these will eventually go away
 changeset
 changeset2
