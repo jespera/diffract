@@ -1,7 +1,7 @@
 # residual
 --- a/QueriesA.ts
 +++ b/QueriesA.ts
-@@ ... @@
+@@ -6,1 +6,4 @@
 -  const depoBanks = useMemo(() => identities.map(([id]) => id), [identities]);
 +  const depoBanks = useMemo(() => {
 +    const listed = identities.map(([id]) => id);
@@ -11,7 +11,7 @@
 # residual
 --- a/QueriesB.ts
 +++ b/QueriesB.ts
-@@ ... @@
+@@ -6,1 +6,6 @@
 -  const names = useMemo(() => records.map((r) => r.name), [records]);
 +  const names = useMemo(() => {
 +    const active = records.filter((r) => r.active);
