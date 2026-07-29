@@ -132,9 +132,15 @@ let arbitrate_fusion_inputs ~eval_at ~all_files
 
 (* Concrete tokens on the match side: word tokens ([A-Za-z0-9_]+) of
    body lines that participate in matching (context and [-] lines, not
-   [+] replacements), excluding declared metavar names. Crude — token
-   count, not tree size — but monotone in how much concrete anchoring
-   the pattern brings to a match. *)
+   [+] replacements), excluding declared metavar names. [-]-line tokens
+   count DOUBLE: the matched-and-edited tokens are the rule's true
+   discriminator, and a value-specific rewrite ([- priority="default"],
+   edit tokens priority+default) must apply before a value-generic one
+   ([<Button] ctx + [- priority=_H0]) whose rename would consume its
+   match — with flat counts the two tie and support breaks the tie the
+   wrong way, starving the specific rule in the application chain.
+   Crude — token count, not tree size — but monotone in how much
+   concrete anchoring the pattern brings to a match. *)
 let match_side_specificity pattern_text =
   let lines = String.split_on_char '\n' pattern_text in
   let metavars = Hashtbl.create 8 in
@@ -166,7 +172,9 @@ let match_side_specificity pattern_text =
         else begin
           (* context or [-] line: count its concrete word tokens *)
           let n = String.length l in
-          let i = ref (if n > 0 && l.[0] = '-' then 1 else 0) in
+          let is_minus = n > 0 && l.[0] = '-' in
+          let weight = if is_minus then 2 else 1 in
+          let i = ref (if is_minus then 1 else 0) in
           while !i < n do
             if is_word l.[!i] then begin
               let j = ref !i in
@@ -174,7 +182,7 @@ let match_side_specificity pattern_text =
                 incr j
               done;
               let w = String.sub l !i (!j - !i) in
-              if not (Hashtbl.mem metavars w) then incr count;
+              if not (Hashtbl.mem metavars w) then count := !count + weight;
               i := !j
             end
             else incr i
