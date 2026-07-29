@@ -463,6 +463,41 @@ let rec pat_size = function
 let edit_holes ep = count_holes ep.before + count_holes ep.after
 let edit_size ep = pat_size ep.before + pat_size ep.after
 
+(** A match side whose outermost form is a bare BRACE list: a [{] opener
+    directly followed by an [...] run — no head names the construct. Braces are
+    the delimiter whose bare form is ambiguous across constructs:
+    [{ ... - Legacy ... }] matches object literals, blocks, and destructuring as
+    readily as the import clause it came from, while its head-anchored sibling
+    realisation ([import { ... } from './x']) states the same change over a
+    named construct. Selection's generality tie-break prefers the headed form at
+    equal coverage. Deliberately scoped to braces: a bare paren list
+    ([( ... - x: T ... )]) is often the FAITHFUL generalization (one rule
+    covering constructor and method params), and angle levels never render bare
+    at all (head-keeping in ellipsize_level). A head-kept level ([<Button ...],
+    [<_H0 ...]) is not bare — its second part is the head, not the ellipsis. *)
+let bare_bracket_root ep =
+  (* Single-child wrappers ([import_clause] around [named_imports]) render
+     nothing of their own — look through them to the list node. *)
+  let rec unwrap = function
+    | PNode { children = [ { child; _ } ]; _ } -> unwrap child
+    | p -> p
+  in
+  match unwrap ep.before with
+  | PNode
+      {
+        children =
+          {
+            child =
+              PNode { children = []; node_type = "{"; is_named = false; _ };
+            _;
+          }
+          :: { child = Ellipsis; _ }
+          :: _;
+        _;
+      } ->
+      true
+  | _ -> false
+
 (** A pattern is "concrete" iff it contains at least one named [Leaf] or a
     keyword-shaped unnamed token (one whose text contains an alphabetic
     character — [array], [function], [class] etc.). Empty [PNode]s whose

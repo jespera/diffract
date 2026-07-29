@@ -2,12 +2,12 @@
 @@
 match: strict
 @@
-  {
+  import {
   ...
 - Legacy
 - ,
   ...
-  }
+  } from './core';
 # sites R1
 one.ts
 three.ts
