@@ -836,13 +836,13 @@ let max_hole ep = max (max_hole_node ep.before) (max_hole_node ep.after)
 (* ── Anchor generalization over pooled realisations (§3.2) ──────────── *)
 
 (** Structural shape of an [edit_pat] with named-leaf values erased. A leaf
-    whose [value] differs from its [node_type] (an identifier, a string — a
-    leaf that could generalize to a hole) contributes only its node type;
-    keyword and punctuation leaves ([value = node_type]) stay verbatim. So
-    realisations sharing a key differ only in named-leaf anchor text, and
-    anti-unifying such a group holes nothing but those anchors — brackets,
-    keywords, and the pooled delta (identical across the pool by delta-key
-    construction) all stay concrete. *)
+    whose [value] differs from its [node_type] (an identifier, a string — a leaf
+    that could generalize to a hole) contributes only its node type; keyword and
+    punctuation leaves ([value = node_type]) stay verbatim. So realisations
+    sharing a key differ only in named-leaf anchor text, and anti-unifying such
+    a group holes nothing but those anchors — brackets, keywords, and the pooled
+    delta (identical across the pool by delta-key construction) all stay
+    concrete. *)
 let anchor_shape_key (ep : edit_pat) : string =
   let buf = Buffer.create 128 in
   let rec go = function
@@ -877,17 +877,17 @@ let anchor_shape_key (ep : edit_pat) : string =
   go ep.after;
   Buffer.contents buf
 
-(** Anti-unify a pool's same-shape realisations into one more-general
-    candidate. Admitted only when the merge introduces at most ONE hole
-    beyond the realisations' own — the single generalized anchor (e.g. the
-    JSX element head); a group diverging at several anchor positions stays
-    per-site. Instances are the union: the merged rule is the pool's general
-    realisation, and instance re-specialization collapses the hole back to
-    the literal wherever the surviving sites do not vary. *)
+(** Anti-unify a pool's same-shape realisations into one more-general candidate.
+    Admitted only when the merge introduces at most ONE hole beyond the
+    realisations' own — the single generalized anchor (e.g. the JSX element
+    head); a group diverging at several anchor positions stays per-site.
+    Instances are the union: the merged rule is the pool's general realisation,
+    and instance re-specialization collapses the hole back to the literal
+    wherever the surviving sites do not vary. *)
 let generalize_realisations (cs : cluster list) : cluster option =
   match cs with
   | [] | [ _ ] -> None
-  | c0 :: rest ->
+  | c0 :: rest -> (
       (* NOT [anti_unify_edits]: its arity-collapsing rule folds a level that
          already carries an Ellipsis into a bare [(...)], destroying the
          anchor and the delta. The shape key guarantees lockstep structure,
@@ -915,9 +915,9 @@ let generalize_realisations (cs : cluster list) : cluster option =
             (* a fold-introduced hole absorbing a further site's anchor *)
             Hole h
         | Ellipsis, Ellipsis -> Ellipsis
-        | Leaf l1, Leaf l2 when l1.node_type = l2.node_type ->
+        | Leaf l1, Leaf l2 when l1.node_type = l2.node_type -> (
             if String.equal l1.value l2.value then Leaf l1
-            else (
+            else
               match Hashtbl.find_opt memo (l1.value, l2.value) with
               | Some h -> Hole h
               | None ->
@@ -957,19 +957,18 @@ let generalize_realisations (cs : cluster list) : cluster option =
              opening/closing tag — shares its hole) *)
           None
       | Some merged ->
-        let seen = Hashtbl.create 16 in
-        let instances =
-          List.concat_map (fun (c : cluster) -> c.instances) cs
-          |> List.filter (fun (i : instance) ->
-                 let k = (i.file, i.site_start, i.site_end) in
-                 if Hashtbl.mem seen k then false
-                 else begin
-                   Hashtbl.add seen k ();
-                   true
-                 end)
-        in
-        Some { pattern = merged; instances }
-
+          let seen = Hashtbl.create 16 in
+          let instances =
+            List.concat_map (fun (c : cluster) -> c.instances) cs
+            |> List.filter (fun (i : instance) ->
+                let k = (i.file, i.site_start, i.site_end) in
+                if Hashtbl.mem seen k then false
+                else begin
+                  Hashtbl.add seen k ();
+                  true
+                end)
+          in
+          Some { pattern = merged; instances })
 
 let rec shift_holes_node offset = function
   | Hole h -> Hole (h + offset)
