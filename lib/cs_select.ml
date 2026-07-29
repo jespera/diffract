@@ -341,19 +341,23 @@ type anchored_stream = {
           general merged realisations appended *)
   an_grouped : (string * cluster) list;
       (** identical realisations grouped, keyed by surgical render *)
-  an_exempt : (string * string, int * string) Hashtbl.t;
-      (** (pattern text, language) → (concrete node count, delta needle).
-          Membership = min-support exemption; the count is round 2's generality
-          tie-break; the needle (the delta's first before-side text) prefilters
-          evaluation — an anchored realisation cannot fire in a file that does
-          not even contain its delta text. *)
+  an_exempt : (string * string, int * int * string) Hashtbl.t;
+      (** (pattern text, language) → (headed flag: 0 for a bare-delimiter root,
+          concrete node count, delta needle). Membership = min-support
+          exemption; the counts are round 2's generality tie-break (prefer
+          head-anchored over bare-delimiter, then fewest concrete nodes); the
+          needle (the delta's first before-side text) prefilters evaluation — an
+          anchored realisation cannot fire in a file that does not even contain
+          its delta text. *)
   an_pool_sites : (string * string, (string * int * int) list ref) Hashtbl.t;
       (** (language, delta key) → the pool's distinct home sites *)
 }
 
 let propose_anchored (anchored_raw : (string * (int * int) * cluster) list) :
     anchored_stream =
-  let exempt : (string * string, int * string) Hashtbl.t = Hashtbl.create 16 in
+  let exempt : (string * string, int * int * string) Hashtbl.t =
+    Hashtbl.create 16
+  in
   let pool_sites : (string * string, (string * int * int) list ref) Hashtbl.t =
     Hashtbl.create 32
   in
@@ -452,7 +456,9 @@ let propose_anchored (anchored_raw : (string * (int * int) * cluster) list) :
     (fun (pattern_text, c) ->
       Hashtbl.replace exempt
         (pattern_text, lang_of c)
-        (edit_size c.pattern - edit_holes c.pattern, needle_of_pat c.pattern))
+        ( (if bare_bracket_root c.pattern then 0 else 1),
+          edit_size c.pattern - edit_holes c.pattern,
+          needle_of_pat c.pattern ))
     anchored_grouped;
   {
     an_pooled = anchored_pooled;
@@ -647,7 +653,7 @@ let eval_candidate (env : tier_env) ~(anchored : anchored_stream)
      dominates runtime. *)
   let needle =
     match Hashtbl.find_opt anchored.an_exempt (pattern_text, language) with
-    | Some (_, n) when n <> "" -> Some n
+    | Some (_, _, n) when n <> "" -> Some n
     | _ -> None
   in
   let file_plausible f =
@@ -739,18 +745,26 @@ let select_round ~(anchored : anchored_stream) ~covered ~selected pool floor =
                nodes — the most general safe anchor, no site junk.
                Non-exempt candidates score 0 (the best), so round 1 is
                unaffected. *)
-            let concrete =
+            let headed, concrete =
               match
                 Hashtbl.find_opt anchored.an_exempt
                   (sc.sc_pattern, sc.sc_language)
               with
-              | Some (c, _) -> c
-              | None -> 0
+              | Some (k, c, _) -> (k, c)
+              | None -> (0, 0)
             in
+            (* Headed anchors ([import { ... } from './x'] vs a bare
+               [{ ... }]) rank ABOVE fewest-concrete: the head names the
+               construct and is anchoring knowledge, not site junk — a
+               bare delimiter pattern over-matches every other list shape
+               the corpus happens not to contain. Candidates that are
+               equally headed (the common case) fall through to
+               fewest-concrete exactly as before. *)
             let key =
               ( m,
                 clean,
                 sc.sc_support,
+                headed,
                 -concrete,
                 -String.length sc.sc_pattern,
                 sc.sc_pattern )
