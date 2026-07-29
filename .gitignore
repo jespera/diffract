@@ -4,6 +4,7 @@ _opam/
 *.install
 *.merlin
 .merlin
+compile_commands.json
 
 # Node.js (for grammar builds)
 node_modules/
@@ -31,3 +32,4 @@ changeset
 changeset2
 deon
 deon2
+gen3
