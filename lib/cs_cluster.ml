@@ -549,6 +549,17 @@ let cluster_one_sided (candidates : one_sided_candidate list) :
       let grouped =
         List.rev_map (fun p -> (List.rev !(Hashtbl.find tbl p), p)) !order
       in
+      (* Bucket cap, same rationale as the two-sided one (see
+         {!Cs_config.dendrogram_bucket_cap}). *)
+      let cap = Cs_config.default.dendrogram_bucket_cap in
+      let grouped =
+        if List.length grouped <= cap then grouped
+        else begin
+          Cs_trace.trace "  os dendrogram capped: %d -> %d leaves\n%!"
+            (List.length grouped) cap;
+          List.filteri (fun i _ -> i < cap) grouped
+        end
+      in
       let root = build_os_dendrogram grouped in
       let clusters, _ = cut_os_dendrogram 2 side root in
       clusters

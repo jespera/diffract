@@ -5,10 +5,11 @@
 # Scale corpus: same ground truth (one rule + its curried/abstract-def
 # variants), so any divergence from finagle's rule shape is a
 # size-dependence signal, and the runtime tracks how summarize scales in
-# file count. See docs/summarize-corpus-candidates.md.
-# KNOWN-TOO-SLOW: no baseline yet. At this scale the two-sided dendrogram
-# gets one ~4800-cluster bucket (multi-level emissions of same-root-type
-# defs) and runs for hours. This corpus is the benchmark for fixing that.
+# file count. Slow (~3 min/format), so not in all.sh. The corpus that
+# motivated the dendrogram bucket cap: ~4500 genuine def-level sites in one
+# root-type bucket made the pairwise merge run for hours until clustering
+# switched to sampling (discovery from a capped prefix, support from the
+# gate). See docs/summarize-corpus-candidates.md.
 # PR: https://github.com/apache/daffodil/pull/388
 NAME=daffodil
 REPO=https://github.com/apache/daffodil

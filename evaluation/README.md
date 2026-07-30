@@ -64,6 +64,7 @@ Timings are printed to stderr only, so they never churn baselines.
 | `sentry-prop-manual.sh` | getsentry/sentry PR #114731, the manual pass after the same codemod | tsx | decomposition corpus: same rename hand-applied plus a documented ride-along (`playPausePriority`→`playPauseVariant` + a type edit) that should factor separately from the main rule |
 | `finagle.sh` | twitter/finagle scalafix `ProcedureSyntax` | scala | calibration corpus and the first Scala one: `def f(...) { ... }` → `def f(...): Unit = { ... }`, zero ride-along; ground truth = one rule (residuals to date are its curried and abstract-def variants, not noise) |
 | `symfony-str.sh` | symfony/symfony strpos/substr → `str_contains`/`str_starts_with`/`str_ends_with` | php | the PHP counterweight to drupal-attr: pristine one-line-per-site expression rewrites; ground truth ≈ 10 form rules (3 target functions × positive/negated × strpos/substr sources); slow (~3 min/format), so not in all.sh |
+| `daffodil.sh` | apache/daffodil scalafix `ProcedureSyntax` (whole codebase) | scala | scale corpus: the same rewrite as finagle at 5× the files and ~4500 sites; motivated the dendrogram bucket cap (discovery samples, the gate assigns support — the top rule carries support 3295); slow (~3 min/format), so not in all.sh |
 
 ## Adding a corpus
 
