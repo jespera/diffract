@@ -21,6 +21,12 @@ and 'kind t = {
           [extras] rules — typically comments and (rarely) whitespace tokens.
           Such nodes can appear anywhere between tokens without being part of
           the syntactic structure. *)
+  is_missing : bool;
+      (** True iff tree-sitter fabricated this zero-width node during error
+          recovery to stand in for a grammar-required token the source lacks
+          (e.g. the right operand of a dangling [||]). The other marker of a
+          broken parse besides an [ERROR] node — a tree can contain missing
+          nodes and no ERROR node at all. *)
   hash : int;
   start_byte : int;
   end_byte : int;

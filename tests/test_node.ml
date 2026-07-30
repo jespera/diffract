@@ -142,9 +142,35 @@ let test_equal_subtree () =
     "subtree equal" true
     (Tree.equal tree1.source call1 tree2.source call2)
 
+(* Test: error recovery's fabricated zero-width nodes carry is_missing.
+   [a || )] parses without any ERROR node — the damage marker is a missing
+   operand — so the flag is the only way to see this breakage. *)
+let test_is_missing () =
+  let count_missing root =
+    let n = ref 0 in
+    Tree.traverse (fun node -> if node.Tree.is_missing then incr n) root;
+    !n
+  in
+  let broken =
+    Diffract.parse_tree ~ctx ~language:"php"
+      "<?php\nif ('a' === substr($u, 0, 8) || ) {\n  echo \"x\";\n}\n"
+  in
+  Alcotest.(check bool)
+    "no ERROR node despite breakage" false
+    (Tree.has_errors broken);
+  Alcotest.(check bool)
+    "broken parse has a missing node" true
+    (count_missing broken.root > 0);
+  let clean =
+    Diffract.parse_tree ~ctx ~language:"php"
+      "<?php\nif ('a' === substr($u, 0, 8) || $b) {\n  echo \"x\";\n}\n"
+  in
+  Alcotest.(check int) "clean parse has none" 0 (count_missing clean.root)
+
 let tests =
   [
     Alcotest.test_case "root node type" `Quick test_root_node_type;
+    Alcotest.test_case "is_missing on recovery nodes" `Quick test_is_missing;
     Alcotest.test_case "find children" `Quick test_find_children;
     Alcotest.test_case "text extraction" `Quick test_text_extraction;
     Alcotest.test_case "child text extraction" `Quick test_child_text_extraction;

@@ -17,6 +17,7 @@ include Tree_types
 let node_type t = t.node_type
 let is_named t = t.is_named
 let is_extra t = t.is_extra
+let is_missing t = t.is_missing
 let start_byte t = t.start_byte
 let end_byte t = t.end_byte
 let start_point t = t.start_point
@@ -222,6 +223,7 @@ let rec of_ts_node_internal source (ts_node : Node.t) =
   let node_type = Node.node_type ts_node in
   let is_named = Node.is_named ts_node in
   let is_extra = Node.is_extra ts_node in
+  let is_missing = Node.is_missing ts_node in
   let start_byte = Node.start_byte ts_node in
   let end_byte = Node.end_byte ts_node in
   let ts_start = Node.start_point ts_node in
@@ -268,6 +270,7 @@ let rec of_ts_node_internal source (ts_node : Node.t) =
     node_type;
     is_named;
     is_extra;
+    is_missing;
     hash;
     start_byte;
     end_byte;

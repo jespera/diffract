@@ -167,6 +167,14 @@ CAMLprim value tsh_node_is_extra(value v_node) {
     CAMLreturn(Val_bool(ts_node_is_extra(wrapper->node)));
 }
 
+/* Check if node is a zero-width token fabricated by error recovery to
+   stand in for a grammar-required token the source lacks. */
+CAMLprim value tsh_node_is_missing(value v_node) {
+    CAMLparam1(v_node);
+    TSNodeWrapper *wrapper = Node_wrapper_val(v_node);
+    CAMLreturn(Val_bool(ts_node_is_missing(wrapper->node)));
+}
+
 /* Check if node is null */
 CAMLprim value tsh_node_is_null(value v_node) {
     CAMLparam1(v_node);

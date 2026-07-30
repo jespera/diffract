@@ -38,6 +38,10 @@ val is_named : t -> bool
     the syntactic structure. *)
 val is_extra : t -> bool
 
+(** [is_missing node] returns true if this is a zero-width node fabricated by
+    error recovery to stand in for a grammar-required token the source lacks. *)
+val is_missing : t -> bool
+
 (** [is_null node] returns true if this is a null/missing node. *)
 val is_null : t -> bool
 
