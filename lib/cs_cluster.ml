@@ -370,7 +370,8 @@ let cut_dendrogram ?(threshold = Cs_config.default.max_hole_fraction)
 (* [one_sided_cluster] now lives in {!Cs_types} (shared with {!Cs_fusion}). *)
 
 type os_dnode =
-  | OsDLeaf of one_sided_instance * pat_node
+  | OsDLeaf of one_sided_instance list * pat_node
+      (** instances sharing a structurally identical pattern (pre-grouped) *)
   | OsDMerge of {
       om_pattern : pat_node;
       om_instances : one_sided_instance list;
@@ -379,7 +380,7 @@ type os_dnode =
     }
 
 let os_dnode_instances = function
-  | OsDLeaf (i, _) -> [ i ]
+  | OsDLeaf (is, _) -> is
   | OsDMerge m -> m.om_instances
 
 let os_dnode_pattern = function
@@ -390,52 +391,93 @@ let hole_frac_pat p =
   let s = pat_size p in
   if s = 0 then 0.0 else float_of_int (count_holes p) /. float_of_int s
 
-let build_os_dendrogram (initial : (one_sided_instance * pat_node) list) :
-    os_dnode =
-  let nodes = ref (List.map (fun (i, p) -> OsDLeaf (i, p)) initial) in
+(* Root signature of a one-sided pattern — the single-sided analogue of
+   {!Cs_select.root_sig}. Anti-unifying two patterns whose roots differ in
+   kind or node_type yields a hole-rooted pattern that [cut_os_dendrogram]'s
+   [has_concrete] check rejects, so those merges only ever add tree
+   structure; comparing signatures skips the anti-unification. *)
+let os_root_sig (p : pat_node) =
+  match p with
+  | Hole _ -> ("H", "")
+  | Ellipsis -> ("E", "")
+  | Leaf { node_type; _ } -> ("L", node_type)
+  | PNode { node_type; _ } -> ("P", node_type)
+
+let build_os_dendrogram (initial : (one_sided_instance list * pat_node) list)
+    : os_dnode =
+  Cs_trace.trace "  os dendrogram: %d leaves\n%!" (List.length initial);
+  let merge_patterns p1 p2 =
+    let offset = max_hole_node p1 + 1 in
+    anti_unify_pat p1 (shift_holes_node offset p2)
+  in
+  (* Same shape as {!build_dendrogram}: stable node ids memoise each
+     unordered pair's merge score, so every distinct pair is anti-unified at
+     most once over the whole build — O(m²) anti-unifications instead of the
+     O(m³) of recomputing every surviving pair on every iteration. The score
+     is symmetric (hole count and size are order-independent; only hole
+     numbering differs, which the fraction ignores), so the unordered key is
+     sound. Selection (the (0,1) default, strict-< scan order) matches the
+     unmemoised build. *)
+  let next_id = ref 0 in
+  let fresh () =
+    let i = !next_id in
+    incr next_id;
+    i
+  in
+  let nodes =
+    ref (List.map (fun (is, p) -> (fresh (), OsDLeaf (is, p))) initial)
+  in
+  let score_cache : (int * int, float) Hashtbl.t = Hashtbl.create 256 in
+  let score (ida, nda) (idb, ndb) =
+    let key = if ida <= idb then (ida, idb) else (idb, ida) in
+    match Hashtbl.find_opt score_cache key with
+    | Some f -> f
+    | None ->
+        let f =
+          hole_frac_pat
+            (merge_patterns (os_dnode_pattern nda) (os_dnode_pattern ndb))
+        in
+        Hashtbl.add score_cache key f;
+        f
+  in
   while List.length !nodes > 1 do
     let arr = Array.of_list !nodes in
     let n = Array.length arr in
-    let merge_patterns p1 p2 =
-      let offset = max_hole_node p1 + 1 in
-      anti_unify_pat p1 (shift_holes_node offset p2)
-    in
+    let sigs = Array.map (fun (_, nd) -> os_root_sig (os_dnode_pattern nd)) arr in
     let bi = ref 0 and bj = ref 1 in
-    let bp =
-      ref (merge_patterns (os_dnode_pattern arr.(0)) (os_dnode_pattern arr.(1)))
-    in
-    let bfrac = ref (hole_frac_pat !bp) in
+    let bfrac = ref (score arr.(0) arr.(1)) in
     for i = 0 to n - 2 do
       for j = i + 1 to n - 1 do
-        if not (i = 0 && j = 1) then begin
-          let p =
-            merge_patterns (os_dnode_pattern arr.(i)) (os_dnode_pattern arr.(j))
-          in
-          let frac = hole_frac_pat p in
+        if (not (i = 0 && j = 1)) && sigs.(i) = sigs.(j) then begin
+          let frac = score arr.(i) arr.(j) in
           if frac < !bfrac then begin
             bi := i;
             bj := j;
-            bp := p;
             bfrac := frac
           end
         end
       done
     done;
     let i = !bi and j = !bj in
+    let _, ndi = arr.(i) and _, ndj = arr.(j) in
     let merged =
-      OsDMerge
-        {
-          om_pattern = !bp;
-          om_instances = os_dnode_instances arr.(i) @ os_dnode_instances arr.(j);
-          om_left = arr.(i);
-          om_right = arr.(j);
-        }
+      ( fresh (),
+        OsDMerge
+          {
+            om_pattern =
+              merge_patterns (os_dnode_pattern ndi) (os_dnode_pattern ndj);
+            om_instances = os_dnode_instances ndi @ os_dnode_instances ndj;
+            om_left = ndi;
+            om_right = ndj;
+          } )
     in
     let rest = ref [ merged ] in
     Array.iteri (fun k nd -> if k <> i && k <> j then rest := nd :: !rest) arr;
     nodes := !rest
   done;
-  List.hd !nodes
+  match !nodes with
+  | (_, nd) :: _ -> nd
+  | [] -> invalid_arg "build_os_dendrogram"
 
 let cut_os_dendrogram ?(threshold = Cs_config.default.max_hole_fraction)
     min_size side root =
@@ -450,22 +492,22 @@ let cut_os_dendrogram ?(threshold = Cs_config.default.max_hole_fraction)
     let insts = os_dnode_instances node in
     let n = List.length insts in
     if n < min_size then singletons := insts @ !singletons
+    else if is_coherent (os_dnode_pattern node) then
+      (* A pre-grouped leaf (≥ min_size structurally identical instances)
+         is a cluster in its own right, same as a coherent merge. *)
+      clusters :=
+        {
+          os_cluster_pattern = os_dnode_pattern node;
+          os_cluster_side = side;
+          os_cluster_instances = insts;
+        }
+        :: !clusters
     else
       match node with
-      | OsDLeaf (inst, _) -> singletons := inst :: !singletons
+      | OsDLeaf (is, _) -> singletons := is @ !singletons
       | OsDMerge m ->
-          if is_coherent m.om_pattern then
-            clusters :=
-              {
-                os_cluster_pattern = m.om_pattern;
-                os_cluster_side = side;
-                os_cluster_instances = insts;
-              }
-              :: !clusters
-          else begin
-            go m.om_left;
-            go m.om_right
-          end
+          go m.om_left;
+          go m.om_right
   in
   go root;
   (!clusters, !singletons)
@@ -484,10 +526,31 @@ let cluster_one_sided (candidates : one_sided_candidate list) :
   in
   let cluster_side side items =
     if List.length items < 2 then []
-    else
-      let root = build_os_dendrogram items in
+    else begin
+      (* Pre-group structurally identical patterns into multi-instance
+         leaves (the one-sided analogue of [pre_group_identical], and for
+         the same reason: a codemod hitting hundreds of sites emits
+         hundreds of identical one-sided patterns, and clustering them as
+         singletons runs the dendrogram's pair scan at that scale). *)
+      let tbl : (pat_node, one_sided_instance list ref) Hashtbl.t =
+        Hashtbl.create 64
+      in
+      let order = ref [] in
+      List.iter
+        (fun (i, p) ->
+          match Hashtbl.find_opt tbl p with
+          | Some l -> l := i :: !l
+          | None ->
+              Hashtbl.add tbl p (ref [ i ]);
+              order := p :: !order)
+        items;
+      let grouped =
+        List.rev_map (fun p -> (List.rev !(Hashtbl.find tbl p), p)) !order
+      in
+      let root = build_os_dendrogram grouped in
       let clusters, _ = cut_os_dendrogram 2 side root in
       clusters
+    end
   in
   cluster_side Before_side (by_side Before_side)
   @ cluster_side After_side (by_side After_side)
