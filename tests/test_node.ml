@@ -156,8 +156,7 @@ let test_is_missing () =
       "<?php\nif ('a' === substr($u, 0, 8) || ) {\n  echo \"x\";\n}\n"
   in
   Alcotest.(check bool)
-    "no ERROR node despite breakage" false
-    (Tree.has_errors broken);
+    "no ERROR node despite breakage" false (Tree.has_errors broken);
   Alcotest.(check bool)
     "broken parse has a missing node" true
     (count_missing broken.root > 0);

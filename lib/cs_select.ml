@@ -890,8 +890,8 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
         trace_initial_histogram raw initial;
         let base_two_sided =
           Cs_trace.timed "  two-sided clusters" (fun () ->
-              propose_two_sided_clusters
-                ~safe_instances:(safe_instances env) initial)
+              propose_two_sided_clusters ~safe_instances:(safe_instances env)
+                initial)
         in
         let delta =
           Cs_trace.timed "  delta pool" (fun () ->
@@ -909,14 +909,11 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
   in
   let os_clusters, pairs, swap_pairs =
     Cs_trace.timed "propose: one-sided cluster+swap gate" (fun () ->
-        Cs_trace.trace "  one-sided candidates: %d\n%!"
-          (List.length candidates);
+        Cs_trace.trace "  one-sided candidates: %d\n%!" (List.length candidates);
         let os_clusters =
-          Cs_trace.timed "  os cluster" (fun () ->
-              cluster_one_sided candidates)
+          Cs_trace.timed "  os cluster" (fun () -> cluster_one_sided candidates)
         in
-        Cs_trace.trace "  one-sided clusters: %d\n%!"
-          (List.length os_clusters);
+        Cs_trace.trace "  one-sided clusters: %d\n%!" (List.length os_clusters);
         let pairs =
           Cs_trace.timed "  os pair" (fun () ->
               pair_one_sided_clusters os_clusters)
@@ -933,8 +930,8 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
   let fusion_inputs, group_outputs =
     Cs_trace.timed "propose: fusion" (fun () ->
         let fusion_inputs =
-          arbitrate_fusion_inputs ~eval_at:env.eval_at
-            ~all_files:env.all_files two_sided_clusters
+          arbitrate_fusion_inputs ~eval_at:env.eval_at ~all_files:env.all_files
+            two_sided_clusters
         in
         let nodes =
           List.map fusion_node_of_two_sided fusion_inputs
