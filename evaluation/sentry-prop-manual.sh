@@ -6,6 +6,7 @@
 # ReplayPreviewPlayer. Decomposition ground truth: the rename should factor
 # as a rule; the ride-along should surface separately (small rule or
 # residual). See docs/summarize-corpus-candidates.md for the series anatomy.
+# PR: https://github.com/getsentry/sentry/pull/114731
 NAME=sentry-prop-manual
 REPO=https://github.com/getsentry/sentry
 BEFORE_SHA=a1d7ade4da448bb6a9afff9afa7dbb19973a44ab

@@ -5,13 +5,13 @@ corpus is a pinned before/after commit pair from a public repository, so every
 number here is reproducible by anyone from repository history alone.
 
 This is a manual step - it is not wired into `dune test` or any build alias.
-Run it before landing a change that touches the summarize pipeline
+Run it before adding a change that touches the summarize pipeline
 (`lib/cs_*.ml`, `lib/tree_diff.ml`, matcher rendering).
 
 ## Workflow
 
 ```bash
-# Run the fast corpora and regenerate their baselines, then review:
+# Run the corpora and regenerate their baselines, then review:
 ./evaluation/all.sh && git diff
 
 # One corpus:
@@ -23,8 +23,8 @@ Run it before landing a change that touches the summarize pipeline
 
 A clean `git diff` on the `*.baseline` files means no behavior change. A dirty
 diff is the review artifact: inspect it, and commit the new baseline together
-with the code change that caused it. Re-runs are byte-stable, so any diff is
-real signal, not noise.
+with the code change that caused it. Re-runs should produce the same results,
+so any diff is real signal, not noise.
 
 When a number moves and you need to see *what* changed semantically, the full
 summaries are left in `_work/`:
@@ -69,9 +69,11 @@ Timings are printed to stderr only, so they never churn baselines.
 
 Copy an existing corpus script and edit its variables - the script *is* the
 manifest (repo URL, both full 40-char SHAs, include glob, language, expected
-pair count, extra flags). Land each new corpus as its own commit with its
-first baseline. Candidates with verified SHAs are shortlisted in
-`docs/summarize-corpus-candidates.md`.
+pair count, extra flags). Include a link to where the change is discussed -
+the PR, or the issue/commit where no PR exists - so the corpus is easy to
+find when browsing, and its review comments stay one click away. Add each
+new corpus as its own commit with its first baseline.
+Candidates with verified SHAs are shortlisted in `docs/summarize-corpus-candidates.md`.
 
 Corpora must be reproducible from public data: pinned commits in public
 repositories only.

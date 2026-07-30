@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # DuckDuckGo Android's AndroidX migration — Kotlin, one mechanical commit
 # ("Feature/migrate to androidx (#394)", Nov 2018) plus real ride-along edits.
+# PR: https://github.com/duckduckgo/Android/pull/394
 NAME=androidx
 REPO=https://github.com/duckduckgo/Android
 BEFORE_SHA=bfb88afa3f46878be8d1db180911e501818b1450

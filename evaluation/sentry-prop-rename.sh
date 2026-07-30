@@ -10,6 +10,7 @@
 # the codemod source itself is in a private repo
 # (getsentry/design-engineering). See docs/summarize-corpus-candidates.md
 # for the series anatomy and the manual-pass follow-up candidates.
+# PR: https://github.com/getsentry/sentry/pull/114521
 NAME=sentry-prop-rename
 REPO=https://github.com/getsentry/sentry
 BEFORE_SHA=6ae1d2974353e7365212af5d172f3ac2edf39ec0
