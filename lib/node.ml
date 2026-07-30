@@ -19,6 +19,7 @@ external node_type : t -> string = "tsh_node_type"
 external to_sexp : t -> string = "tsh_node_string"
 external is_named : t -> bool = "tsh_node_is_named"
 external is_extra : t -> bool = "tsh_node_is_extra"
+external is_missing : t -> bool = "tsh_node_is_missing"
 external is_null : t -> bool = "tsh_node_is_null"
 
 (** {1 Child access} *)

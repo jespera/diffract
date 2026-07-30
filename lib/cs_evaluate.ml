@@ -17,10 +17,11 @@ type site_info = {
       (** the file's changed regions in before-coordinates, sorted by start,
           disjoint: [(start, end, after_content)]. A zero-width region
           [(p, p, txt)] is an insertion at byte [p]. *)
-  si_before_errors : string list;
-      (** texts of the before-parse's ERROR nodes (usually empty). The
-          well-formedness guard tolerates these in a rule's output — they
-          predate the rule — while rejecting any error the rule invents. *)
+  si_before_damage : string list;
+      (** damage markers of the before-parse (usually empty): ERROR-node texts
+          and missing-node markers, see {!damage_markers}. The well-formedness
+          guard tolerates these in a rule's output — they predate the rule —
+          while rejecting any damage the rule invents. *)
   si_before_leaves : Leaf_metric.stream;
       (** leaf stream of the before-source, cached for the geodesic check — the
           gate evaluates many candidates per site against the same endpoints. *)
@@ -86,14 +87,24 @@ let changed_regions ?(ignore_separators = false) (d : Tree_diff.diff) :
   go d.before_root d.after_root d.root_change;
   List.sort compare !acc
 
-(* Source texts of the outermost ERROR nodes in a parse tree —
-   tree-sitter's markers for unparseable stretches. Position-independent
-   identities for the gate's well-formedness guard: edits elsewhere in
-   the file shift an untouched error's offsets but not its text. *)
-let error_texts source (root : Tree.src Tree.t) : string list =
+(* Position-independent identities of everything a parse marks as damaged:
+   the source text of each outermost ERROR node, plus a ["\000missing:<type>"]
+   marker for each zero-width node error recovery fabricated (a missing
+   node's text is empty by definition, so its node type is the identity; the
+   NUL prefix keeps markers disjoint from real source text). A broken parse
+   can carry either kind without the other — deleting one disjunct of an
+   [a || b] leaves [a || )], which tree-sitter recovers with a missing
+   operand node and no ERROR at all. Used by the gate's well-formedness
+   guard: edits elsewhere in the file shift a pre-existing error's offsets
+   but not its identity. *)
+let damage_markers source (root : Tree.src Tree.t) : string list =
   let rec go acc (n : Tree.src Tree.t) =
     if n.Tree.node_type = "ERROR" then Tree.text source n :: acc
     else
+      let acc =
+        if n.Tree.is_missing then ("\000missing:" ^ n.Tree.node_type) :: acc
+        else acc
+      in
       List.fold_left
         (fun a (c : Tree.src Tree.child) -> go a c.node)
         acc n.Tree.children
@@ -236,7 +247,7 @@ let build_site_db ~ctx (cs : changeset) : (string, site_info) Hashtbl.t =
                 si_after = after_source;
                 si_language = language;
                 si_regions = changed_regions d;
-                si_before_errors = error_texts before_source bt.Tree.root;
+                si_before_damage = damage_markers before_source bt.Tree.root;
                 si_before_leaves = before_leaves;
                 si_after_leaves = after_leaves;
                 si_d_endpoints = Leaf_metric.distance before_leaves after_leaves;
@@ -411,22 +422,24 @@ let site_eval ~ctx ~language ~pattern_text (si : site_info) : site_evaluation =
         let at = Tree.parse ~ctx ~language si.si_after in
         (* Well-formedness: a transform must produce parseable code. A
            removal-only rule that deletes a grammar-required
-           sub-expression yields a broken intermediate ([const r = ;]);
-           the re-diff over that ERROR-laden tree is unreliable, and it
-           once judged such sites "fully explained" — letting a deletion
-           rule out-cover the extraction rule and mis-state preserved
-           values as deleted-then-readded. Every ERROR in [t''] must
-           already exist in the before (pre-dates the rule; real corpora
-           do contain the odd unparseable stretch) or in the after (the
-           target state itself carries it) — by error text, position
-           shifts aside. An error in neither endpoint is one the rule
-           invented, and repairing rule-inflicted damage is not a
-           residual's job. *)
+           sub-expression yields a broken intermediate ([const r = ;],
+           [a || )]); the re-diff over that damaged tree is unreliable,
+           and it once judged such sites "fully explained" — letting a
+           deletion rule out-cover the extraction rule and mis-state
+           preserved values as deleted-then-readded. Breakage surfaces as
+           ERROR nodes or as fabricated missing nodes (often the latter
+           alone — see {!damage_markers}). Every damage marker in [t'']
+           must already exist in the before (pre-dates the rule; real
+           corpora do contain the odd unparseable stretch) or in the
+           after (the target state itself carries it) — by marker
+           identity, position shifts aside. Damage in neither endpoint is
+           damage the rule invented, and repairing rule-inflicted damage
+           is not a residual's job. *)
         if
           not
             (multiset_covered
-               (error_texts t'' bt.Tree.root)
-               (si.si_before_errors @ error_texts si.si_after at.Tree.root))
+               (damage_markers t'' bt.Tree.root)
+               (si.si_before_damage @ damage_markers si.si_after at.Tree.root))
         then no_fire
         else begin
           let d = Tree_diff.diff ~before:bt ~after:at in
