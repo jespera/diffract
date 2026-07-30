@@ -99,9 +99,8 @@ let summarize ?progress ?(ignore_formatting = false) ~ctx (cs : changeset) :
   in
   let rec tier_loop tier_idx (cur : changeset) (acc : rule list) : rule list =
     let tier =
-      Cs_trace.timed
-        (Printf.sprintf "tier %d" tier_idx)
-        (fun () -> prune_dead acc (tier_rules ~on_file_for ~ctx cur))
+      Cs_trace.timed (Printf.sprintf "tier %d" tier_idx) (fun () ->
+          prune_dead acc (tier_rules ~on_file_for ~ctx cur))
     in
     if tier = [] then acc
     else

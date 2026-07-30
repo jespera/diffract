@@ -403,8 +403,8 @@ let os_root_sig (p : pat_node) =
   | Leaf { node_type; _ } -> ("L", node_type)
   | PNode { node_type; _ } -> ("P", node_type)
 
-let build_os_dendrogram (initial : (one_sided_instance list * pat_node) list)
-    : os_dnode =
+let build_os_dendrogram (initial : (one_sided_instance list * pat_node) list) :
+    os_dnode =
   Cs_trace.trace "  os dendrogram: %d leaves\n%!" (List.length initial);
   let merge_patterns p1 p2 =
     let offset = max_hole_node p1 + 1 in
@@ -443,7 +443,9 @@ let build_os_dendrogram (initial : (one_sided_instance list * pat_node) list)
   while List.length !nodes > 1 do
     let arr = Array.of_list !nodes in
     let n = Array.length arr in
-    let sigs = Array.map (fun (_, nd) -> os_root_sig (os_dnode_pattern nd)) arr in
+    let sigs =
+      Array.map (fun (_, nd) -> os_root_sig (os_dnode_pattern nd)) arr
+    in
     let bi = ref 0 and bj = ref 1 in
     let bfrac = ref (score arr.(0) arr.(1)) in
     for i = 0 to n - 2 do
