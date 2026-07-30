@@ -40,7 +40,18 @@ type options = {
   emission_threshold : float;
       (** legacy change-density parameter for [collect_change_pairs_multi];
           retained for compatibility (multi-level emission no longer gates on
-          it). *)
+          it — a structural gate was re-tried 2026-07 and rejected: it starves
+          the pure-rename lift, see the emission comment in {!Cs_propose}). *)
+  dendrogram_bucket_cap : int;
+      (** Maximum leaves entering one dendrogram (per root-sig bucket,
+          two-sided and one-sided alike). A corpus with thousands of genuine
+          sites (312-file daffodil: ~4500 def-level change pairs) makes the
+          pairwise merge quadratic-to-cubic in the site count, yet discovery
+          only needs *enough* instances — support and coverage come from the
+          evaluation gate, which extends a rule to every file it fires in
+          (§3.3), and sites the capped tier misses re-propose in later tiers
+          over the shrunken remainder. Deterministic (stable input-order
+          prefix) and trace-logged, never silent. *)
   anchor_sample : int;
       (** declaration anchoring: how many of a two-sided cluster's instances to
           re-anchor under their enclosing declaration when proposing a
@@ -62,5 +73,6 @@ let default =
     max_selectors_per_pair = 8;
     selector_depth_limit = 5;
     emission_threshold = 0.5;
+    dendrogram_bucket_cap = 400;
     anchor_sample = 12;
   }

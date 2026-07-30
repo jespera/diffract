@@ -49,28 +49,13 @@ let rec subtree_has_structural (cc : Tree_diff.child_change list) =
    before/after parses is sound — the digest excludes position and source
    buffer. *)
 
-(** Emit change pairs at emission points selected by the structure of the diff,
-    not by depth:
-
-    - Every [Replaced] leaf — the natural unit for a pure rename.
-    - Every [Modified] ancestor that either (a) has an [Added]/[Removed] child
-      directly (the locus of a structural change), or (b) has [Added]/[Removed]
-      somewhere in its subtree {e and} enough of its own direct children are
-      non-[Same] to make it a plausible lift target (ratio ≥
-      [emission_threshold]).
-
-    Case (b) lifts through arbitrarily long wrapper chains — grammar- agnostic,
-    no depth bound — because at each wrapper level both conditions (structural
-    descendant, ratio ≥ threshold) still hold. The lift stops at the first
-    ancestor where most children are [Same], which is typically the enclosing
-    function/block. The covering pass then ranks the candidate levels and picks
-    the tightest informative one.
-
-    Cases without any [Added]/[Removed] anywhere emit {e only} at [Replaced]
-    leaves — no ancestor candidates, so no churn from cluster-level decisions in
-    what should already be leaf-level renames. Byte-range deduplication prevents
-    duplicate ancestor emissions when multiple descendant chains meet at the
-    same ancestor. *)
+(** Emit change pairs at every [Replaced] leaf and at {e every} [Modified]
+    ancestor along each change chain — deliberately unfiltered (see the
+    rejected-gates note inside [collect_change_pairs_multi]): downstream
+    applicability, coherence, and the safety gate discard unworkable levels,
+    and {!Cs_config.dendrogram_bucket_cap} bounds clustering cost at corpus
+    scale. Byte-range deduplication prevents duplicate ancestor emissions
+    when multiple descendant chains meet at the same ancestor. *)
 let rec subtree_hashes (n : Tree.src Tree.t) (acc : int list) : int list =
   List.fold_left
     (fun a (c : Tree.src Tree.child) -> subtree_hashes c.node a)
@@ -113,9 +98,8 @@ let extraction_pairs (child_changes : Tree_diff.child_change list) :
         addeds)
     removeds
 
-let collect_change_pairs_multi
-    ?(emission_threshold = Cs_config.default.emission_threshold)
-    (d : Tree_diff.diff) : Tree_diff.change_pair list =
+let collect_change_pairs_multi (d : Tree_diff.diff) :
+    Tree_diff.change_pair list =
   let out = ref [] in
   let emitted : (int * int, unit) Hashtbl.t = Hashtbl.create 16 in
   let emit (b : Tree.src Tree.t) (a : Tree.src Tree.t) =
@@ -146,7 +130,18 @@ let collect_change_pairs_multi
            level (typically [member_expression] or
            [jsx_self_closing_element]) survives. The covering pass
            then picks the smallest among applicable candidates,
-           resolving overlap by byte range. *)
+           resolving overlap by byte range.
+
+           Two emission gates were tried at corpus scale and REJECTED
+           (2026-07): a structural gate (locus + change-density lift, the
+           [emission_threshold] design) starves the pure-rename lift —
+           renames have no Added/Removed anywhere, and member_expression
+           sits at ratio 1/3 — failing 14 golden fixtures; a per-side
+           node-count cap kills whole-declaration rules whose emissions
+           are big but whose patterns ellipsize small (webxforge's
+           removeExtends family). Scale is handled downstream by
+           {!Cs_config.dendrogram_bucket_cap}: emission stays complete,
+           clustering samples. *)
         emit b a;
         List.iter (fun (r, a) -> emit r a) (extraction_pairs child_changes);
         List.iter
