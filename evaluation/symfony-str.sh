@@ -7,6 +7,7 @@
 # function, with negated variants). The commit's one non-.php file (a
 # Resources/bin script) is excluded by the glob. See
 # docs/summarize-corpus-candidates.md.
+# PR: https://github.com/symfony/symfony/pull/44506
 NAME=symfony-str
 REPO=https://github.com/symfony/symfony
 BEFORE_SHA=6ab662b0a8d5deabe03920a6dc0c7cbdc50a8d21
