@@ -62,6 +62,7 @@ Timings are printed to stderr only, so they never churn baselines.
 | `drupal-attr.sh` | drupal/drupal PHPUnit annotations→attributes | php | known-fail stress corpus: edits live in docblock comment tokens and pure insertions |
 | `sentry-prop-rename.sh` | getsentry/sentry `codemod(button-variant)` | tsx | calibration corpus: a JSX prop rename plus a value-remap sub-rule, an object-literal form, and one deliberate exclusion (`<Confirm>` keeps its prop - over-fire bait for the gate); fully factored since the JSX ellipsis-context fix |
 | `sentry-prop-manual.sh` | getsentry/sentry PR #114731, the manual pass after the same codemod | tsx | decomposition corpus: same rename hand-applied plus a documented ride-along (`playPausePriority`→`playPauseVariant` + a type edit) that should factor separately from the main rule |
+| `finagle.sh` | twitter/finagle scalafix `ProcedureSyntax` | scala | calibration corpus and the first Scala one: `def f(...) { ... }` → `def f(...): Unit = { ... }`, zero ride-along; ground truth = one rule (residuals to date are its curried and abstract-def variants, not noise) |
 
 ## Adding a corpus
 
