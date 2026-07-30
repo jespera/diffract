@@ -13,3 +13,23 @@ let on () = Lazy.force enabled
     [Cs_trace.trace "selected %d rules\n%!" n]. *)
 let trace fmt =
   if Lazy.force enabled then Printf.eprintf fmt else Printf.ifprintf stderr fmt
+
+(** [timed label f] runs [f ()]; when tracing is on, prints
+    ["[t] <label>: <wall seconds>"] to stderr on completion (and on
+    exception, marked as such). Wrap pipeline phases with this so a slow
+    corpus tells you *where* the time goes — zero overhead beyond the
+    closure when tracing is off. *)
+let timed label f =
+  if not (Lazy.force enabled) then f ()
+  else begin
+    let t0 = Unix.gettimeofday () in
+    match f () with
+    | r ->
+        Printf.eprintf "[t] %s: %.2fs\n%!" label (Unix.gettimeofday () -. t0);
+        r
+    | exception e ->
+        Printf.eprintf "[t] %s: %.2fs (raised %s)\n%!" label
+          (Unix.gettimeofday () -. t0)
+          (Printexc.to_string e);
+        raise e
+  end

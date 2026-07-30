@@ -222,6 +222,12 @@ let make_tier_env ~ctx (cs : changeset) : tier_env =
   let eval_cache : (string * string, site_evaluation) Hashtbl.t =
     Hashtbl.create 256
   in
+  (* CS_TRACE heartbeat: cache-miss gate evaluations are the pipeline's
+     unit of real work (matcher + reparse + rediff per call), so count
+     them and tick every 500 — a run that goes quiet for minutes tells
+     you which phase is churning through them. *)
+  let misses = ref 0 in
+  let t0 = Unix.gettimeofday () in
   let eval_at ~language ~pattern_text file =
     if language = "" then no_fire
     else
@@ -229,6 +235,11 @@ let make_tier_env ~ctx (cs : changeset) : tier_env =
       match Hashtbl.find_opt eval_cache key with
       | Some e -> e
       | None ->
+          incr misses;
+          if !misses mod 100 = 0 then
+            Cs_trace.trace "  eval_at: %d gate evaluations, elapsed %.1fs\n%!"
+              !misses
+              (Unix.gettimeofday () -. t0);
           let e =
             match Hashtbl.find_opt site_db file with
             | None -> no_fire
@@ -865,38 +876,75 @@ let live_anchored_candidates (env : tier_env) ~(anchored : anchored_stream)
     (intermediate, after) pairs the earlier tiers leave unexplained (design §4.4
     recursive clustering). *)
 let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
-  let env = make_tier_env ~ctx cs in
+  let env = Cs_trace.timed "site db" (fun () -> make_tier_env ~ctx cs) in
   (* ── PROPOSE: the candidate channels ─────────────────────────── *)
   let raw, delta_raw, anchored_raw =
-    collect_initial_clusters ?on_file:(on_file_for "two-sided") ~ctx cs
+    Cs_trace.timed "propose: two-sided extract" (fun () ->
+        collect_initial_clusters ?on_file:(on_file_for "two-sided") ~ctx cs)
   in
-  let initial = pre_group_identical raw in
-  trace_initial_histogram raw initial;
-  let base_two_sided =
-    propose_two_sided_clusters ~safe_instances:(safe_instances env) initial
+  let base_two_sided, delta_clusters, anchored =
+    Cs_trace.timed "propose: two-sided cluster" (fun () ->
+        let initial =
+          Cs_trace.timed "  pre-group" (fun () -> pre_group_identical raw)
+        in
+        trace_initial_histogram raw initial;
+        let base_two_sided =
+          Cs_trace.timed "  two-sided clusters" (fun () ->
+              propose_two_sided_clusters
+                ~safe_instances:(safe_instances env) initial)
+        in
+        let delta =
+          Cs_trace.timed "  delta pool" (fun () ->
+              propose_delta_pooled env delta_raw)
+        in
+        let anchored =
+          Cs_trace.timed "  anchored" (fun () -> propose_anchored anchored_raw)
+        in
+        (base_two_sided, delta, anchored))
   in
-  let delta_clusters = propose_delta_pooled env delta_raw in
-  let anchored = propose_anchored anchored_raw in
   let two_sided_clusters = base_two_sided @ delta_clusters in
   let candidates =
-    collect_one_sided_candidates ?on_file:(on_file_for "one-sided") ~ctx cs
+    Cs_trace.timed "propose: one-sided extract" (fun () ->
+        collect_one_sided_candidates ?on_file:(on_file_for "one-sided") ~ctx cs)
   in
-  let os_clusters = cluster_one_sided candidates in
-  let pairs = pair_one_sided_clusters os_clusters in
-  let swap_pairs = gate_swap_pairs env pairs in
+  let os_clusters, pairs, swap_pairs =
+    Cs_trace.timed "propose: one-sided cluster+swap gate" (fun () ->
+        Cs_trace.trace "  one-sided candidates: %d\n%!"
+          (List.length candidates);
+        let os_clusters =
+          Cs_trace.timed "  os cluster" (fun () ->
+              cluster_one_sided candidates)
+        in
+        Cs_trace.trace "  one-sided clusters: %d\n%!"
+          (List.length os_clusters);
+        let pairs =
+          Cs_trace.timed "  os pair" (fun () ->
+              pair_one_sided_clusters os_clusters)
+        in
+        Cs_trace.trace "  one-sided pairs: %d\n%!" (List.length pairs);
+        let swap_pairs =
+          Cs_trace.timed "  swap gate" (fun () -> gate_swap_pairs env pairs)
+        in
+        (os_clusters, pairs, swap_pairs))
+  in
   (* Pick one representative per change-family before fusion (see
      [arbitrate_fusion_inputs]) — else nested granularities of the same
      change would fuse into a self-overlapping conjunctive. *)
-  let fusion_inputs =
-    arbitrate_fusion_inputs ~eval_at:env.eval_at ~all_files:env.all_files
-      two_sided_clusters
+  let fusion_inputs, group_outputs =
+    Cs_trace.timed "propose: fusion" (fun () ->
+        let fusion_inputs =
+          arbitrate_fusion_inputs ~eval_at:env.eval_at
+            ~all_files:env.all_files two_sided_clusters
+        in
+        let nodes =
+          List.map fusion_node_of_two_sided fusion_inputs
+          @ List.map
+              (fun (ep, insts) -> fusion_node_of_swap ep insts)
+              swap_pairs
+        in
+        let groups = group_by_jaccard nodes in
+        (fusion_inputs, List.concat_map materialise_group groups))
   in
-  let nodes =
-    List.map fusion_node_of_two_sided fusion_inputs
-    @ List.map (fun (ep, insts) -> fusion_node_of_swap ep insts) swap_pairs
-  in
-  let groups = group_by_jaccard nodes in
-  let group_outputs = List.concat_map materialise_group groups in
   (* ── PROPOSE boundary (§3.3) ─────────────────────────────────────
      Everything above — extraction, clustering, cuts, fusion — only
      *proposes* candidate patterns from here on. Instance bookkeeping
@@ -933,9 +981,10 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
       (List.length general_cands);
   (* ── EVALUATE ──────────────────────────────────────────────────── *)
   let evaluated_general =
-    List.filter_map
-      (eval_candidate env ~anchored ~field_cand_files)
-      general_cands
+    Cs_trace.timed "evaluate: general" (fun () ->
+        List.filter_map
+          (eval_candidate env ~anchored ~field_cand_files)
+          general_cands)
   in
   if Cs_trace.on () then
     Printf.eprintf "general candidates with viable extensions: %d\n%!"
@@ -949,21 +998,24 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
   (* Round 1: the general candidates. (A general candidate that textually
      coincides with an anchored realisation is exempt and waits for
      round 2.) *)
-  select_round ~anchored ~covered ~selected
-    (List.filter (fun sc -> not (is_exempt sc)) evaluated_general)
-    Cs_config.default.min_support;
+  Cs_trace.timed "select: round 1" (fun () ->
+      select_round ~anchored ~covered ~selected
+        (List.filter (fun sc -> not (is_exempt sc)) evaluated_general)
+        Cs_config.default.min_support);
   let anchored_cands = live_anchored_candidates env ~anchored ~covered reg in
   let evaluated_anchored =
-    List.filter_map
-      (eval_candidate env ~anchored ~field_cand_files)
-      anchored_cands
+    Cs_trace.timed "evaluate: anchored" (fun () ->
+        List.filter_map
+          (eval_candidate env ~anchored ~field_cand_files)
+          anchored_cands)
   in
   (* Round 2: the anchored realisations, plus any general candidate that
      was exempt (a textual coincidence), over the regions round 1 left
      open. *)
-  select_round ~anchored ~covered ~selected
-    (List.filter is_exempt evaluated_general @ evaluated_anchored)
-    1;
+  Cs_trace.timed "select: round 2" (fun () ->
+      select_round ~anchored ~covered ~selected
+        (List.filter is_exempt evaluated_general @ evaluated_anchored)
+        1);
   List.rev !selected
   |> List.map (fun sc ->
       {
