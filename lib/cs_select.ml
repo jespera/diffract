@@ -53,18 +53,15 @@ let propose_two_sided_clusters ~safe_instances (initial : cluster list) :
       else []
   | _ ->
       let process_bucket bucket =
-        (* Bucket cap (see {!Cs_config.dendrogram_bucket_cap}): cluster a
-           deterministic prefix; evaluation extends whatever rules emerge
-           to every site they fire at, and uncovered sites re-propose in
-           later tiers. *)
-        let cap = Cs_config.default.dendrogram_bucket_cap in
+        (* Bucket cap (see {!Cs_config.dendrogram_bucket_cap} and
+           {!Cs_cluster.cap_bucket}): cluster a deterministic file-round-robin
+           sample; evaluation extends whatever rules emerge to every site
+           they fire at, and uncovered sites re-propose in later tiers. *)
         let bucket =
-          if List.length bucket <= cap then bucket
-          else begin
-            Cs_trace.trace "  dendrogram bucket capped: %d -> %d leaves\n%!"
-              (List.length bucket) cap;
-            List.filteri (fun i _ -> i < cap) bucket
-          end
+          cap_bucket
+            ~file_of:(fun c ->
+              match c.instances with i :: _ -> i.file | [] -> "")
+            ~label:"dendrogram bucket" bucket
         in
         let root = build_dendrogram bucket in
         let clusters, _singletons = cut_dendrogram ~safe_instances 2 root in
