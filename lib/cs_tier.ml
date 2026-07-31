@@ -163,26 +163,104 @@ let summarize ?progress ?(ignore_formatting = false) ~ctx (cs : changeset) :
      site drops this way die in the chain-effect pass below. A rule
      that makes partial progress no other rule compensates (the
      legitimate §4.4 multi-step factoring) changes the intermediate
-     when removed, so it always survives. *)
+     when removed, so it always survives.
+
+     A plain drop only ever considers the file's own claiming chain, so
+     it cannot repair the case where a *general* rule explains the site
+     outright but a narrower one holds it. Discovery is tier-ordered: if
+     the general form is proposed only after an over-anchored variant
+     has already claimed a region (daffodil's class-context wrappers
+     around [override def run(dstate: DState) {], whose general
+     [def _H0( ... ) {] form emerges a tier later), the variant is
+     un-droppable — nothing left in the chain compensates — and it
+     survives as rule bloat. So when a plain drop fails, try REASSIGNING
+     the site: re-test the chain with [r] removed and one non-claiming
+     rule added. The acceptance test is unchanged — the byte-identical
+     intermediate — and that is the whole safety argument: if the chain
+     reaches the same intermediate, the residual and reconstruction are
+     the same, so no gate re-evaluation is needed (an edit that
+     over-fired or damaged the site could not land on an intermediate
+     the accepted chain already produced). Adopters are tried
+     most-general-first (descending support) so sites consolidate onto
+     the high-support rules, and one adoption is enough to unlock the
+     rest: once the general rule is in the kept set, the remaining
+     variants at that file drop plainly. A rule that loses every site
+     dies in the chain-effect pass below.
+
+     Reassignment therefore runs as a SECOND phase, over the rules the
+     plain phase leaves alive. Letting it consider every rule instead
+     lets a rule the plain phase had emptied adopt a site and come back
+     from the dead, which *raises* the rule count (androidx 26 → 29,
+     webxforge 43 → 47 when first tried that way) — the opposite of the
+     goal. An adopter must already hold a surviving site of its own; the
+     pass consolidates onto rules that are staying, never revives one.
+
+     The prefilter (must produce edits on the file's before-source)
+     bounds this to one matcher run per (rule, file); a rule that only
+     matches a mid-chain intermediate is therefore not considered as an
+     adopter — a missed opportunity, never an unsafe one. *)
   let combined =
     let dropped : (string * string, unit) Hashtbl.t = Hashtbl.create 16 in
+    let adopted : (string * string, unit) Hashtbl.t = Hashtbl.create 16 in
+    let adopted_after : (string * string, string list) Hashtbl.t =
+      Hashtbl.create 16
+    in
+    (* Rule position in [combined] = id order = application order. *)
+    let pos : (string, int) Hashtbl.t = Hashtbl.create 32 in
+    List.iteri (fun i (r : rule) -> Hashtbl.replace pos r.id i) combined;
+    let pos_of id = Option.value ~default:max_int (Hashtbl.find_opt pos id) in
+    (* Apply an explicit rule list in the given order, ignoring [r.sites]
+       (an adopter is by definition not yet a claimant of the file). *)
+    let apply_rules rules ~language src =
+      List.fold_left
+        (fun s (r : rule) ->
+          if r.language <> language then s
+          else
+            try
+              Matcher.transform ~ctx ~language ~pattern_text:r.pattern_text
+                ~source_text:s
+            with
+            | (Stack_overflow | Out_of_memory | Sys.Break) as e -> raise e
+            | e ->
+                Cs_trace.trace "minimal-claim rule %s: %s\n%!" r.id
+                  (Printexc.to_string e);
+                s)
+        src rules
+    in
+    let fires_cache : (string * string, bool) Hashtbl.t = Hashtbl.create 64 in
+    let can_fire (r : rule) path ~language src =
+      match Hashtbl.find_opt fires_cache (r.id, path) with
+      | Some b -> b
+      | None ->
+          let b =
+            r.language = language
+            &&
+            try
+              Matcher.transform_edits ~ctx ~language
+                ~pattern_text:r.pattern_text ~source_text:src
+              <> []
+            with
+            | (Stack_overflow | Out_of_memory | Sys.Break) as e -> raise e
+            | _ -> false
+          in
+          Hashtbl.add fires_cache (r.id, path) b;
+          b
+    in
+    (* Per-file claiming chain in id (= application) order. *)
+    let claiming_at path ~language =
+      List.filter
+        (fun (r : rule) -> r.language = language && List.mem path r.sites)
+        combined
+    in
+    (* ── Phase 1: plain drops ─────────────────────────────────────── *)
     List.iter
       (function
         | Modified { path; language; before_source; _ } -> (
-            let claiming =
-              List.filter
-                (fun (r : rule) ->
-                  r.language = language && List.mem path r.sites)
-                combined
-            in
-            match claiming with
+            match claiming_at path ~language with
             | [] | [ _ ] -> ()
-            | _ ->
-                (* Invariant: [apply_claiming !kept] equals [full] — every
-                   accepted drop preserved the intermediate. *)
-                let full =
-                  apply_claiming claiming path ~language before_source
-                in
+            | claiming ->
+                (* Invariant: the kept set always reproduces [full]. *)
+                let full = apply_rules claiming ~language before_source in
                 let kept = ref claiming in
                 List.iter
                   (fun (r : rule) ->
@@ -190,10 +268,7 @@ let summarize ?progress ?(ignore_formatting = false) ~ctx (cs : changeset) :
                       let without =
                         List.filter (fun (x : rule) -> x != r) !kept
                       in
-                      let inter =
-                        apply_claiming without path ~language before_source
-                      in
-                      if inter = full then begin
+                      if apply_rules without ~language before_source = full then begin
                         kept := without;
                         Hashtbl.replace dropped (r.id, path) ()
                       end
@@ -201,14 +276,120 @@ let summarize ?progress ?(ignore_formatting = false) ~ctx (cs : changeset) :
                   claiming)
         | Added _ | Deleted _ -> ())
       cs.files;
-    if Hashtbl.length dropped = 0 then combined
+    (* ── Phase 2: reassignment onto rules that survive phase 1 ────── *)
+    let alive : (string, unit) Hashtbl.t = Hashtbl.create 32 in
+    List.iter
+      (fun (r : rule) ->
+        if List.exists (fun f -> not (Hashtbl.mem dropped (r.id, f))) r.sites
+        then Hashtbl.replace alive r.id ())
+      combined;
+    (* Adopter preference: most general first (highest support), then id
+       order for determinism. *)
+    let adopter_order =
+      List.stable_sort
+        (fun (a : rule) (b : rule) ->
+          if a.support <> b.support then compare b.support a.support
+          else compare (pos_of a.id) (pos_of b.id))
+        (List.filter (fun (r : rule) -> Hashtbl.mem alive r.id) combined)
+    in
+    List.iter
+      (function
+        | Modified { path; language; before_source; _ } -> (
+            match claiming_at path ~language with
+            | [] -> ()
+            | claiming ->
+                let full = apply_rules claiming ~language before_source in
+                let live_ids =
+                  List.filter_map
+                    (fun (r : rule) ->
+                      if Hashtbl.mem dropped (r.id, path) then None
+                      else Some r.id)
+                    claiming
+                in
+                let kept_ids = ref live_ids in
+                let materialize ids =
+                  List.filter
+                    (fun (r : rule) ->
+                      r.language = language && List.mem r.id ids)
+                    combined
+                in
+                let reaches ids =
+                  apply_rules (materialize ids) ~language before_source = full
+                in
+                List.iter
+                  (fun (r : rule) ->
+                    if List.mem r.id !kept_ids then begin
+                      let without =
+                        List.filter (fun i -> i <> r.id) !kept_ids
+                      in
+                      let rec try_adopters = function
+                        | [] -> ()
+                        | (a : rule) :: tl ->
+                            if
+                              a.id = r.id || List.mem a.id !kept_ids
+                              || not (can_fire a path ~language before_source)
+                            then try_adopters tl
+                            else if reaches (a.id :: without) then begin
+                              kept_ids := a.id :: without;
+                              Hashtbl.replace dropped (r.id, path) ();
+                              Hashtbl.replace adopted (a.id, path) ();
+                              Cs_trace.trace
+                                "minimal-claim: %s reassigned to %s at %s\n%!"
+                                r.id a.id path;
+                              (* The predecessors that shaped the intermediate
+                                 at this site carry over, restricted to rules
+                                 that really precede the adopter; the chain
+                                 pass below drops any that do not fire. *)
+                              match List.assoc_opt path r.after with
+                              | Some preds ->
+                                  let preds =
+                                    List.filter
+                                      (fun p -> pos_of p < pos_of a.id)
+                                      preds
+                                  in
+                                  if preds <> [] then
+                                    Hashtbl.replace adopted_after (a.id, path)
+                                      preds
+                              | None -> ()
+                            end
+                            else try_adopters tl
+                      in
+                      try_adopters adopter_order
+                    end)
+                  claiming)
+        | Added _ | Deleted _ -> ())
+      cs.files;
+    if Hashtbl.length dropped = 0 && Hashtbl.length adopted = 0 then combined
     else
       List.map
         (fun (r : rule) ->
           let sites =
             List.filter (fun f -> not (Hashtbl.mem dropped (r.id, f))) r.sites
           in
-          { r with sites })
+          let gained =
+            Hashtbl.fold
+              (fun (rid, f) () acc -> if rid = r.id then f :: acc else acc)
+              adopted []
+          in
+          (* Sites stay in the sorted order evaluation produced them in;
+             only a rule that gained one is re-sorted. *)
+          let sites =
+            if gained = [] then sites
+            else List.sort_uniq String.compare (sites @ gained)
+          in
+          let after =
+            List.filter
+              (fun (site, _) -> not (Hashtbl.mem dropped (r.id, site)))
+              r.after
+            @ List.filter_map
+                (fun f ->
+                  match Hashtbl.find_opt adopted_after (r.id, f) with
+                  | Some preds when not (List.mem_assoc f r.after) ->
+                      Some (f, preds)
+                  | _ -> None)
+                gained
+          in
+          { r with sites; after })
         combined
   in
   (* ── Chain-effect accounting (per-site) ──────────────────────────
