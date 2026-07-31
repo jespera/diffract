@@ -15,6 +15,60 @@ open Cs_evaluate
 
 (* ── Dendrogram ──────────────────────────────────────────────────── *)
 
+(** Bucket-cap sampling (see {!Cs_config.dendrogram_bucket_cap}): when a
+    dendrogram bucket exceeds the cap, fill the leaf budget round-robin across
+    source files — one leaf per file per round, input order preserved within a
+    file, file order = first appearance — instead of taking an input-order
+    prefix. Discovery only needs shape coverage, and file paths sort by corpus
+    *kind* (cli → core → lib → test…), so a prefix is maximally homogeneous: on
+    daffodil the first 400 def-level leaves came from ~40 alphabetically-first
+    test files, the plain [def _H0(...) {] shape was never sampled, and tier 1
+    could only cover its sites with over-anchored class-context variants.
+    Round-robin guarantees every file is represented before any file gets a
+    second slot. Deterministic and trace-logged, never silent. *)
+let cap_bucket ~(file_of : 'a -> string) ~(label : string) (items : 'a list) :
+    'a list =
+  let cap = Cs_config.default.dendrogram_bucket_cap in
+  let n = List.length items in
+  if n <= cap then items
+  else begin
+    let tbl : (string, 'a list ref) Hashtbl.t = Hashtbl.create 64 in
+    let order = ref [] in
+    List.iter
+      (fun it ->
+        let f = file_of it in
+        match Hashtbl.find_opt tbl f with
+        | Some l -> l := it :: !l
+        | None ->
+            Hashtbl.add tbl f (ref [ it ]);
+            order := f :: !order)
+      items;
+    let queues =
+      List.map (fun f -> ref (List.rev !(Hashtbl.find tbl f))) (List.rev !order)
+    in
+    let out = ref [] in
+    let taken = ref 0 in
+    let progress = ref true in
+    while !taken < cap && !progress do
+      progress := false;
+      List.iter
+        (fun q ->
+          if !taken < cap then
+            match !q with
+            | [] -> ()
+            | x :: rest ->
+                q := rest;
+                out := x :: !out;
+                incr taken;
+                progress := true)
+        queues
+    done;
+    Cs_trace.trace
+      "  %s capped: %d -> %d leaves (round-robin over %d files)\n%!" label n cap
+      (List.length queues);
+    List.rev !out
+  end
+
 type dnode =
   | DLeaf of instance list * edit_pat
   | DMerge of {
@@ -549,16 +603,15 @@ let cluster_one_sided (candidates : one_sided_candidate list) :
       let grouped =
         List.rev_map (fun p -> (List.rev !(Hashtbl.find tbl p), p)) !order
       in
-      (* Bucket cap, same rationale as the two-sided one (see
-         {!Cs_config.dendrogram_bucket_cap}). *)
-      let cap = Cs_config.default.dendrogram_bucket_cap in
+      (* Bucket cap, same rationale as the two-sided one in
+         {!Cs_select.propose_two_sided_clusters}. A grouped leaf spans
+         every file its identical pattern occurred in; its first
+         instance's file stands for it in the round-robin. *)
       let grouped =
-        if List.length grouped <= cap then grouped
-        else begin
-          Cs_trace.trace "  os dendrogram capped: %d -> %d leaves\n%!"
-            (List.length grouped) cap;
-          List.filteri (fun i _ -> i < cap) grouped
-        end
+        cap_bucket
+          ~file_of:(fun (insts, _) ->
+            match insts with i :: _ -> i.os_file | [] -> "")
+          ~label:"os dendrogram" grouped
       in
       let root = build_os_dendrogram grouped in
       let clusters, _ = cut_os_dendrogram 2 side root in
