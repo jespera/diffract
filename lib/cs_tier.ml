@@ -198,8 +198,16 @@ let summarize ?progress ?(ignore_formatting = false) ~ctx (cs : changeset) :
      The prefilter (must produce edits on the file's before-source)
      bounds this to one matcher run per (rule, file); a rule that only
      matches a mid-chain intermediate is therefore not considered as an
-     adopter — a missed opportunity, never an unsafe one. *)
-  let combined =
+     adopter — a missed opportunity, never an unsafe one.
+
+     Both this pass and the chain-effect pass below inform each other:
+     this one shortens chains, and the chain pass then retires rules that
+     no longer fire anywhere — which shortens chains again, so drops this
+     pass had to refuse (its acceptance test ran against a chain still
+     containing the retired rules) can become valid. They therefore run
+     as a bounded fixpoint at the [refine] call below rather than once
+     each. *)
+  let minimal_claim (combined : rule list) : rule list =
     let dropped : (string * string, unit) Hashtbl.t = Hashtbl.create 16 in
     let adopted : (string * string, unit) Hashtbl.t = Hashtbl.create 16 in
     let adopted_after : (string * string, string list) Hashtbl.t =
@@ -410,70 +418,95 @@ let summarize ?progress ?(ignore_formatting = false) ~ctx (cs : changeset) :
      chain-pruned rule may legitimately report support below
      min_support: it was selected for coverage it genuinely provides
      at its surviving sites. *)
-  let fires : (string * string, int) Hashtbl.t = Hashtbl.create 32 in
-  let inters : (string, string) Hashtbl.t = Hashtbl.create 32 in
-  List.iter
-    (function
-      | Modified { path; language; before_source; _ } ->
-          let inter =
-            List.fold_left
-              (fun s (r : rule) ->
-                if r.language = language && List.mem path r.sites then (
-                  try
-                    let edits =
-                      Matcher.transform_edits ~ctx ~language:r.language
-                        ~pattern_text:r.pattern_text ~source_text:s
-                    in
-                    if edits = [] then s
-                    else begin
-                      Hashtbl.replace fires (r.id, path) (List.length edits);
-                      Matcher.transform ~ctx ~language:r.language
-                        ~pattern_text:r.pattern_text ~source_text:s
-                    end
-                  with
-                  | (Stack_overflow | Out_of_memory | Sys.Break) as e -> raise e
-                  | e ->
-                      Cs_trace.trace "chain-apply rule %s: %s\n%!" r.id
-                        (Printexc.to_string e);
-                      s)
-                else s)
-              before_source combined
+  let chain_effect (combined : rule list) :
+      rule list * (string, string) Hashtbl.t =
+    let fires : (string * string, int) Hashtbl.t = Hashtbl.create 32 in
+    let inters : (string, string) Hashtbl.t = Hashtbl.create 32 in
+    List.iter
+      (function
+        | Modified { path; language; before_source; _ } ->
+            let inter =
+              List.fold_left
+                (fun s (r : rule) ->
+                  if r.language = language && List.mem path r.sites then (
+                    try
+                      let edits =
+                        Matcher.transform_edits ~ctx ~language:r.language
+                          ~pattern_text:r.pattern_text ~source_text:s
+                      in
+                      if edits = [] then s
+                      else begin
+                        Hashtbl.replace fires (r.id, path) (List.length edits);
+                        Matcher.transform ~ctx ~language:r.language
+                          ~pattern_text:r.pattern_text ~source_text:s
+                      end
+                    with
+                    | (Stack_overflow | Out_of_memory | Sys.Break) as e ->
+                        raise e
+                    | e ->
+                        Cs_trace.trace "chain-apply rule %s: %s\n%!" r.id
+                          (Printexc.to_string e);
+                        s)
+                  else s)
+                before_source combined
+            in
+            Hashtbl.replace inters path inter
+        | Added _ | Deleted _ -> ())
+      cs.files;
+    let combined =
+      List.filter_map
+        (fun (r : rule) ->
+          let sites =
+            List.filter (fun f -> Hashtbl.mem fires (r.id, f)) r.sites
           in
-          Hashtbl.replace inters path inter
-      | Added _ | Deleted _ -> ())
-    cs.files;
-  let combined =
-    List.filter_map
-      (fun (r : rule) ->
-        let sites =
-          List.filter (fun f -> Hashtbl.mem fires (r.id, f)) r.sites
-        in
-        if sites = [] then None
-        else
-          let support =
-            List.fold_left
-              (fun a f ->
-                a + Option.value ~default:0 (Hashtbl.find_opt fires (r.id, f)))
-              0 sites
-          in
-          (* Keep the tier-derived after-attribution, restricted to the
-             surviving sites, and within each site to predecessors that
-             actually edited there (a no-op predecessor did not shape
-             the intermediate this rule matched). *)
-          let after =
-            List.filter_map
-              (fun (site, preds) ->
-                if not (List.mem site sites) then None
-                else
-                  match
-                    List.filter (fun pid -> Hashtbl.mem fires (pid, site)) preds
-                  with
-                  | [] -> None
-                  | preds -> Some (site, preds))
-              r.after
-          in
-          Some { r with sites; support; after })
-      combined
+          if sites = [] then None
+          else
+            let support =
+              List.fold_left
+                (fun a f ->
+                  a + Option.value ~default:0 (Hashtbl.find_opt fires (r.id, f)))
+                0 sites
+            in
+            (* Keep the tier-derived after-attribution, restricted to the
+               surviving sites, and within each site to predecessors that
+               actually edited there (a no-op predecessor did not shape
+               the intermediate this rule matched). *)
+            let after =
+              List.filter_map
+                (fun (site, preds) ->
+                  if not (List.mem site sites) then None
+                  else
+                    match
+                      List.filter
+                        (fun pid -> Hashtbl.mem fires (pid, site))
+                        preds
+                    with
+                    | [] -> None
+                    | preds -> Some (site, preds))
+                r.after
+            in
+            Some { r with sites; support; after })
+        combined
+    in
+    (combined, inters)
+  in
+  (* Run the two site-bookkeeping passes to a bounded fixpoint: each
+     one's output can unlock work for the other (see [minimal_claim]).
+     Stopping as soon as the chain pass changes nothing is exact, not a
+     heuristic — [minimal_claim] would then be re-run on the input it
+     just processed, so it could only repeat its own result. *)
+  let combined, inters =
+    let sites_key (rules : rule list) =
+      List.map (fun (r : rule) -> (r.id, r.sites)) rules
+    in
+    let rec refine budget rules =
+      let claimed = minimal_claim rules in
+      let pruned, inters = chain_effect claimed in
+      if budget <= 1 || sites_key pruned = sites_key claimed then
+        (pruned, inters)
+      else refine (budget - 1) pruned
+    in
+    refine 3 combined
   in
   (* M1.9 residual extraction: for each Modified file, the chain pass
      above already produced the intermediate (claiming rules applied in
