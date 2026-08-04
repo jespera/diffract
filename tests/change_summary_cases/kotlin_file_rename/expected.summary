@@ -1,0 +1,16 @@
+# rule R1  support=6  language=kotlin
+@@
+match: strict
+@@
+- LegacyClient
++ Client
+
+@@
+match: strict
+@@
+- legacy
++ current
+# sites R1
+current/Alpha.kt
+current/Beta.kt
+current/Gamma.kt
