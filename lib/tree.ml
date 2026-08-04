@@ -130,6 +130,46 @@ let error_count tree =
 (** Get all ERROR nodes with their positions *)
 let get_errors tree = find_all is_error tree.root
 
+(** Outermost regions the grammar could not read, as 1-based inclusive line
+    ranges. Both markers of a broken parse count: [ERROR] nodes and the
+    zero-width nodes error recovery fabricates ([is_missing]). Outermost —
+    traversal stops at a damaged node — so one garbled span reports as one
+    region instead of the dozens of nested [ERROR] nodes tree-sitter builds
+    inside it (what {!error_count} reports). Adjacent and overlapping ranges are
+    merged, so the result is a disjoint list in source order: the regions where
+    a pattern cannot be expected to match. *)
+let unparsed_regions tree =
+  let acc = ref [] in
+  let rec go (n : _ t) =
+    if is_error n || n.is_missing then
+      acc := (n.start_point.row + 1, n.end_point.row + 1) :: !acc
+    else List.iter (fun (c : _ child) -> go c.node) n.children
+  in
+  go tree.root;
+  let sorted = List.sort compare (List.rev !acc) in
+  List.fold_left
+    (fun merged (s, e) ->
+      match merged with
+      | (ps, pe) :: rest when s <= pe + 1 -> (ps, max pe e) :: rest
+      | _ -> (s, e) :: merged)
+    [] sorted
+  |> List.rev
+
+(** Render line ranges for humans, abbreviating a long list. A badly-misparsed
+    file can carry a hundred regions, and printing them all buries the fact the
+    reader needs (is *my* line in one?) under hundreds of characters. *)
+let format_regions ?(max_shown = 6) rs =
+  let one (a, b) =
+    if a = b then string_of_int a else Printf.sprintf "%d-%d" a b
+  in
+  let n = List.length rs in
+  if n <= max_shown then String.concat "," (List.map one rs)
+  else
+    Printf.sprintf "%s,+%d more"
+      (String.concat ","
+         (List.map one (List.filteri (fun i _ -> i < max_shown) rs)))
+      (n - max_shown)
+
 (** {1 Formatting} *)
 
 (** Escape a string for display (newlines, tabs, etc.) *)

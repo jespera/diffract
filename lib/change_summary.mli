@@ -51,7 +51,16 @@ type residual = {
           [/dev/null] *)
 }
 
-type summary = { rules : rule list; residuals : residual list }
+type summary = {
+  rules : rule list;
+  residuals : residual list;
+  unparsed : (string * (int * int) list) list;
+      (** files the grammar could not fully read, with the 1-based inclusive
+          line ranges it failed on, in the coordinates the residual diffs use; a
+          rule cannot match inside such a region, so a change there falls to a
+          residual however systematic it is. Empty on a clean parse. *)
+}
+
 type side = Before_side | After_side
 
 (** A single Added or Removed subtree at a site. Scaffolding for M1.6 fusion;

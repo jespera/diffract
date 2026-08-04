@@ -155,6 +155,21 @@ val error_count : _ tree -> int
 (** [get_errors tree] returns all ERROR nodes with their positions *)
 val get_errors : 'kind tree -> 'kind t list
 
+(** [unparsed_regions tree] returns the outermost regions the grammar could not
+    read, as merged 1-based inclusive line ranges in source order. Counts both
+    markers of a broken parse ([ERROR] nodes and fabricated [is_missing] ones)
+    and does not descend into a damaged node, so a garbled span reports as one
+    region rather than the many nested [ERROR] nodes inside it — unlike
+    {!error_count}. These are the regions where a pattern cannot be expected to
+    match: the structure a match would have to align to is not there. *)
+val unparsed_regions : _ tree -> (int * int) list
+
+(** [format_regions rs] renders line ranges as e.g. ["12,27-43"], collapsing a
+    single-line range to one number. Beyond [max_shown] (default 6) ranges it
+    abbreviates with [",+N more"]: a badly-misparsed file can carry a hundred
+    regions, and the full list buries what the reader is looking for. *)
+val format_regions : ?max_shown:int -> (int * int) list -> string
+
 (** {1 Formatting} *)
 
 (** [format_tree tree] formats a tree as an indented string showing:

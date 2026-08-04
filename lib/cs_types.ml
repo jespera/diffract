@@ -47,7 +47,19 @@ type residual = {
   res_diff : string;
 }
 
-type summary = { rules : rule list; residuals : residual list }
+type summary = {
+  rules : rule list;
+  residuals : residual list;
+  unparsed : (string * (int * int) list) list;
+      (** Files the grammar could not fully read, with the line ranges it failed
+          on ({!Tree.unparsed_regions}), in the coordinates the residual diffs
+          use. Reported because a rule cannot match inside such a region, so a
+          change there falls to a residual no matter how systematic it is — an
+          outcome that otherwise looks like a factoring failure. Listed for
+          every affected file, including files rules explain completely: that a
+          fifth of a corpus does not parse is worth saying out loud. Empty on a
+          clean parse, and then nothing about parsing is printed at all. *)
+}
 
 (** Collapse whitespace runs to single spaces and trim. Layout-only differences
     are presentational, not a statement about the change — the same tolerance
