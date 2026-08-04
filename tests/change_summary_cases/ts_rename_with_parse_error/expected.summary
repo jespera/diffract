@@ -7,3 +7,5 @@ match: strict
 # sites R1
 a.ts
 b.ts
+
+# parse-errors  files=2  residuals-affected=0

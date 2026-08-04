@@ -76,6 +76,11 @@ src/b.kt
 
 # residual                                       ← change no rule claims
 ...
+
+# residual  rule=R1  unparsed=27-43               ← gap in a region that didn't parse
+...
+
+# parse-errors  files=62  residuals-affected=39  ← footer, only when there are any
 ```
 
 - `support` is the number of times the rule fires across its sites — counted
@@ -96,6 +101,39 @@ src/b.kt
   spacing tweaks (`{ }` vs `{}`), and line splits are dropped — a file
   whose entire leftover is layout emits no residual at all. (The summary's
   reconstruction guarantee is modulo layout throughout.)
+
+### Parse errors
+
+A rule matches structure, so it cannot match a region the grammar failed to
+parse — the structure it would align to isn't there. A change inside such a
+region falls to a residual no matter how systematic it is, which looks
+identical to a factoring failure unless the summary says otherwise. So it
+does:
+
+- `unparsed=27-43` on a residual header means that file has regions the
+  grammar could not read, with the line ranges (1-based, inclusive, in the
+  same coordinates as the hunk headers below it). If the hunk sits in one of
+  those ranges, that — not rule discovery — is why it is a residual. Long
+  lists abbreviate (`,+59 more`).
+- The `# parse-errors` footer counts the affected files and how many
+  residuals they account for. It counts files whose changes rules explain
+  completely too: if a fifth of a corpus does not parse, that is worth
+  knowing even where it cost nothing.
+
+Both are omitted entirely when everything parses, so a clean corpus's
+summary is unchanged. Deliberately terse: one footer line and a suffix on
+headers that already exist. `--format json` carries the full per-file
+ranges. The line ranges are *regions*, not raw `ERROR` nodes — tree-sitter
+nests many error nodes inside one garbled span, so a count of those would
+read as catastrophe where one declaration is unreadable.
+
+`apply` and `search` report the same thing as a single count line (with
+`--verbose` to list the files), and `parse` as a region summary above its
+per-node error list.
+
+Grammar coverage is the limit here, not summarize: the fix for a corpus with
+many unparsed regions is a better grammar for that language. What the report
+buys is knowing that is the situation.
 
 ### `--ignore-formatting`
 

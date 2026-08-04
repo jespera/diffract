@@ -1,8 +1,14 @@
 (** Change-summary I/O: render a {!Cs_types.summary} to the [.summary] text
     format ([format_summary]) and load a {!Cs_types.changeset} by pairing two
-    directory trees ([load_from_dirs]). Depends only on {!Cs_types}. *)
+    directory trees ([load_from_dirs]). Depends on {!Cs_types}, plus {!Tree} for
+    the one shared line-range renderer. *)
 
 open Cs_types
+
+(* Abbreviated hard in the text format — this rides on an existing header line,
+   where the reader only needs enough to see whether the hunk below sits in a
+   damaged region. The JSON output carries every range. *)
+let format_ranges = Tree.format_regions ~max_shown:3
 
 let format_summary ?(sites = `Full) (s : summary) : string =
   let buf = Buffer.create 256 in
@@ -59,13 +65,40 @@ let format_summary ?(sites = `Full) (s : summary) : string =
   List.iteri
     (fun i (res : residual) ->
       if i > 0 || s.rules <> [] then Buffer.add_char buf '\n';
+      let unparsed =
+        (* A residual in an unreadable region is not a factoring failure —
+           no rule can match there. Say so on the residual itself, where the
+           question "why isn't this a rule?" actually gets asked. *)
+        match List.assoc_opt res.res_file s.unparsed with
+        | Some rs -> Printf.sprintf "  unparsed=%s" (format_ranges rs)
+        | None -> ""
+      in
       (match res.res_rules with
-      | [] -> Buffer.add_string buf "# residual\n"
+      | [] -> Buffer.add_string buf (Printf.sprintf "# residual%s\n" unparsed)
       | ids ->
           Buffer.add_string buf
-            (Printf.sprintf "# residual  rule=%s\n" (String.concat "," ids)));
+            (Printf.sprintf "# residual  rule=%s%s\n" (String.concat "," ids)
+               unparsed));
       Buffer.add_string buf res.res_diff)
     s.residuals;
+  (* Parse-damage footer: one line, and only when there is damage, so a clean
+     corpus's summary is untouched. Deliberately not a per-file listing — the
+     residuals that the damage explains already carry [unparsed=], and a
+     listing repeats them and then adds every file rules covered anyway (62
+     lines on daffodil). The count is what the reader cannot get otherwise;
+     [--format json] carries the full per-file ranges. *)
+  if s.unparsed <> [] then begin
+    let affected =
+      List.length
+        (List.filter
+           (fun (res : residual) -> List.mem_assoc res.res_file s.unparsed)
+           s.residuals)
+    in
+    if Buffer.length buf > 0 then Buffer.add_char buf '\n';
+    Buffer.add_string buf
+      (Printf.sprintf "# parse-errors  files=%d  residuals-affected=%d\n"
+         (List.length s.unparsed) affected)
+  end;
   Buffer.contents buf
 
 (* ── JSON rendering ─────────────────────────────────────────────── *)
@@ -115,17 +148,45 @@ let format_summary_json (s : summary) : string =
       ]
   in
   let residual_of (res : residual) =
-    obj
+    let base =
       [
         ("file", str res.res_file);
         ("rules", arr (List.map str res.res_rules));
         ("diff", str res.res_diff);
+      ]
+    in
+    match List.assoc_opt res.res_file s.unparsed with
+    | Some rs ->
+        obj
+          (base
+          @ [
+              ( "unparsed",
+                arr
+                  (List.map
+                     (fun (a, b) ->
+                       obj
+                         [ ("from", string_of_int a); ("to", string_of_int b) ])
+                     rs) );
+            ])
+    | None -> obj base
+  in
+  let unparsed_of (f, rs) =
+    obj
+      [
+        ("file", str f);
+        ( "lines",
+          arr
+            (List.map
+               (fun (a, b) ->
+                 obj [ ("from", string_of_int a); ("to", string_of_int b) ])
+               rs) );
       ]
   in
   obj
     [
       ("rules", arr (List.map rule_of s.rules));
       ("residuals", arr (List.map residual_of s.residuals));
+      ("unparsed", arr (List.map unparsed_of s.unparsed));
     ]
   ^ "\n"
 

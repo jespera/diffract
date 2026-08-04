@@ -590,4 +590,27 @@ let summarize ?progress ?(ignore_formatting = false) ~ctx (cs : changeset) :
               })
       cs.files
   in
-  { rules = combined; residuals }
+  (* Parse damage, reported per file (§ [summary.unparsed]). Measured on the
+     same source the residual diffs are stated against — the intermediate the
+     claiming rules produce — so the line ranges line up with the hunk headers
+     next to them. For an unclaimed file that source *is* the before-source. *)
+  let unparsed =
+    List.filter_map
+      (function
+        | Modified { path; language; before_source; _ } -> (
+            let src =
+              match Hashtbl.find_opt inters path with
+              | Some s -> s
+              | None -> before_source
+            in
+            match
+              try Tree.unparsed_regions (Tree.parse ~ctx ~language src) with
+              | (Stack_overflow | Out_of_memory | Sys.Break) as e -> raise e
+              | _ -> []
+            with
+            | [] -> None
+            | regions -> Some (path, regions))
+        | Added _ | Deleted _ -> None)
+      cs.files
+  in
+  { rules = combined; residuals; unparsed }

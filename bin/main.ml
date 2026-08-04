@@ -77,12 +77,27 @@ let find_files ~pattern ~exclude_dirs root =
   let pred path = Diffract.File_scan.glob_match pattern path in
   Diffract.File_scan.walk ~exclude_dirs ~pred root [] |> List.sort compare
 
+(* Regions the grammar could not read, as a display string, or [None] for a
+   clean parse. A pattern cannot match inside such a region, so a silent
+   "no matches" there is misleading. Costs one extra parse per file
+   ([Matcher.transform] has no tree-taking variant to borrow a tree from), which
+   measures as noise next to the matcher's backtracking walk: applying a
+   def-level pattern over 312 Scala files ran 2.4s either way. *)
+let unparsed_note ~ctx ~language source_text =
+  match
+    Diffract.Tree.unparsed_regions
+      (Diffract.Tree.parse ~ctx ~language source_text)
+  with
+  | [] -> None
+  | rs -> Some (Diffract.Tree.format_regions rs)
+
 let transform_file ~ctx ~language ~pattern_text ~in_place file_path =
   let source_text = In_channel.with_open_text file_path In_channel.input_all in
+  let unparsed = unparsed_note ~ctx ~language source_text in
   let transformed =
     Diffract.Matcher.transform ~ctx ~language ~pattern_text ~source_text
   in
-  if transformed = source_text then (false, "")
+  if transformed = source_text then (false, "", unparsed)
   else begin
     let diff =
       Diffract.Text_diff.generate_diff ~file_path ~original:source_text
@@ -91,7 +106,7 @@ let transform_file ~ctx ~language ~pattern_text ~in_place file_path =
     if in_place then
       Out_channel.with_open_text file_path (fun oc ->
           output_string oc transformed);
-    (true, diff)
+    (true, diff, unparsed)
   end
 
 let scan_directory_apply ~ctx ~language ~pattern_text ~include_pattern
@@ -101,6 +116,7 @@ let scan_directory_apply ~ctx ~language ~pattern_text ~include_pattern
   let total_edits = ref 0 in
   let files_changed = ref 0 in
   let errors = ref [] in
+  let unparsed_files = ref [] in
   (* Diffs are buffered and printed after the scan so they land together at
      the end, below any per-file progress log (like summarize's output). *)
   let output = Buffer.create 1024 in
@@ -109,9 +125,12 @@ let scan_directory_apply ~ctx ~language ~pattern_text ~include_pattern
       if verbose then
         Printf.eprintf "[apply] (%d/%d) %s\n%!" (i + 1) total_files file_path;
       try
-        let changed, diff =
+        let changed, diff, unparsed =
           transform_file ~ctx ~language ~pattern_text ~in_place file_path
         in
+        (match unparsed with
+        | Some lines -> unparsed_files := (file_path, lines) :: !unparsed_files
+        | None -> ());
         if changed then begin
           incr files_changed;
           incr total_edits;
@@ -123,6 +142,21 @@ let scan_directory_apply ~ctx ~language ~pattern_text ~include_pattern
   Buffer.output_buffer stdout output;
   Printf.printf "Transformed %d file(s) (scanned %d files)\n" !files_changed
     total_files;
+  (* One line by default: a scan can turn up dozens of damaged files (62 of 312
+     on one Scala corpus), and a warning that scrolls the real output off the
+     screen is its own kind of silence. [--verbose] lists them. *)
+  if !unparsed_files <> [] then begin
+    let fs = List.rev !unparsed_files in
+    Printf.eprintf
+      "\n\
+       Warning: %d of %d file(s) contain regions the grammar could not parse; \
+       matches there are missed%s\n"
+      (List.length fs) total_files
+      (if verbose then ":" else " (--verbose lists them)");
+    if verbose then
+      List.iter (fun (p, lines) -> Printf.eprintf "  %s  lines=%s\n" p lines) fs;
+    flush stderr
+  end;
   if !errors <> [] then begin
     Printf.printf "\nErrors (%d files):\n" (List.length !errors);
     List.iter
@@ -151,8 +185,17 @@ let run_parse file language =
     let tree = Diffract.parse_file_tree ~ctx ~language file in
     print_string (format_tree tree);
     let error_nodes = get_errors tree in
+    (* Lead with the regions. The per-node list below is the detail for
+       debugging a grammar; the region count is what tells you how much of the
+       file is unreachable to a pattern (tree-sitter nests many ERROR nodes
+       inside one garbled span). *)
+    (match unparsed_regions tree with
+    | [] -> ()
+    | rs ->
+        Printf.printf "\n%d unparsed region(s): lines %s\n" (List.length rs)
+          (format_regions rs));
     if error_nodes <> [] then begin
-      Printf.printf "\n%d parse error(s):\n" (List.length error_nodes);
+      Printf.printf "\n%d parse error node(s):\n" (List.length error_nodes);
       List.iter
         (fun node ->
           let row = node.start_point.row + 1 in
@@ -310,7 +353,7 @@ let search_file ~ctx ~language ~pattern_text file_path =
     let results =
       Diffract.Matcher.find_in_tree ~ctx ~language ~pattern_text tree
     in
-    Ok (source_text, results, Diffract.Tree.error_count tree)
+    Ok (source_text, results, Diffract.Tree.unparsed_regions tree)
   with Failure msg | Sys_error msg -> Error msg
 
 let scan_directory_search ~ctx ~language ~pattern_text ~include_pattern
@@ -331,10 +374,10 @@ let scan_directory_search ~ctx ~language ~pattern_text ~include_pattern
         Printf.eprintf "[search] (%d/%d) %s\n%!" (i + 1) total_files file_path;
       match search_file ~ctx ~language ~pattern_text file_path with
       | Error msg -> errors := (file_path, msg) :: !errors
-      | Ok (source_text, results, parse_errors) ->
-          if parse_errors > 0 then
+      | Ok (source_text, results, unparsed) ->
+          if unparsed <> [] then
             files_with_parse_errors :=
-              (file_path, parse_errors) :: !files_with_parse_errors;
+              (file_path, unparsed) :: !files_with_parse_errors;
           if results <> [] then begin
             incr files_with_matches;
             total_matches := !total_matches + List.length results;
@@ -348,15 +391,18 @@ let scan_directory_search ~ctx ~language ~pattern_text ~include_pattern
   Buffer.output_buffer stdout output;
   Printf.printf "Found %d match(es) in %d file(s) (scanned %d files)\n"
     !total_matches !files_with_matches total_files;
+  (* One line by default, as in [scan_directory_apply]. *)
   if !files_with_parse_errors <> [] then begin
-    Printf.printf
-      "\n\
-       Parse errors (%d files; matches in or near unparseable regions may be \
-       missed):\n"
-      (List.length !files_with_parse_errors);
-    List.iter
-      (fun (path, count) -> Printf.printf "  %s: %d error node(s)\n" path count)
-      (List.rev !files_with_parse_errors)
+    Printf.printf "\nParse errors: %d of %d files; matches there are missed%s\n"
+      (List.length !files_with_parse_errors)
+      total_files
+      (if verbose then ":" else " (--verbose lists them)");
+    if verbose then
+      List.iter
+        (fun (path, rs) ->
+          Printf.printf "  %s  lines=%s\n" path
+            (Diffract.Tree.format_regions rs))
+        (List.rev !files_with_parse_errors)
   end;
   if !errors <> [] then begin
     Printf.printf "\nErrors (%d files):\n" (List.length !errors);
@@ -426,13 +472,19 @@ let run_search pattern_path target language include_pattern exclude_patterns
                 (format_search_match ~file_path:target ~source_text r))
             results
         end;
-        let parse_errors = Diffract.Tree.error_count tree in
-        if parse_errors > 0 then
-          Printf.printf
-            "\n\
-             Warning: %d parse error node(s) in source (matches in or near \
-             unparseable regions may be missed)\n"
-            parse_errors;
+        (* Report the regions, not the raw ERROR-node count: tree-sitter nests
+           many ERROR nodes inside one garbled span, so a count of 23 for a
+           single unreadable declaration reads as catastrophe. Line ranges say
+           what is actually unreachable. *)
+        (match Diffract.Tree.unparsed_regions tree with
+        | [] -> ()
+        | rs ->
+            Printf.printf
+              "\n\
+               Warning: the grammar could not parse %d region(s) (lines %s); \
+               matches there are missed\n"
+              (List.length rs)
+              (Diffract.Tree.format_regions rs));
         `Ok ()
       end
     end
@@ -490,11 +542,20 @@ let run_apply pattern_path target language include_pattern exclude_patterns
               ~include_pattern:glob ~exclude_dirs ~in_place ~verbose target;
             `Ok ())
       else begin
-        let changed, diff =
+        let changed, diff, unparsed =
           transform_file ~ctx ~language ~pattern_text ~in_place target
         in
         if not changed then print_endline "No matches found"
         else if not in_place then print_string diff;
+        (match unparsed with
+        | Some lines ->
+            Printf.eprintf
+              "\n\
+               Warning: the grammar could not parse lines %s; matches there \
+               are missed\n"
+              lines;
+            flush stderr
+        | None -> ());
         `Ok ()
       end
     end

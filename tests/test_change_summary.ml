@@ -469,7 +469,7 @@ let tests =
           in
           let out =
             Change_summary.format_summary
-              { Change_summary.rules = [ r ]; residuals = [] }
+              { Change_summary.rules = [ r ]; residuals = []; unparsed = [] }
           in
           Alcotest.(check bool)
             "header carries no after=" true
@@ -502,7 +502,7 @@ let tests =
           in
           let out =
             Change_summary.format_summary
-              { Change_summary.rules = [ r ]; residuals = [] }
+              { Change_summary.rules = [ r ]; residuals = []; unparsed = [] }
           in
           Alcotest.(check bool)
             "header has after=R1" true
@@ -528,7 +528,7 @@ let tests =
           in
           let out =
             Change_summary.format_summary ~sites:`Count
-              { Change_summary.rules = [ r ]; residuals = [] }
+              { Change_summary.rules = [ r ]; residuals = []; unparsed = [] }
           in
           let lines = String.split_on_char '\n' out in
           Alcotest.(check bool)
@@ -562,7 +562,11 @@ let tests =
           in
           let out =
             Change_summary.format_summary_json
-              { Change_summary.rules = [ r ]; residuals = [ res ] }
+              {
+                Change_summary.rules = [ r ];
+                residuals = [ res ];
+                unparsed = [ ("z.kt", [ (1, 1) ]) ];
+              }
           in
           Alcotest.(check string)
             "exact json"
@@ -571,7 +575,10 @@ let tests =
            ^ "\"sites\":[{\"file\":\"x.kt\"},{\"file\":\"y.kt\",\"after\":[\"R1\"]}]}],"
            ^ "\"residuals\":[{\"file\":\"z.kt\",\"rules\":[\"R2\"],"
            ^ "\"diff\":\"--- a/z.kt\\n+++ b/z.kt\\n@@ -1,1 +1,1 \
-              @@\\n-\\\"q\\\\e\\\"\\n\"}]}\n")
+              @@\\n-\\\"q\\\\e\\\"\\n\","
+           ^ "\"unparsed\":[{\"from\":1,\"to\":1}]}],"
+           ^ "\"unparsed\":[{\"file\":\"z.kt\",\"lines\":[{\"from\":1,\"to\":1}]}]}\n"
+            )
             out);
       (* [~ignore_formatting] drops a reflow-only residual — re-indentation plus
          a trailing comma, which a formatter adds — but keeps a structural
