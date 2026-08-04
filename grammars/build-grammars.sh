@@ -1,5 +1,15 @@
 #!/bin/bash
 # Build tree-sitter grammar static libraries
+#
+# Two grammars are pinned to git rather than an npm release (see
+# package.json): tree-sitter-kotlin, which has no usable release, and
+# tree-sitter-scala, pinned to an exact sha for XML-literal support. No
+# released tree-sitter-scala parses Scala's XML literals at all (0.24.0, the
+# latest, has no xml rules), and a corpus that uses them parses badly enough
+# to defeat matching entirely — on apache/daffodil, 62 of 312 files carried
+# ERROR nodes before the pin and 3 after. Both pins ship a pre-generated
+# src/parser.c, so no tree-sitter CLI is needed to build. Revisit when
+# upstream cuts a release containing the XML work (PRs #604, #606).
 
 set -e
 cd "$(dirname "$0")"
