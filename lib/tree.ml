@@ -258,9 +258,20 @@ let hash_combine h1 h2 = (h1 * 65599) + h2
 
 (** {1 Conversion from tree-sitter nodes} *)
 
+(* The FFI hands back a freshly allocated OCaml string for every node's type
+   and every child's field name, but a grammar has only a few hundred distinct
+   names between them; {!Context.intern} canonicalizes them so equal names
+   share one block. [intern] is [None] on the paths that have no context (the
+   exported ctx-less converters), which then simply keep the FFI's copies. *)
+let canon intern s = match intern with None -> s | Some f -> f s
+
+let canon_opt intern = function
+  | None -> None
+  | Some s -> Some (canon intern s)
+
 (** Convert a tree-sitter node to our internal representation (untyped). *)
-let rec of_ts_node_internal source (ts_node : Node.t) =
-  let node_type = Node.node_type ts_node in
+let rec of_ts_node_internal ?intern source (ts_node : Node.t) =
+  let node_type = canon intern (Node.node_type ts_node) in
   let is_named = Node.is_named ts_node in
   let is_extra = Node.is_extra ts_node in
   let is_missing = Node.is_missing ts_node in
@@ -276,8 +287,10 @@ let rec of_ts_node_internal source (ts_node : Node.t) =
   let children =
     List.init child_count (fun i ->
         let ts_child = Node.child ts_node i in
-        let field_name = Node.field_name_for_child ts_node i in
-        { field_name; node = of_ts_node_internal source ts_child })
+        let field_name =
+          canon_opt intern (Node.field_name_for_child ts_node i)
+        in
+        { field_name; node = of_ts_node_internal ?intern source ts_child })
   in
 
   (* Extract named children *)
@@ -357,7 +370,9 @@ let parse_internal ~ctx ~language source =
       let ts_tree = Node.parse parser source in
       Tree_sitter_bindings.parser_delete parser;
       let ts_root = Node.root ts_tree in
-      let root = of_ts_node_internal source ts_root in
+      let root =
+        of_ts_node_internal ~intern:(Context.intern ctx) source ts_root
+      in
       ignore (Sys.opaque_identity ts_tree);
       let tree = { root; source } in
       Context.parse_memo_add ctx key tree;

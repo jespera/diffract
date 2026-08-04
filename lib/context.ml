@@ -17,7 +17,11 @@ type parse_memo = {
   mutable cap : int;
 }
 
-type t = { lang_cache : (string, nativeint) Hashtbl.t; parse_memo : parse_memo }
+type t = {
+  lang_cache : (string, nativeint) Hashtbl.t;
+  parse_memo : parse_memo;
+  interned : (string, string) Hashtbl.t;
+}
 
 let create ?(parse_cache_cap = 512) () =
   {
@@ -28,7 +32,15 @@ let create ?(parse_cache_cap = 512) () =
         prev = Hashtbl.create 16;
         cap = parse_cache_cap;
       };
+    interned = Hashtbl.create 512;
   }
+
+let intern ctx s =
+  match Hashtbl.find_opt ctx.interned s with
+  | Some canonical -> canonical
+  | None ->
+      Hashtbl.add ctx.interned s s;
+      s
 
 let parse_memo_find ctx key =
   let m = ctx.parse_memo in

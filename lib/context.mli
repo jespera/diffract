@@ -12,11 +12,30 @@ type parse_memo = {
   mutable cap : int;
 }
 
-type t = { lang_cache : (string, nativeint) Hashtbl.t; parse_memo : parse_memo }
+type t = {
+  lang_cache : (string, nativeint) Hashtbl.t;
+  parse_memo : parse_memo;
+  interned : (string, string) Hashtbl.t;
+      (** Internal: canonical copies of grammar-vocabulary strings (node types,
+          field names). Manipulated only via {!intern}. *)
+}
 
 (** [create ()] returns a fresh context with empty caches. [parse_cache_cap]
     bounds the parse memo (default 512 entries per generation). *)
 val create : ?parse_cache_cap:int -> unit -> t
+
+(** [intern ctx s] returns a canonical string equal to [s], reusing a previous
+    one when possible.
+
+    The FFI allocates a fresh OCaml string for every node's type and every
+    child's field name, but a grammar has only a few hundred distinct names
+    between them, so without canonicalization each node carries its own copy —
+    ~43 MB of duplicates per parse of a 312-file corpus, re-allocated on each of
+    the thousands of reparses the change-summary pipeline performs. The table is
+    bounded by the loaded grammars' vocabularies, so it needs no eviction, and
+    scoping it to the context keeps it out of global state and gives one table
+    per domain for callers that parse concurrently. *)
+val intern : t -> string -> string
 
 (** Internal: look up a parsed tree by [(language, source)], promoting a
     [prev]-generation hit. Used by [Tree.parse_internal]. *)
