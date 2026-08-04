@@ -136,7 +136,11 @@ the only language-specific data, and it's already linked.
 - `Languages` registry.
 - `Grammar_metadata` (retaining all DEL definition accessors for reuse
   in the new tokenizer, and extended with separator extraction from
-  grammar.json).
+  grammar.json). **Did not happen** — the tokenizer never needed the DEL
+  accessors, and `Grammar_metadata` was removed once it became clear its
+  only callers were its own tests. Every later reference to those
+  accessors in this document is likewise a plan that lapsed; see
+  `docs/grammar-metadata.md` §3.
 - `change-summary` pipeline up to and including anti-unification,
   the dendrogram, and cluster cutting. Only the applicability-check
   path changes (becomes direct).
