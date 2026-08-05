@@ -1,0 +1,9 @@
+; Run the checkout script's self-test as part of `dune test`. It shells out to
+; git and works in its own mktemp directory, so it needs no sandboxed deps
+; beyond the two scripts themselves.
+
+(rule
+ (alias runtest)
+ (deps diffract-checkout.sh test-diffract-checkout.sh)
+ (action
+  (run bash %{dep:test-diffract-checkout.sh})))
