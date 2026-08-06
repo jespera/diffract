@@ -58,21 +58,15 @@ let signature_tests =
       "bar(a, b)";
     Alcotest.test_case "identical text has no signature" `Quick (fun () ->
         Alcotest.(check bool) "empty" true (sig_of "same" "same" = []));
-    (* Hump splitting: one conceptual rename ("drop the word Library") must
-       read as ONE edit across identifiers that share nothing else, or a
-       systematic rename fragments into a group per name. *)
-    check_desc "infix word deleted from an identifier" "class FooLibraryService"
-      "class FooService" "(delete) Library";
-    same_edit "same infix deletion in unrelated identifiers"
-      "AcmeWidgetLibraryService" "AcmeWidgetService" "ZetaReportLibraryModule"
-      "ZetaReportModule";
-    check_desc "acronym boundary respected" "val HTTPLibraryServer = 1"
-      "val HTTPServer = 1" "(delete) Library";
-    check_desc "snake_case splits too" "let foo_library_bar = 1"
-      "let foo_bar = 1" "(delete) library_";
-    (* Hump splitting must not merge genuinely different renames. *)
-    differs "different infix words stay apart" "FooLibraryBar" "FooBar"
-      "FooHelperBar" "FooBar";
+    (* Identifier-internal renames are reported literally, once per
+       identifier: the digest knows no naming conventions, so these do NOT
+       group. Pinned because grouping them is a tempting change that would
+       quietly bake camelCase into the tool. *)
+    check_desc "identifier-internal rename stays literal"
+      "class FooLibraryService" "class FooService"
+      "FooLibraryService -> FooService";
+    differs "no grouping across identifiers" "FooLibraryService" "FooService"
+      "BarLibraryModule" "BarModule";
     (* Doing one edit twice is the same change as doing it once, so the two
        must land in one group rather than two. *)
     same_edit "repeated edit collapses" "a akka b akka c" "a pekko b pekko c"

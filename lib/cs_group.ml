@@ -32,60 +32,31 @@ let is_word_char c =
 
 let is_blank c = c = ' ' || c = '\t' || c = '\r' || c = '\n'
 
-let is_upper c = c >= 'A' && c <= 'Z'
-let is_lower c = c >= 'a' && c <= 'z'
+(** Split into runs of word characters, runs of whitespace, and single
+    punctuation bytes — the granularity at which two lines "differ by the same
+    edit". Coarser than characters (so [akka] is one unit, not four, and
+    [getUserName]/[getAccountName] do not align into shared stray letters) and
+    finer than whitespace-separated tokens (so [akka.cluster.X] splits at the
+    dots).
 
-(** Split one word-character run at case humps and underscores:
-    [AcmeWidgetLibraryService] into [Acme|Widget|Library|Service],
-    [HTTPServer] into [HTTP|Server], [snake_case] into [snake|_|case].
-
-    Without this the {e conceptual} edit "delete the word Library" reads as a
-    different literal edit in every identifier it touches
-    ([AcmeWidgetLibraryService ⤳ AcmeWidgetService] versus
-    [AcmeReportLibraryModule ⤳ AcmeReportModule]), so a systematic rename
-    fragments into one group per name. Measured on a rename corpus, hump
-    splitting takes 11 renamed paths from 9 distinct edits to 3; measured on
-    every public corpus in [evaluation/], it changes grouping not at all. Bytes
-    ≥ 128 are neither upper nor lower here, so UTF-8 is never split. *)
-let split_humps (w : string) : string list =
-  let n = String.length w in
-  let out = ref [] and start = ref 0 in
-  let cut i =
-    if i > !start then out := String.sub w !start (i - !start) :: !out;
-    start := i
-  in
-  for i = 1 to n - 1 do
-    let prev = w.[i - 1] and cur = w.[i] in
-    if cur = '_' || prev = '_' then cut i
-    else if is_upper cur && not (is_upper prev) then cut i
-    else if
-      (* the tail of an acronym that runs into a word: HTTP|Server *)
-      is_upper prev && is_upper cur && i + 1 < n && is_lower w.[i + 1]
-    then cut i
-  done;
-  cut n;
-  List.rev !out
-
-(** Split into word pieces, runs of whitespace, and single punctuation bytes —
-    the granularity at which two lines "differ by the same edit". Coarser than
-    characters (so [akka] is one unit, not four) and finer than
-    whitespace-separated tokens (so [akka.cluster.X] splits at the dots, and
-    {!split_humps} splits inside each piece). *)
+    Deliberately NOT split at case humps or underscores. Doing so would group a
+    systematic identifier rename ([FooLibraryService ⤳ FooService] with
+    [BarLibraryModule ⤳ BarModule], both as "delete Library"), but it encodes
+    naming conventions the grammar does not know and that have no natural
+    stopping point — camel, acronym tails, snake, kebab, digit boundaries — the
+    same objection that keeps the pattern language free of such vocabulary. An
+    identifier-internal rename is therefore reported literally, once per
+    identifier. *)
 let words (s : string) : string array =
   let n = String.length s in
   let out = ref [] in
   let i = ref 0 in
   while !i < n do
     let start = !i in
-    if is_word_char s.[!i] then begin
-      while !i < n && is_word_char s.[!i] do incr i done;
-      out := List.rev_append (split_humps (String.sub s start (!i - start))) !out
-    end
-    else begin
-      if is_blank s.[!i] then while !i < n && is_blank s.[!i] do incr i done
-      else incr i;
-      out := String.sub s start (!i - start) :: !out
-    end
+    if is_word_char s.[!i] then while !i < n && is_word_char s.[!i] do incr i done
+    else if is_blank s.[!i] then while !i < n && is_blank s.[!i] do incr i done
+    else incr i;
+    out := String.sub s start (!i - start) :: !out
   done;
   Array.of_list (List.rev !out)
 
