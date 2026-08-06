@@ -73,6 +73,15 @@ let signature_tests =
     (* Hump splitting must not merge genuinely different renames. *)
     differs "different infix words stay apart" "FooLibraryBar" "FooBar"
       "FooHelperBar" "FooBar";
+    (* Doing one edit twice is the same change as doing it once, so the two
+       must land in one group rather than two. *)
+    same_edit "repeated edit collapses" "a akka b akka c" "a pekko b pekko c"
+      "x akka y" "x pekko y";
+    (* ...but two *different* edits are still two. *)
+    Alcotest.test_case "distinct edits both survive collapse" `Quick (fun () ->
+        Alcotest.(check int)
+          "two segments" 2
+          (List.length (sig_of "a akka b foo c" "a pekko b bar c")));
     (* Multi-byte text must not be cut mid-character by the eliding renderer.
        Three-byte characters, so the 40-byte cut lands mid-character and the
        backoff has to do real work. *)
