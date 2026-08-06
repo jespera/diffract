@@ -152,8 +152,8 @@ let string_mem ~sub s =
     added/removed bare separators (trailing commas, redundant semicolons) as
     trivia, so a hunk that is only reflow — re-indentation plus a trailing
     separator — is dropped too, not just pure-whitespace hunks. *)
-let residual_diff ?(ignore_formatting = false) ~ctx ~language ~file_path
-    ~original ~transformed () =
+let residual_diff ?(ignore_formatting = false) ?before_path ~ctx ~language
+    ~file_path ~original ~transformed () =
   if original = transformed then ""
   else
     let keep_hunk =
@@ -209,10 +209,11 @@ let residual_diff ?(ignore_formatting = false) ~ctx ~language ~file_path
     in
     match keep_hunk with
     | None ->
-        Text_diff.generate_diff ~context:0 ~file_path ~original ~transformed ()
-    | Some keep_hunk ->
-        Text_diff.generate_diff ~context:0 ~keep_hunk ~file_path ~original
+        Text_diff.generate_diff ~context:0 ?before_path ~file_path ~original
           ~transformed ()
+    | Some keep_hunk ->
+        Text_diff.generate_diff ~context:0 ~keep_hunk ?before_path ~file_path
+          ~original ~transformed ()
 
 (** [path → site_info] for every [Modified] file in the changeset. The safety
     gate evaluates rules against these. *)

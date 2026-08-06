@@ -7,14 +7,26 @@
 
 type diff_op = DKeep of string | DRemove of string | DAdd of string
 
-let generate_diff ?(context = 3) ?keep_hunk ~file_path ~original ~transformed ()
-    =
+let generate_diff ?(context = 3) ?keep_hunk ?before_path ~file_path ~original
+    ~transformed () =
   if original = transformed then ""
   else
     let orig_lines = String.split_on_char '\n' original in
     let trans_lines = String.split_on_char '\n' transformed in
     let buf = Buffer.create 1024 in
-    Buffer.add_string buf (Printf.sprintf "--- a/%s\n" file_path);
+    (* A file that moved needs both of its names. Emitting git's extended
+       header for that case — and ONLY that case, so unmoved output is
+       untouched — is what lets [git apply] perform the rename as well as the
+       content change; the two sides of a plain [--- a/x] / [+++ b/y] pair
+       would otherwise be read as an unrelated delete and create. *)
+    let before = match before_path with Some p -> p | None -> file_path in
+    if before <> file_path then begin
+      Buffer.add_string buf
+        (Printf.sprintf "diff --git a/%s b/%s\n" before file_path);
+      Buffer.add_string buf (Printf.sprintf "rename from %s\n" before);
+      Buffer.add_string buf (Printf.sprintf "rename to %s\n" file_path)
+    end;
+    Buffer.add_string buf (Printf.sprintf "--- a/%s\n" before);
     Buffer.add_string buf (Printf.sprintf "+++ b/%s\n" file_path);
     let orig_arr = Array.of_list orig_lines in
     let trans_arr = Array.of_list trans_lines in

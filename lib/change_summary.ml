@@ -28,3 +28,4 @@ let collect_one_sided_candidates = Cs_propose.collect_one_sided_candidates
 let format_summary = Cs_io.format_summary
 let format_summary_json = Cs_io.format_summary_json
 let load_from_dirs = Cs_io.load_from_dirs
+let load_from_pairs = Cs_io.load_from_pairs

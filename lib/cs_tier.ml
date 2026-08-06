@@ -128,7 +128,8 @@ let summarize ?progress ?(ignore_formatting = false) ~ctx (cs : changeset) :
         let next_files =
           List.filter_map
             (function
-              | Modified { path; language; before_source; after_source } ->
+              | Modified
+                  { path; moved_to; language; before_source; after_source } ->
                   let inter = apply_claiming acc path ~language before_source in
                   if
                     inter = after_source
@@ -137,7 +138,13 @@ let summarize ?progress ?(ignore_formatting = false) ~ctx (cs : changeset) :
                   else
                     Some
                       (Modified
-                         { path; language; before_source = inter; after_source })
+                         {
+                           path;
+                           moved_to;
+                           language;
+                           before_source = inter;
+                           after_source;
+                         })
               | Added _ | Deleted _ -> None)
             cs.files
         in
@@ -547,10 +554,21 @@ let summarize ?progress ?(ignore_formatting = false) ~ctx (cs : changeset) :
         lines;
       Buffer.contents buf
     in
+    (* A move whose content is unchanged still has to be stated, or applying
+       the summary would leave the file at its old path. git spells this as an
+       extended header with no hunks. *)
+    let rename_only_diff ~before_path ~after_path =
+      Printf.sprintf
+        "diff --git a/%s b/%s\n\
+         similarity index 100%%\n\
+         rename from %s\n\
+         rename to %s\n"
+        before_path after_path before_path after_path
+    in
     List.filter_map
       (fun fc ->
         match fc with
-        | Modified { path; language; before_source; after_source } ->
+        | Modified { path; moved_to; language; before_source; after_source } ->
             let claiming = rules_at path in
             let inter =
               match Hashtbl.find_opt inters path with
@@ -560,10 +578,26 @@ let summarize ?progress ?(ignore_formatting = false) ~ctx (cs : changeset) :
             if
               inter = after_source
               || ws_collapse inter = ws_collapse after_source
-            then None
+            then
+              match moved_to with
+              | Some ap when ap <> path ->
+                  Some
+                    {
+                      res_file = path;
+                      res_moved_to = moved_to;
+                      res_rules = List.map (fun (r : rule) -> r.id) claiming;
+                      res_diff =
+                        rename_only_diff ~before_path:path ~after_path:ap;
+                    }
+              | _ -> None
             else
               let d =
-                residual_diff ~ignore_formatting ~ctx ~language ~file_path:path
+                (* The residual is stated FROM the before-side path TO the
+                   after-side one, so a moved file's hunks land where the file
+                   now lives. *)
+                residual_diff ~ignore_formatting ~ctx ~language
+                  ~before_path:path
+                  ~file_path:(Option.value moved_to ~default:path)
                   ~original:inter ~transformed:after_source ()
               in
               if d = "" then None
@@ -571,6 +605,7 @@ let summarize ?progress ?(ignore_formatting = false) ~ctx (cs : changeset) :
                 Some
                   {
                     res_file = path;
+                    res_moved_to = moved_to;
                     res_rules = List.map (fun (r : rule) -> r.id) claiming;
                     res_diff = d;
                   }
@@ -578,6 +613,7 @@ let summarize ?progress ?(ignore_formatting = false) ~ctx (cs : changeset) :
             Some
               {
                 res_file = path;
+                res_moved_to = None;
                 res_rules = [];
                 res_diff = file_op_diff ~added:true path after_source;
               }
@@ -585,6 +621,7 @@ let summarize ?progress ?(ignore_formatting = false) ~ctx (cs : changeset) :
             Some
               {
                 res_file = path;
+                res_moved_to = None;
                 res_rules = [];
                 res_diff = file_op_diff ~added:false path before_source;
               })

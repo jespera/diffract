@@ -556,6 +556,7 @@ let tests =
           let res =
             {
               Change_summary.res_file = "z.kt";
+              res_moved_to = None;
               res_rules = [ "R2" ];
               res_diff = "--- a/z.kt\n+++ b/z.kt\n@@ -1,1 +1,1 @@\n-\"q\\e\"\n";
             }
