@@ -342,8 +342,8 @@ let roundtrip_case case_name () =
   List.iter
     (fun (fc : Change_summary.file_change) ->
       match fc with
-      | Change_summary.Modified { path; language; before_source; after_source }
-        -> (
+      | Change_summary.Modified
+          { path; moved_to; language; before_source; after_source } -> (
           let claiming =
             summary.rules
             |> List.filter (fun (r : Change_summary.rule) ->
@@ -376,7 +376,8 @@ let roundtrip_case case_name () =
                  that the emitted residual truthfully relates the actual
                  post-rule intermediate to the after-source. *)
               let regen =
-                Change_summary.residual_diff ~ctx ~language ~file_path:path
+                Change_summary.residual_diff ~ctx ~language ~before_path:path
+                  ~file_path:(Option.value moved_to ~default:path)
                   ~original:applied ~transformed:after_source ()
               in
               Alcotest.(check string)

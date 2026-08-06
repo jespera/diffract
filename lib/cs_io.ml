@@ -217,6 +217,7 @@ let load_from_dirs ~before_dir ~after_dir ?(include_glob = None)
   let after_map = Hashtbl.create 32 in
   List.iter (fun (r, p) -> Hashtbl.replace after_map r p) after_rel;
   let files = ref [] in
+  let unpaired_before = ref [] in
   List.iter
     (fun (rel, bpath) ->
       match Hashtbl.find_opt after_map rel with
@@ -237,14 +238,74 @@ let load_from_dirs ~before_dir ~after_dir ?(include_glob = None)
               :: !files
       | None ->
           let bsrc = In_channel.with_open_bin bpath In_channel.input_all in
+          unpaired_before := (rel, bsrc) :: !unpaired_before)
+    before_rel;
+  (* Exact-content pairing for what path equality could not match. Two trees
+     cannot express a rename, but a file that MOVED without being edited still
+     leaves proof: identical bytes on both sides. Pair those, so a pure move
+     reports as a move rather than as an unrelated deletion plus an unrelated
+     addition. This is git's own first pass and needs no threshold, no parse and
+     no similarity metric — an edited rename remains beyond what two bare
+     directories can say, and wants [load_from_pairs].
+
+     Matching is one-to-one and order-independent: sides are sorted, and each
+     after-file is claimed by at most one before-file, so duplicate contents
+     (common for generated or empty files) pair off deterministically instead of
+     collapsing onto a single partner. *)
+  let unpaired_after =
+    Hashtbl.fold (fun rel apath acc -> (rel, apath) :: acc) after_map []
+    |> List.sort compare
+  in
+  let by_content : (string, string list ref) Hashtbl.t = Hashtbl.create 16 in
+  let after_src = Hashtbl.create 16 in
+  List.iter
+    (fun (rel, apath) ->
+      let asrc = In_channel.with_open_bin apath In_channel.input_all in
+      Hashtbl.replace after_src rel asrc;
+      match Hashtbl.find_opt by_content asrc with
+      | Some l -> l := rel :: !l
+      | None -> Hashtbl.add by_content asrc (ref [ rel ]))
+    unpaired_after;
+  let claimed = Hashtbl.create 16 in
+  List.iter
+    (fun (rel, bsrc) ->
+      let moved =
+        match Hashtbl.find_opt by_content bsrc with
+        | Some l -> (
+            match
+              List.sort compare
+                (List.filter (fun r -> not (Hashtbl.mem claimed r)) !l)
+            with
+            | best :: _ ->
+                Hashtbl.replace claimed best ();
+                Some best
+            | [] -> None)
+        | None -> None
+      in
+      match moved with
+      | Some ap ->
+          files :=
+            Modified
+              {
+                path = rel;
+                moved_to = Some ap;
+                language;
+                before_source = bsrc;
+                after_source = bsrc;
+              }
+            :: !files
+      | None ->
           files :=
             Deleted { path = rel; language; before_source = bsrc } :: !files)
-    before_rel;
-  Hashtbl.iter
-    (fun rel apath ->
-      let asrc = In_channel.with_open_bin apath In_channel.input_all in
-      files := Added { path = rel; language; after_source = asrc } :: !files)
-    after_map;
+    (List.sort compare !unpaired_before);
+  List.iter
+    (fun (rel, _) ->
+      if not (Hashtbl.mem claimed rel) then
+        files :=
+          Added
+            { path = rel; language; after_source = Hashtbl.find after_src rel }
+          :: !files)
+    unpaired_after;
   { files = List.sort compare !files }
 
 (* ── Manifest loader ────────────────────────────────────────────── *)

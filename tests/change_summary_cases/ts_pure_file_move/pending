@@ -1,3 +1,0 @@
-rename detection in load_from_dirs: the file is moved with byte-identical
-content, so nothing changed and the summary should be empty. Path-equality
-pairing instead reports a whole-file delete plus a whole-file add.

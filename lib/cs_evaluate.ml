@@ -154,7 +154,27 @@ let string_mem ~sub s =
     separator — is dropped too, not just pure-whitespace hunks. *)
 let residual_diff ?(ignore_formatting = false) ?before_path ~ctx ~language
     ~file_path ~original ~transformed () =
-  if original = transformed then ""
+  (* A file that moved has a residual even when its content gap is empty: the
+     move itself must reach the output, or applying the summary would leave the
+     file at its old path. git spells that as an extended header with no hunks.
+     Handling it here rather than at the call site keeps ONE answer to "what is
+     this file's residual", which is also what the round-trip property checks
+     against. *)
+  let moved =
+    match before_path with Some p -> p <> file_path | None -> false
+  in
+  let rename_only () =
+    if not moved then ""
+    else
+      let before = Option.value before_path ~default:file_path in
+      Printf.sprintf
+        "diff --git a/%s b/%s\n\
+         similarity index 100%%\n\
+         rename from %s\n\
+         rename to %s\n"
+        before file_path before file_path
+  in
+  if original = transformed then rename_only ()
   else
     let keep_hunk =
       try
@@ -207,13 +227,16 @@ let residual_diff ?(ignore_formatting = false) ?before_path ~ctx ~language
             (Printexc.to_string e);
           None
     in
-    match keep_hunk with
-    | None ->
-        Text_diff.generate_diff ~context:0 ?before_path ~file_path ~original
-          ~transformed ()
-    | Some keep_hunk ->
-        Text_diff.generate_diff ~context:0 ~keep_hunk ?before_path ~file_path
-          ~original ~transformed ()
+    let d =
+      match keep_hunk with
+      | None ->
+          Text_diff.generate_diff ~context:0 ?before_path ~file_path ~original
+            ~transformed ()
+      | Some keep_hunk ->
+          Text_diff.generate_diff ~context:0 ~keep_hunk ?before_path ~file_path
+            ~original ~transformed ()
+    in
+    if d = "" then rename_only () else d
 
 (** [path → site_info] for every [Modified] file in the changeset. The safety
     gate evaluates rules against these. *)

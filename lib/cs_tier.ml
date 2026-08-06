@@ -557,14 +557,6 @@ let summarize ?progress ?(ignore_formatting = false) ~ctx (cs : changeset) :
     (* A move whose content is unchanged still has to be stated, or applying
        the summary would leave the file at its old path. git spells this as an
        extended header with no hunks. *)
-    let rename_only_diff ~before_path ~after_path =
-      Printf.sprintf
-        "diff --git a/%s b/%s\n\
-         similarity index 100%%\n\
-         rename from %s\n\
-         rename to %s\n"
-        before_path after_path before_path after_path
-    in
     List.filter_map
       (fun fc ->
         match fc with
@@ -575,40 +567,24 @@ let summarize ?progress ?(ignore_formatting = false) ~ctx (cs : changeset) :
               | Some s -> s
               | None -> before_source
             in
-            if
-              inter = after_source
-              || ws_collapse inter = ws_collapse after_source
-            then
-              match moved_to with
-              | Some ap when ap <> path ->
-                  Some
-                    {
-                      res_file = path;
-                      res_moved_to = moved_to;
-                      res_rules = List.map (fun (r : rule) -> r.id) claiming;
-                      res_diff =
-                        rename_only_diff ~before_path:path ~after_path:ap;
-                    }
-              | _ -> None
+            (* Stated FROM the before-side path TO the after-side one, so a
+               moved file's hunks land where the file now lives. A move with no
+               content gap still yields a residual (the rename header), which
+               is why this is unconditional. *)
+            let d =
+              residual_diff ~ignore_formatting ~ctx ~language ~before_path:path
+                ~file_path:(Option.value moved_to ~default:path)
+                ~original:inter ~transformed:after_source ()
+            in
+            if d = "" then None
             else
-              let d =
-                (* The residual is stated FROM the before-side path TO the
-                   after-side one, so a moved file's hunks land where the file
-                   now lives. *)
-                residual_diff ~ignore_formatting ~ctx ~language
-                  ~before_path:path
-                  ~file_path:(Option.value moved_to ~default:path)
-                  ~original:inter ~transformed:after_source ()
-              in
-              if d = "" then None
-              else
-                Some
-                  {
-                    res_file = path;
-                    res_moved_to = moved_to;
-                    res_rules = List.map (fun (r : rule) -> r.id) claiming;
-                    res_diff = d;
-                  }
+              Some
+                {
+                  res_file = path;
+                  res_moved_to = moved_to;
+                  res_rules = List.map (fun (r : rule) -> r.id) claiming;
+                  res_diff = d;
+                }
         | Added { path; after_source; _ } ->
             Some
               {
