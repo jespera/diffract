@@ -291,9 +291,14 @@ times per file. So residuals are digested three ways:
 
 Every hunk appears exactly once — inside a group or printed in full — so the
 counts add up and nothing is silently dropped. Two edits group when their
-*word-level* difference matches, ignoring the code around them; word splitting
-goes inside identifiers (`AcmeWidgetLibraryService` → `Acme|Widget|Library|Service`),
-so one conceptual rename reads as one edit rather than one per name it touches.
+*word-level* difference matches, ignoring the code around them.
+
+Words are runs of identifier characters, and are **not** split at case humps or
+underscores. So a rename *inside* an identifier (`FooLibraryService` →
+`FooService`) is reported literally and does not group with the same conceptual
+rename in another name (`BarLibraryModule` → `BarModule`). Splitting there
+would group them, but only by encoding naming conventions the grammar does not
+know — camel, acronym tails, snake, kebab — with no natural stopping point.
 
 The exemplar is not decoration. The same rename often has several renderings —
 pekko writes `akka` as `org/apache/pekko` in paths, `org.apache.pekko` in
