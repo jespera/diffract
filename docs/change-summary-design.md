@@ -676,7 +676,7 @@ channel was **reverted**: disabling it changed *zero* of the 42 golden
 cases (its fixture `kotlin_delta_pooled_drop` is also covered by the
 anchored channel), so it looked dormant — but on the real `gen3` soak
 removing it changed ~390 lines, materially altering the type-parameter
-rename family it was built for (`<…, HedebyUserId> ⤳ <…, HedebyUserIdServer>`).
+rename family it was built for (`<…, AcmeUserId> ⤳ <…, AcmeUserIdServer>`).
 The old fixture suite did not isolate that family the way real corpora
 exercise it; the `ts_typearg_rename_delta` fixture (a type-argument rename
 co-occurring with an import rewrite) was added as a guard — disabling this
