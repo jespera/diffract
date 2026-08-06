@@ -5,6 +5,13 @@
 type file_change =
   | Modified of {
       path : string;
+          (** the file's BEFORE-side path — the one present in the tree a
+              summary is applied to, and the identity downstream passes key on
+              ([rule.sites], [residual.res_file]). Equal to the after-side path
+              unless the file moved. *)
+      moved_to : string option;
+          (** the AFTER-side path when the change moved the file, so the summary
+              can state the rename rather than silently renaming the site *)
       language : string;
       before_source : string;
       after_source : string;
@@ -40,7 +47,12 @@ type rule = {
     residuals together account for the whole changeset — the Covering
     desideratum of §2.3. *)
 type residual = {
-  res_file : string;  (** relative path of the file the gap lives in *)
+  res_file : string;
+      (** relative path of the file the gap lives in, on the BEFORE side *)
+  res_moved_to : string option;
+      (** after-side path when the file moved; the residual diff then carries
+          git's [rename from]/[rename to] headers, so applying it performs the
+          move as well as the content change *)
   res_rules : string list;
       (** ids of the rules applied before the gap was measured, in application
           order; [[]] means no emitted rule claims the file — a pure one-off
@@ -101,6 +113,7 @@ val collect_one_sided_candidates :
     residual the same way. *)
 val residual_diff :
   ?ignore_formatting:bool ->
+  ?before_path:string ->
   ctx:Context.t ->
   language:string ->
   file_path:string ->
@@ -157,6 +170,36 @@ val load_from_dirs :
   after_dir:string ->
   ?include_glob:string option ->
   ?exclude_dirs:string list ->
+  language:string ->
+  unit ->
+  changeset
+
+(** [load_from_pairs ~manifest ~language ()] reads a change-pair manifest —
+    tab-separated records, a leading keyword giving each one's arity:
+
+    {v
+    pair<TAB>before/path<TAB>after/path    modified, or renamed if they differ
+    add<TAB>after/path
+    del<TAB>before/path
+    v}
+
+    Paths are logical; field 1 is read from [<manifest dir>/before/] and field 2
+    from [<manifest dir>/after/]. Blank lines and [#] comments are skipped, and
+    extra trailing fields ignored. Unrecognised records raise rather than being
+    skipped, so a malformed manifest cannot silently shorten the changeset.
+
+    This is the input that can express a RENAME: two directory trees cannot say
+    that a before-file corresponds to a differently-named after-file, so a
+    producer which knows the pairing states it here. A pair whose paths differ
+    becomes a [Modified] carrying [moved_to] — including when the bytes are
+    identical, since the move itself must reach the output.
+
+    [include_glob] filters records, keeping one when EITHER path matches, so a
+    rename that changes extension is not silently dropped. Every file is tagged
+    with [language]; run once per language, as with {!load_from_dirs}. *)
+val load_from_pairs :
+  manifest:string ->
+  ?include_glob:string option ->
   language:string ->
   unit ->
   changeset

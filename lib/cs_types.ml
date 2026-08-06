@@ -9,6 +9,16 @@
 type file_change =
   | Modified of {
       path : string;
+          (** the file's BEFORE-side path — the one that exists in the tree a
+              summary is applied to, and the identity every downstream pass keys
+              on (site db, [rule.sites], [residual.res_file]). Equal to the
+              after-side path unless the file moved. *)
+      moved_to : string option;
+          (** the AFTER-side path, when the change moved the file. Carried so
+              the summary can state the rename: a residual whose two sides name
+              different paths renders git's [rename from]/[rename to] headers,
+              which is what lets [git apply] perform the move as well as the
+              content change. [None] for a file that stayed put. *)
       language : string;
       before_source : string;
       after_source : string;
@@ -42,7 +52,8 @@ type rule = {
 }
 
 type residual = {
-  res_file : string;
+  res_file : string;  (** before-side path, as in {!Modified} *)
+  res_moved_to : string option;  (** after-side path when the file moved *)
   res_rules : string list;
   res_diff : string;
 }

@@ -149,11 +149,13 @@ let format_summary_json (s : summary) : string =
   in
   let residual_of (res : residual) =
     let base =
-      [
-        ("file", str res.res_file);
-        ("rules", arr (List.map str res.res_rules));
-        ("diff", str res.res_diff);
-      ]
+      [ ("file", str res.res_file) ]
+      @ (match res.res_moved_to with
+        | Some p -> [ ("moved_to", str p) ]
+        | None -> [])
+      @ [
+          ("rules", arr (List.map str res.res_rules)); ("diff", str res.res_diff);
+        ]
     in
     match List.assoc_opt res.res_file s.unparsed with
     | Some rs ->
@@ -227,6 +229,7 @@ let load_from_dirs ~before_dir ~after_dir ?(include_glob = None)
               Modified
                 {
                   path = rel;
+                  moved_to = None;
                   language;
                   before_source = bsrc;
                   after_source = asrc;
@@ -243,3 +246,103 @@ let load_from_dirs ~before_dir ~after_dir ?(include_glob = None)
       files := Added { path = rel; language; after_source = asrc } :: !files)
     after_map;
   { files = List.sort compare !files }
+
+(* ── Manifest loader ────────────────────────────────────────────── *)
+
+(** Read a change-pair manifest (see scripts/diffract-checkout.sh). Two
+    directory trees cannot express "this before-file is that differently-named
+    after-file", so a producer that knows the pairing — git rename detection, or
+    a person correcting one — states it here instead of us inferring it.
+
+    Records are tab-separated; a leading keyword gives the arity so a reader
+    never has to guess how many paths follow:
+
+    {v
+    pair<TAB>before/path<TAB>after/path    modified, or renamed if they differ
+    add<TAB>after/path
+    del<TAB>before/path
+    v}
+
+    Paths are logical (as the files are named in the project). Field 1 is read
+    from [<manifest dir>/before/], field 2 from [<manifest dir>/after/], so one
+    argument locates everything. Blank lines and [#] comments are skipped, and
+    trailing fields are ignored so the format can gain columns later.
+
+    Anything unrecognised is an error rather than a skip: a manifest that
+    quietly drops records would silently shorten the changeset, which reads as a
+    codemod with fewer sites rather than as a broken input. *)
+let load_from_pairs ~manifest ?(include_glob = None) ~language () : changeset =
+  let dir = Filename.dirname manifest in
+  let read_file p = In_channel.with_open_bin p In_channel.input_all in
+  let matches p =
+    match include_glob with None -> true | Some g -> File_scan.glob_match g p
+  in
+  let lines =
+    String.split_on_char '\n' (read_file manifest)
+    |> List.mapi (fun i l -> (i + 1, l))
+    |> List.filter (fun (_, l) ->
+        let t = String.trim l in
+        t <> "" && not (String.length t > 0 && t.[0] = '#'))
+  in
+  let fail lineno msg =
+    failwith (Printf.sprintf "%s:%d: %s" manifest lineno msg)
+  in
+  let side sub p = Filename.concat (Filename.concat dir sub) p in
+  let must_read lineno sub p =
+    let full = side sub p in
+    if not (Sys.file_exists full) then
+      fail lineno (Printf.sprintf "no such file: %s" full)
+    else read_file full
+  in
+  let files =
+    List.filter_map
+      (fun (lineno, line) ->
+        match String.split_on_char '\t' line with
+        | "pair" :: bp :: ap :: _ ->
+            if not (matches bp || matches ap) then None
+            else
+              let bsrc = must_read lineno "before" bp in
+              let asrc = must_read lineno "after" ap in
+              let moved_to = if bp = ap then None else Some ap in
+              (* An unchanged file that stayed put is not a change. A file that
+                 MOVED is, even with identical bytes — the move itself has to
+                 reach the output, or applying the summary would leave the file
+                 where it was. *)
+              if bsrc = asrc && moved_to = None then None
+              else
+                Some
+                  (Modified
+                     {
+                       path = bp;
+                       moved_to;
+                       language;
+                       before_source = bsrc;
+                       after_source = asrc;
+                     })
+        | "add" :: ap :: _ ->
+            if not (matches ap) then None
+            else
+              Some
+                (Added
+                   {
+                     path = ap;
+                     language;
+                     after_source = must_read lineno "after" ap;
+                   })
+        | "del" :: bp :: _ ->
+            if not (matches bp) then None
+            else
+              Some
+                (Deleted
+                   {
+                     path = bp;
+                     language;
+                     before_source = must_read lineno "before" bp;
+                   })
+        | ("pair" | "add" | "del") :: _ ->
+            fail lineno "too few tab-separated fields for this record"
+        | kw :: _ -> fail lineno (Printf.sprintf "unknown record type %S" kw)
+        | [] -> None)
+      lines
+  in
+  { files = List.sort compare files }
