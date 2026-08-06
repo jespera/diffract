@@ -10,7 +10,70 @@ open Cs_types
    damaged region. The JSON output carries every range. *)
 let format_ranges = Tree.format_regions ~max_shown:3
 
-let format_summary ?(sites = `Full) (s : summary) : string =
+(* ── reading-mode residual digest ────────────────────────────────── *)
+
+(* Render the grouped form of the residual section. Only [text-minimal] reaches
+   this; [`Full] keeps the canonical per-file diffs, which are what [git apply]
+   and the round-trip test consume. *)
+let add_digest buf ~unparsed_of (residuals : residual list) =
+  let d = Cs_group.digest residuals in
+  let nl () = if Buffer.length buf > 0 then Buffer.add_char buf '\n' in
+  (match d.Cs_group.dg_renames with
+  | None -> ()
+  | Some (files, edits) ->
+      nl ();
+      Buffer.add_string buf
+        (Printf.sprintf "# renames  %d file(s)  %d path edit(s)\n" files
+           (List.length edits));
+      List.iter
+        (fun (e : Cs_group.rename_edit) ->
+          let from, to_ = e.re_exemplar in
+          Buffer.add_string buf
+            (Printf.sprintf "  x%d  %s\n      e.g.  %s\n         -> %s\n"
+               e.re_count e.re_edit from to_))
+        edits);
+  if d.Cs_group.dg_groups <> [] then begin
+    nl ();
+    Buffer.add_string buf
+      (Printf.sprintf "# residual-groups  %d of %d hunk(s), %d group(s)\n"
+         d.Cs_group.dg_grouped d.Cs_group.dg_total
+         (List.length d.Cs_group.dg_groups));
+    List.iter
+      (fun (g : Cs_group.group) ->
+        Buffer.add_string buf
+          (Printf.sprintf "  x%d  %d file(s)  %s\n" g.g_count g.g_files g.g_edit);
+        let minus, plus = g.g_exemplar in
+        List.iter (fun l -> Buffer.add_string buf ("  -" ^ l ^ "\n")) minus;
+        List.iter (fun l -> Buffer.add_string buf ("  +" ^ l ^ "\n")) plus)
+      d.Cs_group.dg_groups
+  end;
+  List.iter
+    (fun ((res : residual), bodies) ->
+      nl ();
+      (* The git/path header block is 71% of residual bytes on a rename-heavy
+         corpus, repeating a long path four to six times per file. One line
+         says the same thing; the canonical format still carries the real
+         headers. *)
+      let path =
+        match res.res_moved_to with
+        | Some t when t <> res.res_file -> res.res_file ^ " -> " ^ t
+        | _ -> res.res_file
+      in
+      Buffer.add_string buf
+        (Printf.sprintf "# residual  %s%s%s\n" path
+           (match res.res_rules with
+           | [] -> ""
+           | ids -> "  rule=" ^ String.concat "," ids)
+           (unparsed_of res));
+      List.iter
+        (fun b ->
+          Buffer.add_string buf b;
+          Buffer.add_char buf '\n')
+        bodies)
+    d.Cs_group.dg_rest
+
+let format_summary ?(sites = `Full) ?(residuals = `Full) (s : summary) : string
+    =
   let buf = Buffer.create 256 in
   List.iteri
     (fun i (r : rule) ->
@@ -62,25 +125,30 @@ let format_summary ?(sites = `Full) (s : summary) : string =
               r.sites
         end)
     s.rules;
-  List.iteri
-    (fun i (res : residual) ->
-      if i > 0 || s.rules <> [] then Buffer.add_char buf '\n';
-      let unparsed =
-        (* A residual in an unreadable region is not a factoring failure —
-           no rule can match there. Say so on the residual itself, where the
-           question "why isn't this a rule?" actually gets asked. *)
-        match List.assoc_opt res.res_file s.unparsed with
-        | Some rs -> Printf.sprintf "  unparsed=%s" (format_ranges rs)
-        | None -> ""
-      in
-      (match res.res_rules with
-      | [] -> Buffer.add_string buf (Printf.sprintf "# residual%s\n" unparsed)
-      | ids ->
-          Buffer.add_string buf
-            (Printf.sprintf "# residual  rule=%s%s\n" (String.concat "," ids)
-               unparsed));
-      Buffer.add_string buf res.res_diff)
-    s.residuals;
+  let unparsed_of (res : residual) =
+    (* A residual in an unreadable region is not a factoring failure —
+       no rule can match there. Say so on the residual itself, where the
+       question "why isn't this a rule?" actually gets asked. *)
+    match List.assoc_opt res.res_file s.unparsed with
+    | Some rs -> Printf.sprintf "  unparsed=%s" (format_ranges rs)
+    | None -> ""
+  in
+  (match residuals with
+  | `Grouped -> add_digest buf ~unparsed_of s.residuals
+  | `Full ->
+      List.iteri
+        (fun i (res : residual) ->
+          if i > 0 || s.rules <> [] then Buffer.add_char buf '\n';
+          let unparsed = unparsed_of res in
+          (match res.res_rules with
+          | [] ->
+              Buffer.add_string buf (Printf.sprintf "# residual%s\n" unparsed)
+          | ids ->
+              Buffer.add_string buf
+                (Printf.sprintf "# residual  rule=%s%s\n"
+                   (String.concat "," ids) unparsed));
+          Buffer.add_string buf res.res_diff)
+        s.residuals);
   (* Parse-damage footer: one line, and only when there is damage, so a clean
      corpus's summary is untouched. Deliberately not a per-file listing — the
      residuals that the damage explains already carry [unparsed=], and a

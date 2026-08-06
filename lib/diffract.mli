@@ -19,6 +19,7 @@ module Change_summary = Change_summary
 module Cs_types = Cs_types
 
 module Cs_pattern = Cs_pattern
+module Cs_group = Cs_group
 module File_scan = File_scan
 
 (** {1 Parsing} *)

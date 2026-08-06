@@ -17,6 +17,7 @@ module Change_summary = Change_summary
    layer (anti-unification, rendering). Not part of the stable public API. *)
 module Cs_types = Cs_types
 module Cs_pattern = Cs_pattern
+module Cs_group = Cs_group
 module File_scan = File_scan
 
 (** Parse source code and return the tree representation *)

@@ -14,5 +14,6 @@ let () =
       ("Tokenize", Test_tokenize.tests);
       ("Matcher", Test_matcher.tests);
       ("Cs_pattern", Test_cs_pattern.tests);
+      ("Cs_group", Test_cs_group.tests);
       ("Change summary", Test_change_summary.tests);
     ]

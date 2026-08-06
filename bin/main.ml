@@ -789,7 +789,8 @@ let run_summarize before_dir after_dir pairs language include_pattern
               | `Json -> Diffract.Change_summary.format_summary_json summary
               | `Text -> Diffract.Change_summary.format_summary summary
               | `TextMinimal ->
-                  Diffract.Change_summary.format_summary ~sites:`Count summary)
+                  Diffract.Change_summary.format_summary ~sites:`Count
+                    ~residuals:`Grouped summary)
         in
         print_string output;
         `Ok ()
