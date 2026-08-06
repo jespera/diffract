@@ -280,13 +280,15 @@ times per file. So residuals are digested three ways:
       e.g.  akka-cluster/src/main/scala/akka/cluster/Cluster.scala
          -> akka-cluster/src/main/scala/org/apache/pekko/cluster/Cluster.scala
 
-# residual-groups  95 of 97 hunk(s), 5 group(s)
-  x58  35 file(s)  akka. -> org.apache.pekko.
+# residual-groups  96 of 97 hunk(s), 3 group(s)
+  x63  36 file(s)  akka. -> org.apache.pekko.
   -    if (settings.DowningProviderClassName == "akka.cluster.AutoDowning" ||
   +    if (settings.DowningProviderClassName == "org.apache.pekko.cluster.AutoDowning" ||
-  x24  9 file(s)  akka -> pekko
+  x27  9 file(s)  akka -> pekko
   - * Each cluster [[Member]] is identified by its [[akka.actor.Address]], and
   + * Each cluster [[Member]] is identified by its [[pekko.actor.Address]], and
+  x6  6 file(s)  (insert) import org.apache.pekko
+  +import org.apache.pekko
 ```
 
 Every hunk appears exactly once — inside a group or printed in full — so the
