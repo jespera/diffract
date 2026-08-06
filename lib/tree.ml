@@ -264,10 +264,7 @@ let hash_combine h1 h2 = (h1 * 65599) + h2
    share one block. [intern] is [None] on the paths that have no context (the
    exported ctx-less converters), which then simply keep the FFI's copies. *)
 let canon intern s = match intern with None -> s | Some f -> f s
-
-let canon_opt intern = function
-  | None -> None
-  | Some s -> Some (canon intern s)
+let canon_opt intern = function None -> None | Some s -> Some (canon intern s)
 
 (** Convert a tree-sitter node to our internal representation (untyped). *)
 let rec of_ts_node_internal ?intern source (ts_node : Node.t) =
