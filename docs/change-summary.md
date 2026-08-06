@@ -33,18 +33,27 @@ Two properties make the output trustworthy rather than approximate:
 
 ```
 diffract summarize -l LANG -i GLOB [-e DIR]... [-v] BEFORE_DIR AFTER_DIR
+diffract summarize -l LANG [-i GLOB] [-v] --pairs MANIFEST
 ```
 
-`-l`/`--language` and `-i`/`--include` are both **required**: `summarize` walks
-directories, so it must be told which grammar to use and which files to scan
-rather than silently parsing every walked file with a default grammar. Run it
-once per language/extension set (e.g. `-l kotlin -i '*.kt'`, then
-`-l tsx -i '*.tsx'`).
+`-l`/`--language` names the grammar and is always **required**; every file the
+run sees is parsed with it, so run once per language (e.g. `-l kotlin -i
+'*.kt'`, then `-l tsx -i '*.tsx'`).
+
+With two directories, `-i`/`--include` is also **required** — `summarize` walks
+them, so it must be told which files to scan rather than silently parsing
+everything it finds. With `--pairs` the manifest already enumerates the
+changeset, so `-i` becomes an optional filter (handy for pointing several
+per-language runs at one checkout).
+
+Prefer `--pairs` when the change involves **renames**: see
+[Renamed and moved files](#renamed-and-moved-files).
 
 | Flag | Meaning |
 |------|---------|
 | `-l`, `--language` | **Required.** Grammar used for every file `--include` selects |
-| `-i`, `--include` | **Required.** Glob for files to scan (e.g. `'*.kt'`) |
+| `-i`, `--include` | **Required** with two directories; optional filter with `--pairs`. Glob for files to scan (e.g. `'*.kt'`) |
+| `--pairs` | Read the changeset from a change-pair manifest instead of pairing two directories by path — the input that can express a rename |
 | `-e`, `--exclude` | Directory names to skip (repeatable; sensible defaults) |
 | `-v` | Progress and phase timing on stderr |
 | `--ignore-formatting` | Treat formatting as invisible in the residuals (see below) |
@@ -135,6 +144,74 @@ Grammar coverage is the limit here, not summarize: the fix for a corpus with
 many unparsed regions is a better grammar for that language. What the report
 buys is knowing that is the situation.
 
+### Renamed and moved files
+
+Two directory trees cannot say that a before-file corresponds to a
+*differently-named* after-file. Left to path equality, a renamed file arrives as
+an unrelated deletion plus an unrelated addition, and the systematic edits
+inside it produce no rules at all — on one 21-file corpus where 15 files moved,
+that was the difference between 1 rule and 17.
+
+So the pairing is supplied as input. `scripts/diffract-checkout.sh` writes a
+manifest next to the trees it extracts:
+
+```
+scripts/diffract-checkout.sh -M 40 HEAD~1 HEAD /tmp/cs -- '*.kt'
+diffract summarize --pairs /tmp/cs/pairs.tsv -l kotlin
+```
+
+The manifest is tab-separated, one record per changed file. A leading keyword
+gives each record's arity, so a reader never has to infer how many paths
+follow; paths are logical, with field 1 read from `before/` and field 2 from
+`after/`, and `#` lines are comments:
+
+```
+pair	src/old/Thing.kt	src/new/Thing.kt    renamed — the paths simply differ
+pair	src/Widget.kt	src/Widget.kt           modified in place
+add	src/New.kt
+del	src/Gone.kt
+```
+
+There is no separate "rename" marker: a `pair` whose two paths differ *is* a
+rename. Anything unrecognised is an error rather than a skipped line, since a
+manifest that quietly dropped records would read as a codemod with fewer sites
+rather than as a broken input.
+
+**Renames appear in the residuals, not in `sites`.** A rule explains a content
+transformation matched against a syntax tree; a move is a file-level operation
+that no pattern can express, so — exactly like additions and deletions, which
+have always surfaced as `/dev/null` residuals rather than rules — it belongs to
+the residual. `sites` names the *before* path, which is the one present in the
+tree you apply to.
+
+A residual for a moved file carries git's extended header:
+
+```
+# residual  rule=R1
+diff --git a/src/old/Thing.kt b/src/new/Thing.kt
+rename from src/old/Thing.kt
+rename to src/new/Thing.kt
+--- a/src/old/Thing.kt
++++ b/src/new/Thing.kt
+@@ -3,1 +3,1 @@
+-...
+```
+
+which is what lets `git apply` perform the **move as well as** the content
+change. A file that moved without being edited still gets a residual — a
+`similarity index 100%` header with no hunks — because otherwise the move never
+reaches the output and applying the summary would leave the file where it was.
+
+Two bare directories still handle one case unaided: a move with *identical*
+content is paired by exact content match, since identical bytes on both sides
+are proof enough and need no threshold. An **edited** rename is beyond what two
+directories can express and wants `--pairs`.
+
+The manifest is also the place to correct a mispairing. Detection is git's, and
+git compares content, so a thoroughly-renamed file scores *lower* — the more
+systematic a codemod, the likelier its renames fall below the default 50%. On
+the corpus above, `-M50%` found 13 of 15 renames and `-M40%` found all 15.
+
 ### `--ignore-formatting`
 
 The layout filter above only drops changes the parse tree can't see —
@@ -191,10 +268,16 @@ selective reading. The shape:
                  { "file": "a.kt", "after": ["R2"] } ] }
   ],
   "residuals": [
-    { "file": "z.kt", "rules": ["R1"], "diff": "--- a/z.kt\n..." }
+    { "file": "z.kt", "rules": ["R1"], "diff": "--- a/z.kt\n..." },
+    { "file": "old/y.kt", "moved_to": "new/y.kt", "rules": [],
+      "diff": "diff --git a/old/y.kt b/new/y.kt\n..." }
   ]
 }
 ```
+
+A residual's optional `moved_to` names the after-side path when the file was
+renamed; `file` is always the before-side path (see
+[Renamed and moved files](#renamed-and-moved-files)).
 
 A site's optional `after` array is the per-site tier attribution (the
 earlier rule ids whose output this rule's pattern matched there — the
