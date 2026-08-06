@@ -141,6 +141,22 @@ One per language:
   formatting ride-along (multi-line calls collapsed) — needs
   `--ignore-formatting`.
 
+## Rename campaigns (pairing, not just matching)
+
+A separate axis: commits where files *move*. Path-equality pairing sees a
+deletion plus an addition and infers nothing, so these corpora exercise the
+manifest path (`summarize --pairs`) rather than the matcher.
+
+- **apache/pekko** `f84e8db3cbdbc05743cb06a2d4264d1a7ce01b96` (Scala) —
+  **adopted**, see `evaluation/pekko.sh`. `akka` → `org.apache.pekko`: 3,474
+  files, 2,622 of them renamed. Sliced to one module; the rest of the commit
+  is the natural holdout supply.
+- Two sibling commits in the same repo, unadopted but verified, isolate
+  variants of the same campaign: `0cb5056` renames *classes* containing
+  "Akka" (3,897 files — identifier renames rather than path renames), and
+  `def5d6e` is 16 pure moves with **zero** content change, which exercises
+  the exact-content pairing fallback specifically.
+
 ## Negative results
 
 Searched for but not found (don't re-hunt these): a clean ≥20-file

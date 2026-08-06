@@ -149,8 +149,14 @@ buys is knowing that is the situation.
 Two directory trees cannot say that a before-file corresponds to a
 *differently-named* after-file. Left to path equality, a renamed file arrives as
 an unrelated deletion plus an unrelated addition, and the systematic edits
-inside it produce no rules at all — on one 21-file corpus where 15 files moved,
-that was the difference between 1 rule and 17.
+inside it produce no rules at all.
+
+The effect is total rather than marginal when a codemod moves everything it
+touches. On one module of Apache Pekko's `akka` → `org.apache.pekko` rename
+(131 Scala files, all of them moved — `evaluation/pekko.sh`), path pairing
+yields **zero** rules and 262 whole-file `/dev/null` residuals; the same
+changeset through a manifest yields 3 rules covering 1,029 edits, and the
+residuals shrink to the 131 real ones.
 
 So the pairing is supplied as input. `scripts/diffract-checkout.sh` writes a
 manifest next to the trees it extracts:
@@ -209,8 +215,12 @@ directories can express and wants `--pairs`.
 
 The manifest is also the place to correct a mispairing. Detection is git's, and
 git compares content, so a thoroughly-renamed file scores *lower* — the more
-systematic a codemod, the likelier its renames fall below the default 50%. On
-the corpus above, `-M50%` found 13 of 15 renames and `-M40%` found all 15.
+systematic a codemod, the likelier its renames fall below the default 50%.
+Pekko's rename is mostly path-shaped and survives it (all 131 found at
+`-M50%`), but on a corpus whose renames also rewrote the file contents, `-M50%`
+found 13 of 15 and `-M40%` found all 15. When rules come out thin and
+`/dev/null` residuals appear in pairs, lower the threshold before suspecting
+the pipeline.
 
 ### `--ignore-formatting`
 

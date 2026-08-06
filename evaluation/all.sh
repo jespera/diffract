@@ -5,6 +5,6 @@
 #   ./evaluation/symfony-str.sh > evaluation/symfony-str.baseline   (~3 min/format)
 set -euo pipefail
 dir="$(cd "$(dirname "$0")" && pwd)"
-for c in androidx webxforge sentry-prop-rename sentry-prop-manual finagle; do
+for c in androidx webxforge sentry-prop-rename sentry-prop-manual finagle pekko; do
   "$dir/$c.sh" | tee "$dir/$c.baseline"
 done
