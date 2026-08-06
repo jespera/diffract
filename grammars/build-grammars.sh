@@ -2,8 +2,17 @@
 # Build tree-sitter grammar static libraries
 #
 # Two grammars are pinned to git rather than an npm release (see
-# package.json): tree-sitter-kotlin, which has no usable release, and
-# tree-sitter-scala, pinned to an exact sha for XML-literal support. No
+# package.json), both to an exact sha so a rebuild is reproducible.
+#
+# tree-sitter-kotlin has no usable release — its tags stop at 0.3.8 while the
+# default branch carries 0.4.0 — and the pin matters for correctness, not just
+# features: before it, `internal open class First {}` followed by another
+# declaration parsed as an `infix_expression` with `internal`, `open` and
+# `class` as plain identifiers. A *silent* misparse, with no ERROR node for
+# Tree.unparsed_regions to report, so rule derivation would run against a
+# wrong tree and say nothing. Upstream fixed it in #278/#280.
+#
+# tree-sitter-scala is pinned for XML-literal support. No
 # released tree-sitter-scala parses Scala's XML literals at all (0.24.0, the
 # latest, has no xml rules), and a corpus that uses them parses badly enough
 # to defeat matching entirely — on apache/daffodil, 62 of 312 files carried

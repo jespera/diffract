@@ -166,9 +166,30 @@ let test_is_missing () =
   in
   Alcotest.(check int) "clean parse has none" 0 (count_missing clean.root)
 
+(* Grammar-pin regression. tree-sitter-kotlin before #278/#280 parsed a
+   modifier-led declaration followed by another one as an [infix_expression]
+   whose modifiers were plain identifiers — and did so with NO error node, so
+   [Tree.unparsed_regions] could not report it and rule derivation would run
+   against a wrong tree in silence. A grammar downgrade must fail here rather
+   than quietly change what every Kotlin corpus means. *)
+let test_kotlin_modifier_led_declarations () =
+  let tree =
+    Diffract.parse_tree ~ctx ~language:"kotlin"
+      "internal open class First {}\nclass Second {}\n"
+  in
+  let types =
+    List.map (fun n -> n.Tree.node_type) tree.Tree.root.Tree.named_children
+  in
+  Alcotest.(check (list string))
+    "both are class declarations, not infix expressions"
+    [ "class_declaration"; "class_declaration" ]
+    types
+
 let tests =
   [
     Alcotest.test_case "root node type" `Quick test_root_node_type;
+    Alcotest.test_case "kotlin modifier-led declarations" `Quick
+      test_kotlin_modifier_led_declarations;
     Alcotest.test_case "is_missing on recovery nodes" `Quick test_is_missing;
     Alcotest.test_case "find children" `Quick test_find_children;
     Alcotest.test_case "text extraction" `Quick test_text_extraction;
