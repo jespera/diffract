@@ -148,7 +148,20 @@ let signature (before : string) (after : string) : (string * string) list =
           Buffer.add_string ad w)
     (Lcs.ops (words before) (words after));
   flush ();
+  (* Collapse repeats: a hunk that makes the same edit twice describes the same
+     change as one that makes it once, and keeping the multiplicity splits it
+     into a group of its own ("akka. -> org.apache.pekko." separate from
+     "akka. -> org.apache.pekko.; akka. -> org.apache.pekko."). First-occurrence
+     order is kept, so a hunk doing A then B still differs from one doing only
+     A. Measured: pekko 5 groups to 3, every other corpus unchanged. *)
+  let seen = Hashtbl.create 8 in
   List.rev !segs
+  |> List.filter (fun s ->
+         if Hashtbl.mem seen s then false
+         else begin
+           Hashtbl.add seen s ();
+           true
+         end)
 
 (* Truncate to at most [n] bytes without splitting a UTF-8 sequence. *)
 let ellipsize n s =
