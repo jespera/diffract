@@ -147,17 +147,16 @@ val format_summary : ?sites:[ `Full | `Count ] -> summary -> string
     same data. *)
 val format_summary_json : summary -> string
 
-(** [load_from_dirs ~before_dir ~after_dir ~default_language ()] pairs files
-    under [before_dir] and [after_dir] by relative path. Files only in
-    [before_dir] become [Deleted]; only in [after_dir] become [Added]; differing
-    contents become [Modified]. Extension lookup via [ext_language] (defaults to
-    .tsx/.ts) falls back to [default_language]. *)
+(** [load_from_dirs ~before_dir ~after_dir ~language ()] pairs files under
+    [before_dir] and [after_dir] by relative path. Files only in [before_dir]
+    become [Deleted]; only in [after_dir] become [Added]; differing contents
+    become [Modified]. Every loaded file is tagged with [language]; scope the
+    walk with [include_glob] and run once per language. *)
 val load_from_dirs :
   before_dir:string ->
   after_dir:string ->
   ?include_glob:string option ->
   ?exclude_dirs:string list ->
-  ?ext_language:(string * string) list ->
-  default_language:string ->
+  language:string ->
   unit ->
   changeset

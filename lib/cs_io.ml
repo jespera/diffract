@@ -192,19 +192,10 @@ let format_summary_json (s : summary) : string =
 
 (* ── Filesystem loader ──────────────────────────────────────────── *)
 
-let default_ext_language = [ (".tsx", "tsx"); (".ts", "typescript") ]
-
-let language_of_file path ~default ~ext_language =
-  match
-    List.find_opt (fun (ext, _) -> Filename.check_suffix path ext) ext_language
-  with
-  | Some (_, lang) -> lang
-  | None -> default
-
 let load_from_dirs ~before_dir ~after_dir ?(include_glob = None)
     ?(exclude_dirs =
-      [ "node_modules"; ".git"; "_build"; "target"; "__pycache__" ])
-    ?(ext_language = default_ext_language) ~default_language () : changeset =
+      [ "node_modules"; ".git"; "_build"; "target"; "__pycache__" ]) ~language
+    () : changeset =
   let pred =
     match include_glob with
     | None -> fun _ -> true
@@ -226,7 +217,6 @@ let load_from_dirs ~before_dir ~after_dir ?(include_glob = None)
   let files = ref [] in
   List.iter
     (fun (rel, bpath) ->
-      let lang = language_of_file rel ~default:default_language ~ext_language in
       match Hashtbl.find_opt after_map rel with
       | Some apath ->
           let bsrc = In_channel.with_open_bin bpath In_channel.input_all in
@@ -237,7 +227,7 @@ let load_from_dirs ~before_dir ~after_dir ?(include_glob = None)
               Modified
                 {
                   path = rel;
-                  language = lang;
+                  language;
                   before_source = bsrc;
                   after_source = asrc;
                 }
@@ -245,14 +235,11 @@ let load_from_dirs ~before_dir ~after_dir ?(include_glob = None)
       | None ->
           let bsrc = In_channel.with_open_bin bpath In_channel.input_all in
           files :=
-            Deleted { path = rel; language = lang; before_source = bsrc }
-            :: !files)
+            Deleted { path = rel; language; before_source = bsrc } :: !files)
     before_rel;
   Hashtbl.iter
     (fun rel apath ->
-      let lang = language_of_file rel ~default:default_language ~ext_language in
       let asrc = In_channel.with_open_bin apath In_channel.input_all in
-      files :=
-        Added { path = rel; language = lang; after_source = asrc } :: !files)
+      files := Added { path = rel; language; after_source = asrc } :: !files)
     after_map;
   { files = List.sort compare !files }

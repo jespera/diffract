@@ -696,9 +696,8 @@ let run_summarize before_dir after_dir language include_pattern exclude_patterns
       `Error (false, Printf.sprintf "%s is not a directory" after_dir)
     else if include_pattern = None then
       (* summarize always walks directories, so --include is mandatory: it
-         scopes which files are parsed (with [--language] as the grammar for
-         extensions the loader does not auto-map), instead of silently feeding
-         every walked file to a fallback grammar. *)
+         scopes which files are parsed with the [--language] grammar, instead
+         of silently feeding every walked file to it. *)
       `Error
         ( true,
           "--include is required for summarize (e.g., --include '*.kt'): it \
@@ -708,8 +707,7 @@ let run_summarize before_dir after_dir language include_pattern exclude_patterns
       let changeset =
         phase "load" (fun () ->
             Diffract.Change_summary.load_from_dirs ~before_dir ~after_dir
-              ~include_glob:include_pattern ~exclude_dirs
-              ~default_language:language ())
+              ~include_glob:include_pattern ~exclude_dirs ~language ())
       in
       if verbose then begin
         let m, a, d = count_files changeset in
