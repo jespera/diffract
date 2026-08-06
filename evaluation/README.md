@@ -39,7 +39,7 @@ if build inputs (`lib/`, `bin/`, `grammars/`, `dune-project`) are dirty.
 ## Reading a baseline line
 
 ```
-webxforge  typescript  80 pairs  45 rules  77 residuals  3/80 factored  render/diff 0.30
+webxforge  typescript  80 pairs  43 rules  77 residuals  3/80 factored  render/diff 0.16
 ```
 
 - **pairs** - in-scope file pairs materialized from the commit (only changed
@@ -50,12 +50,20 @@ webxforge  typescript  80 pairs  45 rules  77 residuals  3/80 factored  render/d
   the corpus's raw unified diff. A corpus-local compression ratio (lower is
   better), not a universal MDL metric.
 
+  Since the residual digest landed, the numerator is a *digested* render:
+  moved files collapse into a rename table and repeated hunks into groups. So
+  the ratio now reflects how repetitive the residuals are as well as how well
+  rules factored the change, and it dropped sharply on rename-heavy corpora
+  (pekko 0.38 to 0.01) where it had largely been measuring the same long path
+  repeated in each residual's git header. Numbers are comparable across runs,
+  not across that change.
+
 Timings are printed to stderr only, so they never churn baselines.
 
 A corpus with a holdout (currently `pekko.sh`) adds a second half to the line:
 
 ```
-pekko  scala  131 pairs  3 rules  131 residuals  0/131 factored  render/diff 0.05  holdout 57: 10 exact  45% closed  2 regressed
+pekko  scala  131 pairs  3 rules  131 residuals  86/131 factored  render/diff 0.01  holdout 57: 10 exact  43% closed  2 regressed
 ```
 
 Everything before `holdout` measures how well the rules fit the files they were
