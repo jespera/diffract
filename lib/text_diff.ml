@@ -30,32 +30,14 @@ let generate_diff ?(context = 3) ?keep_hunk ?before_path ~file_path ~original
     Buffer.add_string buf (Printf.sprintf "+++ b/%s\n" file_path);
     let orig_arr = Array.of_list orig_lines in
     let trans_arr = Array.of_list trans_lines in
-    let n = Array.length orig_arr in
-    let m = Array.length trans_arr in
-    let dp = Array.make_matrix (n + 1) (m + 1) 0 in
-    for i = n - 1 downto 0 do
-      for j = m - 1 downto 0 do
-        if orig_arr.(i) = trans_arr.(j) then
-          dp.(i).(j) <- dp.(i + 1).(j + 1) + 1
-        else dp.(i).(j) <- max dp.(i + 1).(j) dp.(i).(j + 1)
-      done
-    done;
-    let ops = ref [] in
-    let i = ref 0 in
-    let j = ref 0 in
-    while !i < n || !j < m do
-      if !i < n && !j < m && orig_arr.(!i) = trans_arr.(!j) then (
-        ops := DKeep orig_arr.(!i) :: !ops;
-        incr i;
-        incr j)
-      else if !i < n && (!j >= m || dp.(!i + 1).(!j) >= dp.(!i).(!j + 1)) then (
-        ops := DRemove orig_arr.(!i) :: !ops;
-        incr i)
-      else (
-        ops := DAdd trans_arr.(!j) :: !ops;
-        incr j)
-    done;
-    let ops = List.rev !ops in
+    let ops =
+      List.map
+        (function
+          | Lcs.Keep l -> DKeep l
+          | Lcs.Remove l -> DRemove l
+          | Lcs.Add l -> DAdd l)
+        (Lcs.ops orig_arr trans_arr)
+    in
     let context_lines = context in
     let ops_arr = Array.of_list ops in
     let n_ops = Array.length ops_arr in
