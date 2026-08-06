@@ -47,6 +47,9 @@ set -euo pipefail
 
 repo="."
 sim=50
+# Pair count above which the changeset is worth a word of warning (see the note
+# printed at the end). Not a limit — the checkout itself is cheap either way.
+big=500
 while getopts "C:M:h" opt; do
   case "$opt" in
     C) repo="$OPTARG" ;;
@@ -145,4 +148,18 @@ done < <(git -C "$repo" diff "-M${sim}%" -z --name-status \
 
 echo "checked out $count changed file(s) into $dest/{before,after}" >&2
 echo "wrote $manifest ($renames rename(s) detected at -M${sim}%)" >&2
+
+# `summarize` holds parsed trees for the whole changeset at once, so both its
+# runtime and its memory grow with the file count — a few hundred pairs is
+# minutes and gigabytes. Whole-repo migrations run to thousands, which is why
+# this script takes pathspecs: say so here rather than letting the user find
+# out from a run that has to be killed.
+if [ "$count" -gt "$big" ]; then
+  echo "note: $count pairs is a large changeset for 'summarize' (expect long" >&2
+  echo "      runtimes and multi-gigabyte memory). Consider narrowing it with a" >&2
+  echo "      pathspec — one module at a time — if a systematic change repeats" >&2
+  echo "      across the tree, a slice shows the same rules for a fraction of" >&2
+  echo "      the cost." >&2
+fi
+
 echo "  diffract summarize --pairs $manifest -l LANG" >&2

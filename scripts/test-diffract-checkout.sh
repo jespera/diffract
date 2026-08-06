@@ -85,6 +85,20 @@ d50="$work/cs50"; d20="$work/cs20"
 check "not a rename at -M50" "$(grep -v '^#' "$d50/pairs.tsv" | awk -F'\t' '$1=="pair"' | wc -l | tr -d ' ')" "0"
 check "rename at -M20"       "$(grep -v '^#' "$d20/pairs.tsv" | awk -F'\t' '$1=="pair" && $2!=$3' | wc -l | tr -d ' ')" "1"
 
+# ── the large-changeset note ─────────────────────────────────────────────
+# summarize's cost grows with the pair count, so the extractor says so past a
+# threshold. The small repo above must stay quiet; a 501-pair one must not.
+echo "large-changeset note"
+check "quiet on a small changeset" \
+  "$("$checkout" -C "$repo" HEAD~1 HEAD "$work/cs-quiet" 2>&1 >/dev/null | grep -c 'large changeset')" "0"
+r3="$work/repo3"; mkdir -p "$r3" && git -C "$r3" init -q .
+for i in $(seq 1 501); do printf 'fun f%d() = 1\n' "$i" > "$r3/f$i.kt"; done
+git_q "$r3" add -A && git_q "$r3" commit -qm before
+for i in $(seq 1 501); do printf 'fun f%d() = 2\n' "$i" > "$r3/f$i.kt"; done
+git_q "$r3" add -A && git_q "$r3" commit -qm after
+check "warns on a large changeset" \
+  "$("$checkout" -C "$r3" HEAD~1 HEAD "$work/cs-big" 2>&1 >/dev/null | grep -c 'large changeset')" "1"
+
 echo "bad input"
 check "rejects non-numeric -M" "$("$checkout" -C "$repo" -M x HEAD~1 HEAD "$work/nope" >/dev/null 2>&1; echo $?)" "2"
 check "rejects a non-repo"     "$("$checkout" -C "$work" HEAD~1 HEAD "$work/nope" >/dev/null 2>&1; echo $?)" "1"
