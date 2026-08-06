@@ -57,7 +57,7 @@ Prefer `--pairs` when the change involves **renames**: see
 | `-e`, `--exclude` | Directory names to skip (repeatable; sensible defaults) |
 | `-v` | Progress and phase timing on stderr |
 | `--ignore-formatting` | Treat formatting as invisible in the residuals (see below) |
-| `--format text\|text-minimal\|json` | Output format (default `text`). `text-minimal` collapses each rule's site list to a one-line file count — a reading mode. `json` emits one object for filtering with `jq` (see [JSON output](#json-output)) |
+| `--format text\|text-minimal\|json` | Output format (default `text`). `text-minimal` is a reading mode: rule site lists collapse to a file count, and residuals are digested into a rename table plus grouped repeated edits. `json` emits one object for filtering with `jq` (see [JSON output](#json-output)) |
 
 ## Output format
 
@@ -261,6 +261,50 @@ noise; re-run with the default format (or use `--format json` and `jq`) to
 drill into where a rule applies. Mixed per-site `after=` annotations are
 elided with the file lines (a uniform `after=` still shows in the rule
 header), so the full `text` format remains the canonical, lossless one.
+
+It does the same for the other half of the output, which is usually the
+larger one — on a rename-heavy corpus the residuals are over 99% of the bytes,
+and most of *those* are the git/path header repeating a long path four to six
+times per file. So residuals are digested three ways:
+
+- **Moved files** collapse into a `# renames` section keyed by the *path* edit,
+  so a systematic move states itself once.
+- **Repeated hunks** are grouped by their edit signature under
+  `# residual-groups`, each with a count, a file count and one real example.
+- **Everything a group doesn't cover** is printed in full, under a one-line
+  header instead of six.
+
+```
+# renames  131 file(s)  1 path edit(s)
+  x131  akka/ -> org/apache/pekko/
+      e.g.  akka-cluster/src/main/scala/akka/cluster/Cluster.scala
+         -> akka-cluster/src/main/scala/org/apache/pekko/cluster/Cluster.scala
+
+# residual-groups  95 of 97 hunk(s), 5 group(s)
+  x58  35 file(s)  akka. -> org.apache.pekko.
+  -    if (settings.DowningProviderClassName == "akka.cluster.AutoDowning" ||
+  +    if (settings.DowningProviderClassName == "org.apache.pekko.cluster.AutoDowning" ||
+  x24  9 file(s)  akka -> pekko
+  - * Each cluster [[Member]] is identified by its [[akka.actor.Address]], and
+  + * Each cluster [[Member]] is identified by its [[pekko.actor.Address]], and
+```
+
+Every hunk appears exactly once — inside a group or printed in full — so the
+counts add up and nothing is silently dropped. Two edits group when their
+*word-level* difference matches, ignoring the code around them; word splitting
+goes inside identifiers (`AcmeWidgetLibraryService` → `Acme|Widget|Library|Service`),
+so one conceptual rename reads as one edit rather than one per name it touches.
+
+The exemplar is not decoration. The same rename often has several renderings —
+pekko writes `akka` as `org/apache/pekko` in paths, `org.apache.pekko` in
+quoted class names and `pekko` in doc comments — and the edits alone read as
+contradictions until you see a line of each.
+
+This is a **description, not a rule**: a group says an edit recurred, not that
+it is safe to apply. Groups routinely cover changes no rule could — comments
+are tree-sitter extras the matcher never visits, and pure insertions have no
+anchor to match on. The canonical `text` format is unaffected and stays
+byte-identical, which is what `git apply` and the round-trip test consume.
 
 ### JSON output
 

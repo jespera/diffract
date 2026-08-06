@@ -144,11 +144,25 @@ val summarize :
   summary
 
 (** [format_summary s] serialises [s] in the [.summary] format defined in §9 of
-    the design doc. [?sites] (default [`Full]) controls the [# sites] blocks:
-    [`Count] replaces each file list with a one-line count
-    ([# sites R1  8 file(s)]) — the CLI's [--format text-minimal], a reading
-    mode; the full text remains the canonical format. *)
-val format_summary : ?sites:[ `Full | `Count ] -> summary -> string
+    the design doc. Two independent knobs turn it into a reading mode; both
+    default to [`Full], which is the canonical format that golden tests, the
+    round-trip test and [git apply] consume.
+
+    [?sites] controls the [# sites] blocks: [`Count] replaces each file list
+    with a one-line count ([# sites R1  8 file(s)]).
+
+    [?residuals] controls the residual section: [`Grouped] collapses moved-file
+    residuals into a [# renames] digest, groups repeated hunks by edit
+    signature under [# residual-groups] (each with an exemplar), and prints
+    only what no group covers — with the six-line git/path header per residual
+    reduced to one. See {!Cs_group}. Both are set by [--format text-minimal],
+    where residuals, not rules, are the bulk: 79,022 of 79,455 bytes on the
+    pekko corpus, 71% of that being repeated path headers. *)
+val format_summary :
+  ?sites:[ `Full | `Count ] ->
+  ?residuals:[ `Full | `Grouped ] ->
+  summary ->
+  string
 
 (** [format_summary_json s] serialises [s] as a single compact JSON object, for
     filtering with tools like [jq]:
