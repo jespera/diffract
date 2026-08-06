@@ -1,0 +1,5 @@
+# residual
+diff --git a/features/legacy/format.ts b/features/current/format.ts
+similarity index 100%
+rename from features/legacy/format.ts
+rename to features/current/format.ts
