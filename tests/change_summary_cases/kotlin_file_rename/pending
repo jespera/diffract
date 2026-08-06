@@ -1,4 +1,0 @@
-rename detection in load_from_dirs: these three files are renamed (directory
-and basename both change), so path-equality pairing sees three Deleted plus
-three Added and the systematic edits inside them produce no rule at all.
-Target above assumes a paired rename reports the AFTER path as the site.

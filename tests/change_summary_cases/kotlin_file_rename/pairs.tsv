@@ -1,0 +1,5 @@
+# a codemod that moved these files AND renamed them; two directory trees
+# cannot state that pairing, so the case supplies it explicitly.
+pair	legacy/LegacyAlpha.kt	current/Alpha.kt
+pair	legacy/LegacyBeta.kt	current/Beta.kt
+pair	legacy/LegacyGamma.kt	current/Gamma.kt

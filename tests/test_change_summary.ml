@@ -252,16 +252,25 @@ let case_language case_dir =
       (Printf.sprintf "missing required file: %s (one language per line)" p)
   else String.trim (read_file p)
 
+(** Load a case's changeset. A case dir may carry a [pairs.tsv] manifest instead
+    of relying on path equality — that is the only input able to state a rename,
+    so rename cases must go through it. *)
+let load_case case_dir ~language =
+  let manifest = Filename.concat case_dir "pairs.tsv" in
+  if Sys.file_exists manifest then
+    Change_summary.load_from_pairs ~manifest ~language ()
+  else
+    Change_summary.load_from_dirs
+      ~before_dir:(Filename.concat case_dir "before")
+      ~after_dir:(Filename.concat case_dir "after")
+      ~language ()
+
 let run_case case_name () =
   let case_dir = Filename.concat cases_dir case_name in
-  let before_dir = Filename.concat case_dir "before" in
-  let after_dir = Filename.concat case_dir "after" in
   let expected_path = Filename.concat case_dir "expected.summary" in
   let language = case_language case_dir in
   let ctx = Context.create () in
-  let changeset =
-    Change_summary.load_from_dirs ~before_dir ~after_dir ~language ()
-  in
+  let changeset = load_case case_dir ~language in
   let summary = Change_summary.summarize ~ctx changeset in
   let actual = Change_summary.format_summary summary in
   let expected = read_file expected_path in
@@ -326,13 +335,9 @@ let rule_id_num (r : Change_summary.rule) =
 
 let roundtrip_case case_name () =
   let case_dir = Filename.concat cases_dir case_name in
-  let before_dir = Filename.concat case_dir "before" in
-  let after_dir = Filename.concat case_dir "after" in
   let language = case_language case_dir in
   let ctx = Context.create () in
-  let changeset =
-    Change_summary.load_from_dirs ~before_dir ~after_dir ~language ()
-  in
+  let changeset = load_case case_dir ~language in
   let summary = Change_summary.summarize ~ctx changeset in
   let residual_for path =
     List.find_opt
@@ -391,13 +396,9 @@ let roundtrip_case case_name () =
 
 let test_one_sided_extraction () =
   let case_dir = Filename.concat cases_dir "import_removal" in
-  let before_dir = Filename.concat case_dir "before" in
-  let after_dir = Filename.concat case_dir "after" in
   let language = case_language case_dir in
   let ctx = Context.create () in
-  let changeset =
-    Change_summary.load_from_dirs ~before_dir ~after_dir ~language ()
-  in
+  let changeset = load_case case_dir ~language in
   let candidates = Change_summary.collect_one_sided_candidates ~ctx changeset in
   let instances =
     List.map Change_summary.one_sided_candidate_instance candidates

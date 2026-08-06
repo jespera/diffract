@@ -11,6 +11,24 @@ match: strict
 - legacy
 + current
 # sites R1
-current/Alpha.kt
-current/Beta.kt
-current/Gamma.kt
+legacy/LegacyAlpha.kt
+legacy/LegacyBeta.kt
+legacy/LegacyGamma.kt
+
+# residual  rule=R1
+diff --git a/legacy/LegacyAlpha.kt b/current/Alpha.kt
+similarity index 100%
+rename from legacy/LegacyAlpha.kt
+rename to current/Alpha.kt
+
+# residual  rule=R1
+diff --git a/legacy/LegacyBeta.kt b/current/Beta.kt
+similarity index 100%
+rename from legacy/LegacyBeta.kt
+rename to current/Beta.kt
+
+# residual  rule=R1
+diff --git a/legacy/LegacyGamma.kt b/current/Gamma.kt
+similarity index 100%
+rename from legacy/LegacyGamma.kt
+rename to current/Gamma.kt
