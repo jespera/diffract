@@ -43,7 +43,7 @@ once per language/extension set (e.g. `-l kotlin -i '*.kt'`, then
 
 | Flag | Meaning |
 |------|---------|
-| `-l`, `--language` | **Required.** Grammar for files whose extension isn't auto-detected; `.ts`/`.tsx` are always auto-detected by extension |
+| `-l`, `--language` | **Required.** Grammar used for every file `--include` selects |
 | `-i`, `--include` | **Required.** Glob for files to scan (e.g. `'*.kt'`) |
 | `-e`, `--exclude` | Directory names to skip (repeatable; sensible defaults) |
 | `-v` | Progress and phase timing on stderr |

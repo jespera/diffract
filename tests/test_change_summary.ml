@@ -257,10 +257,10 @@ let run_case case_name () =
   let before_dir = Filename.concat case_dir "before" in
   let after_dir = Filename.concat case_dir "after" in
   let expected_path = Filename.concat case_dir "expected.summary" in
-  let default_language = case_language case_dir in
+  let language = case_language case_dir in
   let ctx = Context.create () in
   let changeset =
-    Change_summary.load_from_dirs ~before_dir ~after_dir ~default_language ()
+    Change_summary.load_from_dirs ~before_dir ~after_dir ~language ()
   in
   let summary = Change_summary.summarize ~ctx changeset in
   let actual = Change_summary.format_summary summary in
@@ -328,10 +328,10 @@ let roundtrip_case case_name () =
   let case_dir = Filename.concat cases_dir case_name in
   let before_dir = Filename.concat case_dir "before" in
   let after_dir = Filename.concat case_dir "after" in
-  let default_language = case_language case_dir in
+  let language = case_language case_dir in
   let ctx = Context.create () in
   let changeset =
-    Change_summary.load_from_dirs ~before_dir ~after_dir ~default_language ()
+    Change_summary.load_from_dirs ~before_dir ~after_dir ~language ()
   in
   let summary = Change_summary.summarize ~ctx changeset in
   let residual_for path =
@@ -392,10 +392,10 @@ let test_one_sided_extraction () =
   let case_dir = Filename.concat cases_dir "import_removal" in
   let before_dir = Filename.concat case_dir "before" in
   let after_dir = Filename.concat case_dir "after" in
-  let default_language = case_language case_dir in
+  let language = case_language case_dir in
   let ctx = Context.create () in
   let changeset =
-    Change_summary.load_from_dirs ~before_dir ~after_dir ~default_language ()
+    Change_summary.load_from_dirs ~before_dir ~after_dir ~language ()
   in
   let candidates = Change_summary.collect_one_sided_candidates ~ctx changeset in
   let instances =

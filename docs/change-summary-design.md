@@ -2033,10 +2033,9 @@ only in `after/` is an addition. The runner registers one Alcotest case per
 folder, named by `<case_name>`.
 
 The `language` file contains a single language name (e.g. `typescript`,
-`kotlin`, `php`) used as the *default* when a file's extension is not in
-the extension→language map (`.ts` → typescript, `.tsx` → tsx). The file
-is required even when every file has a mapped extension — explicit
-declaration prevents silent misconfiguration.
+`kotlin`, `php`) used as the grammar for every file in the case — there
+is no extension-based detection; the language is always declared
+explicitly.
 
 ## 10. Related work
 
