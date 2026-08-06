@@ -22,8 +22,8 @@
 # Expressiveness note. The conceptual ground truth is one rename, `akka` →
 # `org.apache.pekko`, but the changed text lives *below* the leaf (inside
 # identifiers, string literals and doc comments), which node-granular
-# anti-unification cannot generalize over. Hence the residual tail; see
-# docs/subtoken-rename-generalization.md.
+# anti-unification cannot generalize over. Hence the residual tail: it is a
+# known expressiveness gap, not noise.
 #
 # The two known holdout regressions are diagnosed, not mysterious. The real
 # codemod rewrites imports in two ways depending on the file: fully qualified
