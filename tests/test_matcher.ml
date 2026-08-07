@@ -627,6 +627,87 @@ let test_transform_plus_spread_untouched () =
   let out = transform ~language:"typescript" ~pattern ~source:"g(x);" in
   Alcotest.(check string) "spread emitted verbatim" "f(...args);" out
 
+(* A [+]-only hunk whose anchor sits at a line boundary is spliced as whole
+   lines — own line, newline-terminated, indented like the deeper of the two
+   neighbouring lines — instead of glued onto the closing delimiter. The
+   append-before-closer form (the spartacus standalone-flag shape). *)
+let test_transform_insert_append_before_closer () =
+  let pattern =
+    "@@\nmatch: strict\n@@\n @Component({\n ...\n+ standalone: false,\n })"
+  in
+  let source =
+    "@Component({\n  selector: 'cx-card',\n  template: '',\n})\nclass C {}\n"
+  in
+  let out = transform ~language:"typescript" ~pattern ~source in
+  Alcotest.(check string)
+    "inserted as its own indented line"
+    "@Component({\n\
+    \  selector: 'cx-card',\n\
+    \  template: '',\n\
+    \  standalone: false,\n\
+     })\n\
+     class C {}\n"
+    out
+
+(* The prepend mirror: a [+] line directly after the opening line lands at
+   the start of the first element's line, indented like it. *)
+let test_transform_insert_prepend_after_opener () =
+  let pattern =
+    "@@\nmatch: strict\n@@\n @Component({\n+ standalone: false,\n ...\n })"
+  in
+  let source = "@Component({\n  selector: 'x',\n})\nclass C {}\n" in
+  let out = transform ~language:"typescript" ~pattern ~source in
+  Alcotest.(check string)
+    "inserted before the first element"
+    "@Component({\n  standalone: false,\n  selector: 'x',\n})\nclass C {}\n"
+    out
+
+(* A multi-line [+] block keeps its relative indentation: the block's common
+   indent is stripped and the inferred indent prefixed, so how far the author
+   indented under the pattern's margin doesn't leak into the output. *)
+let test_transform_insert_multiline_block_reindented () =
+  let pattern =
+    "@@\nmatch: strict\n@@\n register({\n ...\n+ deps: [\n+   core,\n+ ],\n })"
+  in
+  let source = "register({\n  name: 'svc',\n});\n" in
+  let out = transform ~language:"typescript" ~pattern ~source in
+  Alcotest.(check string)
+    "block reindented, relative structure kept"
+    "register({\n  name: 'svc',\n  deps: [\n    core,\n  ],\n});\n" out
+
+(* An inline anchor (one-line container) keeps the tight zero-width splice:
+   no line rendering, the author owns the separators. *)
+let test_transform_insert_inline_stays_tight () =
+  let pattern = "@@\nmatch: strict\n@@\n cfg({\n ...\n+ b: 2,\n })" in
+  let source = "cfg({ a: 1, });\n" in
+  let out = transform ~language:"typescript" ~pattern ~source in
+  Alcotest.(check string) "tight splice" "cfg({ a: 1, b: 2,});\n" out
+
+(* Same line rendering through a non-TS grammar (kotlin call arguments). *)
+let test_transform_insert_kotlin_append () =
+  let pattern = "@@\nmatch: strict\n@@\n configure(\n ...\n+ timeout,\n )" in
+  let source = "configure(\n    host,\n    port,\n)\n" in
+  let out = transform ~language:"kotlin" ~pattern ~source in
+  Alcotest.(check string)
+    "kotlin argument appended on its own line"
+    "configure(\n    host,\n    port,\n    timeout,\n)\n" out
+
+(* A [+] line between two `...` lines has no anchor — the split between the
+   two captured runs is arbitrary, so the insertion point would be too.
+   Rejected at compile rather than silently placed. *)
+let test_transform_insert_between_ellipses_rejected () =
+  let raises pattern =
+    try
+      ignore
+        (transform ~language:"typescript" ~pattern
+           ~source:"f({ a: 1, b: 2 });");
+      false
+    with Failure _ -> true
+  in
+  Alcotest.(check bool)
+    "+ between two ... rejected" true
+    (raises "@@\nmatch: strict\n@@\n f({\n ...\n+ x: 1,\n ...\n })")
+
 (* Adjacent matches are each rewritten once (non-overlapping). *)
 let test_transform_adjacent_matches () =
   let pattern = "@@\nmatch: strict\nmetavar $x: single\n@@\n- wrap($x)\n+ $x" in
@@ -1959,6 +2040,15 @@ let test_pattern_warnings () =
     "strict transform does not warn" false
     (nonempty "@@\nmatch: strict\nmetavar $x: single\n@@\n- foo($x)\n+ bar($x)");
   Alcotest.(check bool)
+    "markerless '+' line warns" true
+    (nonempty "@@\nmatch: strict\n@@\n f({\n ...\n+standalone,\n })");
+  Alcotest.(check bool)
+    "markerless '-' in a transform warns" true
+    (nonempty "@@\nmatch: strict\n@@\n-old()\n+ renamed()");
+  Alcotest.(check bool)
+    "column-0 '-' in a pure-match body does not warn" false
+    (nonempty "@@\nmatch: strict\n@@\n-x < y");
+  Alcotest.(check bool)
     "partial match-only guard does not warn" false
     (nonempty "@@\nmatch: partial\nmetavar $V: single\n@@\n{ color: $V }");
   Alcotest.(check bool)
@@ -2389,6 +2479,18 @@ let tests =
       test_transform_minus_inline_ellipsis_drops_run;
     test_case "transform: + spread untouched" `Quick
       test_transform_plus_spread_untouched;
+    test_case "transform: insertion appended before closer on its own line"
+      `Quick test_transform_insert_append_before_closer;
+    test_case "transform: insertion prepended after opener" `Quick
+      test_transform_insert_prepend_after_opener;
+    test_case "transform: multi-line insertion block reindented" `Quick
+      test_transform_insert_multiline_block_reindented;
+    test_case "transform: inline insertion stays tight" `Quick
+      test_transform_insert_inline_stays_tight;
+    test_case "transform: kotlin insertion appended" `Quick
+      test_transform_insert_kotlin_append;
+    test_case "transform: + between two ... rejected" `Quick
+      test_transform_insert_between_ellipses_rejected;
     test_case "transform: adjacent matches" `Quick
       test_transform_adjacent_matches;
     test_case "transform: placeholder boundary" `Quick

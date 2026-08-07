@@ -560,11 +560,37 @@ let compile_hunks ~ctx ~language ~single_metavars ~sequence_metavars body =
   flush ~next_tok:None;
   (tokens, List.rev !hunks)
 
+(* A pure insertion is anchored to the context token next to it. Flanked by
+   ellipses on both sides ("somewhere in the middle of the captured runs")
+   there is no such token: the boundary between two adjacent [...] runs is not
+   determined by the match, so the insertion point would be arbitrary. Reject
+   the form rather than pick a position silently. *)
+let validate_insertion_anchors tokens hunks =
+  let arr = Array.of_list tokens in
+  let anchors = function
+    | Some i when i >= 0 && i < Array.length arr -> (
+        match arr.(i) with Stmatch.Siblings _ -> false | _ -> true)
+    | _ -> false
+  in
+  List.iter
+    (fun h ->
+      if h.del_idxs = [] && h.add <> None && (not (anchors h.prev_tok))
+         && not (anchors h.next_tok)
+      then
+        failwith
+          "a '+' insertion between two '...' lines has no anchor: the split \
+           between the two captured runs is arbitrary, so the insertion \
+           point would be too. Anchor the '+' line to a concrete neighbour — \
+           directly after the opening delimiter/head or directly before the \
+           closing delimiter.")
+    hunks
+
 let compile_section ~ctx ~language section =
   let tokens, hunks =
     compile_hunks ~ctx ~language ~single_metavars:section.single_metavars
       ~sequence_metavars:section.sequence_metavars section.body
   in
+  validate_insertion_anchors tokens hunks;
   if section.mode = Partial then check_partial_is_container tokens;
   let replace =
     match replace_side section.body with
@@ -1008,7 +1034,37 @@ let mode_name = function
    or a [foreach] scope is exempt. *)
 let pattern_warnings pattern_text =
   let p = parse_pattern pattern_text in
-  List.filter_map
+  (* A body line starting with '+'/'-' but no space after it is treated as
+     context (the marker needs the space), which silently turns an intended
+     edit line into pattern text — typically ending in "No matches found".
+     Warn on '+' always ('+expr' at column 0 is not something one writes as
+     context); warn on '-' only in a section that already has real edit
+     lines, since a column-0 '-expr' in a pure-match body is plausibly a
+     negated expression. *)
+  let marker_typos =
+    List.concat
+      (List.map
+         (fun (s : section) ->
+           let is_transform = replace_side s.body <> None in
+           List.filter_map
+             (fun line ->
+               let len = String.length line in
+               let markerless c = len >= 2 && line.[0] = c && line.[1] <> ' ' in
+               if markerless '+' || (is_transform && markerless '-') then
+                 Some
+                   (Printf.sprintf
+                      "warning: the line %S starts with '%c' but has no space \
+                       after it, so it is read as context, not as an edit \
+                       marker. Write \"%c %s\" for an edit line, or indent \
+                       the line with a leading space for context."
+                      line line.[0] line.[0]
+                      (String.sub line 1 (len - 1)))
+               else None)
+             (String.split_on_char '\n' s.body))
+         p.sections)
+  in
+  marker_typos
+  @ List.filter_map
     (fun (s : section) ->
       let is_transform = replace_side s.body <> None in
       let is_foreach = match s.scope with Foreach _ -> true | _ -> false in
@@ -1266,6 +1322,86 @@ let element_cleanup source lo hi =
       end
   end
 
+(* Render a pure insertion at [pos]. When [pos] sits at a line boundary —
+   nothing but horizontal whitespace between it and an adjacent newline — the
+   [+] block was written as whole lines and is spliced as whole lines: at the
+   start of the line [pos] belongs to (or of the following line), each
+   inserted line newline-terminated and indented like the deeper of the two
+   neighbouring lines, relative indentation within the block preserved. The
+   block's own common indentation is stripped first, so how far the author
+   indented the [+] lines under the pattern's margin doesn't leak into the
+   output. An inline position (a one-line container) keeps the tight
+   zero-width splice of the raw template text. *)
+let render_insertion source pos repl =
+  let len = String.length source in
+  let is_hspace c = c = ' ' || c = '\t' in
+  let back = ref pos in
+  while !back > 0 && is_hspace source.[!back - 1] do
+    decr back
+  done;
+  let splice_at =
+    if !back = 0 || source.[!back - 1] = '\n' then Some !back
+    else begin
+      let f = ref pos in
+      while !f < len && is_hspace source.[!f] do
+        incr f
+      done;
+      let f = if !f < len && source.[!f] = '\r' then !f + 1 else !f in
+      if f < len && source.[f] = '\n' then Some (f + 1) else None
+    end
+  in
+  match splice_at with
+  | None -> (pos, repl)
+  | Some at ->
+      let indent_of_line_starting i =
+        let j = ref i in
+        while !j < len && is_hspace source.[!j] do
+          incr j
+        done;
+        String.sub source i (!j - i)
+      in
+      let prev_indent =
+        if at = 0 then ""
+        else begin
+          let s = ref (at - 1) in
+          while !s > 0 && source.[!s - 1] <> '\n' do
+            decr s
+          done;
+          indent_of_line_starting !s
+        end
+      in
+      let next_indent = if at < len then indent_of_line_starting at else "" in
+      let indent =
+        if String.length prev_indent >= String.length next_indent then
+          prev_indent
+        else next_indent
+      in
+      let lines = String.split_on_char '\n' repl in
+      let hprefix_len l =
+        let n = String.length l in
+        let j = ref 0 in
+        while !j < n && is_hspace l.[!j] do
+          incr j
+        done;
+        !j
+      in
+      let common =
+        List.fold_left
+          (fun acc l ->
+            if String.trim l = "" then acc else min acc (hprefix_len l))
+          max_int lines
+      in
+      let common = if common = max_int then 0 else common in
+      let rendered =
+        lines
+        |> List.map (fun l ->
+            if String.trim l = "" then "\n"
+            else
+              indent ^ String.sub l common (String.length l - common) ^ "\n")
+        |> String.concat ""
+      in
+      (at, rendered)
+
 let surgical_edits ~list_context hunks (m : M.match_result) seq_renderings
     source =
   let delete_cleanup = if list_context then element_cleanup else line_cleanup in
@@ -1349,7 +1485,8 @@ let surgical_edits ~list_context hunks (m : M.match_result) seq_renderings
                     | Some i when valid (span_of i) -> fst (span_of i)
                     | _ -> m.start_byte)
               in
-              Some { start_byte = pos; end_byte = pos; replacement = repl }))
+              let at, rendered = render_insertion source pos repl in
+              Some { start_byte = at; end_byte = at; replacement = rendered }))
     hunks
 
 (* The edits a composite contributes. For a match that recorded per-token
