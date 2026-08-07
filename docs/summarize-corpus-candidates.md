@@ -59,6 +59,17 @@ One per language:
   - #114732 `a1d7ade4da448bb6a9afff9afa7dbb19973a44ab` — settings/alerts/
     remaining views.
 
+- **SAP/spartacus** `53674c5745b8dbb7a3cd9fdfcaa7246636e9713f` (TypeScript) —
+  **adopted**, see `evaluation/spartacus-standalone.sh`. The official Angular
+  v19 update schematic (`explicit-standalone-flag`, source in angular/angular
+  at tag 19.0.0) inserting `standalone: false,` into `@Component/@Directive/
+  @Pipe({...})` decorator literals: 916 `.ts` files, 1,205 insertions, and in
+  the `feature-libs/cart` derivation slice *every* diff line is the same
+  insertion (91 sites / 64 files, zero ride-along). The insertion corpus: a
+  pure-insertion rule set with tool ground truth, currently a known-fail
+  baseline (pure inserts are not proposed), with `feature-libs/order` as the
+  holdout. Found 2026-08-07 while hunting insertion-primary codemods.
+
 ## Tier 2 — richer single-source commits
 
 - **getsentry/sentry** `c2964b540b4d9d7ca4094741ab2836e29056529d` —

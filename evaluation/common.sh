@@ -208,8 +208,11 @@ if [ -n "$HOLDOUT_GLOB" ]; then
   while IFS= read -r a; do
     b=$(after_path "$H" "$a")
     HELD=$((HELD + 1))
-    d0=$( (diff -u "$H/before/$a"  "$H/after/$b" || true) | wc -c)
-    d1=$( (diff -u "$H/applied/$a" "$H/after/$b" || true) | wc -c)
+    # Fixed --label headers: the real header paths differ in length
+    # ("before/" vs "applied/"), which otherwise counts as one byte of
+    # spurious regression on every file a rule never touched.
+    d0=$( (diff -u --label x --label y "$H/before/$a"  "$H/after/$b" || true) | wc -c)
+    d1=$( (diff -u --label x --label y "$H/applied/$a" "$H/after/$b" || true) | wc -c)
     HG0=$((HG0 + d0)); HG1=$((HG1 + d1))
     if cmp -s "$H/applied/$a" "$H/after/$b"; then HEXACT=$((HEXACT + 1)); fi
     if [ "$d1" -gt "$d0" ]; then
