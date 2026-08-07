@@ -52,10 +52,10 @@ let rec subtree_has_structural (cc : Tree_diff.child_change list) =
 (** Emit change pairs at every [Replaced] leaf and at {e every} [Modified]
     ancestor along each change chain — deliberately unfiltered (see the
     rejected-gates note inside [collect_change_pairs_multi]): downstream
-    applicability, coherence, and the safety gate discard unworkable levels,
-    and {!Cs_config.dendrogram_bucket_cap} bounds clustering cost at corpus
-    scale. Byte-range deduplication prevents duplicate ancestor emissions
-    when multiple descendant chains meet at the same ancestor. *)
+    applicability, coherence, and the safety gate discard unworkable levels, and
+    {!Cs_config.dendrogram_bucket_cap} bounds clustering cost at corpus scale.
+    Byte-range deduplication prevents duplicate ancestor emissions when multiple
+    descendant chains meet at the same ancestor. *)
 let rec subtree_hashes (n : Tree.src Tree.t) (acc : int list) : int list =
   List.fold_left
     (fun a (c : Tree.src Tree.child) -> subtree_hashes c.node a)
@@ -98,8 +98,8 @@ let extraction_pairs (child_changes : Tree_diff.child_change list) :
         addeds)
     removeds
 
-let collect_change_pairs_multi (d : Tree_diff.diff) :
-    Tree_diff.change_pair list =
+let collect_change_pairs_multi (d : Tree_diff.diff) : Tree_diff.change_pair list
+    =
   let out = ref [] in
   let emitted : (int * int, unit) Hashtbl.t = Hashtbl.create 16 in
   let emit (b : Tree.src Tree.t) (a : Tree.src Tree.t) =
@@ -371,15 +371,31 @@ let delta_keyed_pair (cp : Tree_diff.change_pair) : edit_pat option =
     as [-] lines between the context ellipses, so the separator is deleted
     explicitly rather than by cleanup magic.
 
+    The mirror one-sided case — a contiguous after-side run with nothing
+    unmatched on the before side — is an INSERTION into the list. Two
+    asymmetries with deletion: the run renders as [+] lines whose text IS the
+    output (a deletion's [-] spans delete source bytes, so its line split never
+    shows), so the whole run — element plus separator — is glued onto one [+]
+    line; and a [+] line is only anchorable next to a concrete token (the
+    matcher rejects one flanked by two [...] runs), so both sides get a SINGLE
+    ellipsis and only edge positions qualify: a run adjacent to the closer
+    renders [{ ... + X, }], one adjacent to the opener/head [{ + X, ... }].
+    Mid-list runs return [None] — their position inside the captured run would
+    be arbitrary — and the change stays residual.
+
     Returns [None] (caller falls back to the concrete form) unless the bracket
     shape holds and the unmatched children form exactly one changed child on
-    each side (rewrite) or one contiguous before-side run with a named member
-    (deletion). *)
+    each side (rewrite), one contiguous before-side run with a named member
+    (deletion), or one contiguous edge-positioned after-side run with a named
+    member (insertion — [Lv_insertion] carries the before-side anchor byte, the
+    level-independent site identity of a change with no before span). *)
+type level_form = Lv_rewrite | Lv_deletion | Lv_insertion of int
+
 let ellipsize_level (bn : Tree.src Tree.t) (an : Tree.src Tree.t)
     (b_assign : (Tree.src Tree.child * int option) list)
     (aks : Tree.src Tree.child list) (used : bool array)
     (b_children : pat_child list) (a_children : pat_child list) :
-    (pat_node * pat_node) option =
+    (pat_node * pat_node * level_form) option =
   let closer_of = function
     | '(' -> ')'
     | '[' -> ']'
@@ -481,6 +497,38 @@ let ellipsize_level (bn : Tree.src Tree.t) (an : Tree.src Tree.t)
             template;
           }
       in
+      (* Insertion variant: ONE ellipsis on each side (a [+] line between two
+         [...] runs is unanchorable and the matcher rejects it), the run's
+         children glued onto one line ([+] text is output text — the
+         separator belongs on the element's line, [+ standalone: false,]). *)
+      let mk_ins (node : Tree.src Tree.t) open_c heads ~prepend mids close_c =
+        let nheads = List.length heads in
+        let ell = { field_name = None; child = Ellipsis } in
+        let children =
+          if prepend then ((open_c :: heads) @ mids) @ [ ell; close_c ]
+          else ((open_c :: heads) @ (ell :: mids)) @ [ close_c ]
+        in
+        let nmids = List.length mids in
+        let mid_first = if prepend then 1 + nheads else 2 + nheads in
+        let template =
+          List.concat
+            (List.mapi
+               (fun i _ ->
+                 if i = 0 then [ Slot 0 ]
+                 else if i <= nheads then [ Slot i ] (* glued: [<Button] *)
+                 else if i > mid_first && i < mid_first + nmids then [ Slot i ]
+                   (* the run glues onto its first child's line *)
+                 else [ Lit "\n"; Slot i ])
+               children)
+        in
+        PNode
+          {
+            node_type = node.node_type;
+            is_named = node.is_named;
+            children;
+            template;
+          }
+      in
       let b_heads = if head_kept then [ bc.(1) ] else [] in
       let a_heads = if head_kept then [ ac.(1) ] else [] in
       match (unmatched_b, unmatched_a) with
@@ -488,7 +536,8 @@ let ellipsize_level (bn : Tree.src Tree.t) (an : Tree.src Tree.t)
         ->
           Some
             ( mk bn bc.(0) b_heads [ bc.(bi) ] bc.(nb - 1),
-              mk an ac.(0) a_heads [ ac.(ai) ] ac.(na - 1) )
+              mk an ac.(0) a_heads [ ac.(ai) ] ac.(na - 1),
+              Lv_rewrite )
       | (_ :: _ as bis), []
         when contiguous bis
              && List.exists (fun i -> (fst ba.(i)).node.is_named) bis ->
@@ -497,13 +546,60 @@ let ellipsize_level (bn : Tree.src Tree.t) (an : Tree.src Tree.t)
              [-] lines (so the separator is deleted explicitly, no cleanup
              magic), the after side is the same list with only the ellipses:
              [{ ... - DestroyRef - , ... }]. Pure-separator runs are junk,
-             not a deletion — require a named child. Insertions (an
-             after-side-only run) stay un-anchorable (§5.5). *)
+             not a deletion — require a named child. *)
           Some
             ( mk bn bc.(0) b_heads (List.map (fun i -> bc.(i)) bis) bc.(nb - 1),
-              mk an ac.(0) a_heads [] ac.(na - 1) )
+              mk an ac.(0) a_heads [] ac.(na - 1),
+              Lv_deletion )
+      | [], (_ :: _ as ais) when List.exists (fun i -> aa.(i).node.is_named) ais
+        -> (
+          (* Insertion of a run, edge positions only. The child matcher
+             pairs equal separators greedily, so an inserted [x ,] run can
+             surface as {content at the edge, freed separator at the far
+             end}. What the list actually gained is the contiguous edge
+             span whose children — as a multiset of structural hashes —
+             equal the unmatched set; rebuild the run as that span
+             (separators are textually interchangeable, and the safety
+             gate still requires byte-exact reproduction). The before-side
+             anchor byte — end of the opener for a prepend, end of the
+             last child before the closer for an append — is the change's
+             level-independent identity: the same insertion seen from
+             every Modified ancestor pools on it. *)
+          let n = List.length ais in
+          let hashes idxs =
+            List.sort compare (List.map (fun i -> aa.(i).node.Tree.hash) idxs)
+          in
+          let u = hashes ais in
+          let span_from lo = List.init n (fun k -> lo + k) in
+          let pre_lo = 1 + List.length a_heads in
+          let app_lo = na - 1 - n in
+          let pick =
+            if pre_lo + n - 1 <= na - 2 && hashes (span_from pre_lo) = u then
+              Some (span_from pre_lo, true)
+            else if app_lo >= pre_lo && hashes (span_from app_lo) = u then
+              Some (span_from app_lo, false)
+            else None
+          in
+          match pick with
+          | None -> None
+          | Some (ais, prepend) ->
+              let anchor =
+                if prepend then (fst ba.(0)).node.end_byte
+                else (fst ba.(nb - 2)).node.end_byte
+              in
+              let mids = List.map (fun i -> ac.(i)) ais in
+              Some
+                ( mk_ins bn bc.(0) b_heads ~prepend [] bc.(nb - 1),
+                  mk_ins an ac.(0) a_heads ~prepend mids ac.(na - 1),
+                  Lv_insertion anchor ))
       | _ -> None
     end
+
+(* The 4th component marks an insertion-form variant (the chain ended in an
+   ellipsis-context insertion): those are GENERAL candidates — one arity-free
+   text shared by every site, the opposite of a site-local anchored
+   realisation — and the caller routes them to the delta-keyed round-1
+   channel instead of the anchored round-2 stream. *)
 
 (** Anchored lattice-descent variants (§3.2): the pair's own preserved children
     stay CONCRETE — they are the anchor that discriminates a context-dependent
@@ -520,7 +616,7 @@ let ellipsize_level (bn : Tree.src Tree.t) (an : Tree.src Tree.t)
     [::X ⤳ ::Y] case, where the anchor is pure structure); deeper hole-free
     variants are just the concrete base pair again. *)
 let anchored_variants (cp : Tree_diff.change_pair) :
-    (edit_pat * string * (int * int)) list =
+    (edit_pat * string * (int * int) * bool) list =
   let pnode_shaped source (n : Tree.src Tree.t) =
     n.children <> []
     && (not (has_silent_concrete_delimiters ~source ~node:n))
@@ -679,6 +775,7 @@ let anchored_variants (cp : Tree_diff.change_pair) :
     next_hole := 0;
     let sel = ref selector0 in
     let b_delta = ref [] and a_delta = ref [] in
+    let ins_form = ref false in
     let all_leaves = ref true in
     (* Byte span of the delta — the identity of the CHANGE itself,
        shared by this change's anchored variants at every ancestor
@@ -775,12 +872,42 @@ let anchored_variants (cp : Tree_diff.change_pair) :
       | Some _, None -> ());
       let hole_of_a = Array.make (List.length aks) None in
       let inner_ap = ref None in
+      (* Descend FIRST: whether the chain below ends in an insertion form
+         ([ins_form]) decides how this level treats its preserved named
+         children. An insertion has no before-side delta — its entire match
+         power is context — so holing the single head-shaped sibling of the
+         descended child (a call's callee, a decorator's name) would erase
+         exactly the anchor the rule needs (and [has_concrete] then rightly
+         kills the anchorless [_H0(...)] form). A level with one preserved
+         named child keeps it concrete on insertion chains; levels with more
+         (statement lists, declaration headers) hole as usual — keeping many
+         siblings concrete would bake the site's surroundings into the
+         pattern. *)
+      let descended =
+        match descend with
+        | Some (ub, ai, ua) ->
+            let bp, ap = level ~holed_preserved:true ub ua in
+            inner_ap := Some ap;
+            hole_of_a.(ai) <- None;
+            Some (ub, bp)
+        | None -> None
+      in
+      let preserved_named =
+        List.length
+          (List.filter
+             (fun ((c : Tree.src Tree.child), m) ->
+               m <> None && c.node.is_named)
+             b_assign)
+      in
+      let keep_head_anchor = !ins_form && preserved_named = 1 in
       let b_children =
         List.map
           (fun ((c : Tree.src Tree.child), m) ->
             let child =
               match m with
-              | Some i when c.node.is_named && holed_preserved ->
+              | Some i
+                when c.node.is_named && holed_preserved && not keep_head_anchor
+                ->
                   (* Shared structure: the after side reuses the same
                      pat_node, so its holes carry the same indices. *)
                   let hp = hole_subtree cp.before_source c.node in
@@ -791,12 +918,8 @@ let anchored_variants (cp : Tree_diff.change_pair) :
                   hole_of_a.(i) <- Some (of_src cp.after_source ac.node);
                   of_src cp.before_source c.node
               | None -> (
-                  match descend with
-                  | Some (ub, ai, ua) when ub == c.node ->
-                      let bp, ap = level ~holed_preserved:true ub ua in
-                      inner_ap := Some ap;
-                      hole_of_a.(ai) <- None;
-                      bp
+                  match descended with
+                  | Some (ub, bp) when ub == c.node -> bp
                   | _ -> (
                       match Hashtbl.find_opt b_sibling c.node with
                       | Some hp -> hp
@@ -847,7 +970,18 @@ let anchored_variants (cp : Tree_diff.change_pair) :
       if not ellipsis_lists then concrete_level ()
       else
         match ellipsize_level bn an b_assign aks used b_children a_children with
-        | Some pair -> pair
+        | Some (bp, ap, form) ->
+            (match form with
+            | Lv_insertion anchor ->
+                (* The insertion's before-side anchor byte doubles as the
+                   delta span: a pure insertion has no before-side delta
+                   bytes, and the anchor point is the identity shared by
+                   this change's variants at every ancestor level. *)
+                ins_form := true;
+                d_start := min !d_start anchor;
+                d_end := max !d_end anchor
+            | Lv_rewrite | Lv_deletion -> ());
+            (bp, ap)
         | None -> concrete_level ()
     in
     let before, after =
@@ -855,11 +989,14 @@ let anchored_variants (cp : Tree_diff.change_pair) :
     in
     let ep = { before; after } in
     let holes = edit_holes ep in
-    (* A pure-insertion delta (empty before side) is un-anchorable: an
+    (* A pure-insertion delta (empty before side) is un-anchorable — an
        anchored realisation would claim a one-site insertion with a
-       support-1 rule, which states the change worse than its residual
-       (the §5.5 pure-additions philosophy). *)
-    if !b_delta = [] then None
+       support-1 rule, which states the change worse than its residual (the
+       §5.5 pure-additions philosophy) — UNLESS the chain ended in an
+       ellipsis-context insertion form, which anchors the [+] run to the
+       container's delimiters/head instead of to before-side content and
+       pools on the insertion point like any other delta. *)
+    if !b_delta = [] && not !ins_form then None
     else if holes = 0 && (not !all_leaves) && not (contains_ellipsis ep.before)
     then None
     else if
@@ -872,7 +1009,7 @@ let anchored_variants (cp : Tree_diff.change_pair) :
         ^ "\x01"
         ^ String.concat "\x00" (List.rev !a_delta)
       in
-      Some (ep, key, (!d_start, !d_end))
+      Some (ep, key, (!d_start, !d_end), !ins_form)
     else None
   in
   let b = cp.before_node and a = cp.after_node in
@@ -901,7 +1038,7 @@ let anchored_variants (cp : Tree_diff.change_pair) :
         List.filter_map
           (fun ellipsis_lists ->
             match build ~ellipsis_lists s with
-            | Some ((ep, _, _) as v) ->
+            | Some ((ep, _, _, _) as v) ->
                 if Hashtbl.mem seen ep then None
                 else begin
                   Hashtbl.add seen ep ();
@@ -977,19 +1114,31 @@ let collect_initial_clusters ?on_file ~ctx (cs : changeset) :
                 | None -> ());
                 (* §3.2 anchored variants: preserved siblings literal,
                    changed-chain interior holed, keyed by the delta —
-                   one per path choice at branching levels. *)
+                   one per path choice at branching levels. Insertion-form
+                   variants are one arity-free text shared by every site,
+                   so they join the delta-keyed round-1 channel (pooled by
+                   exact identity) rather than the anchored round-2
+                   stream of site-local realisations. *)
                 match anchored_variants cp with
                 | vs ->
                     List.iter
-                      (fun (aep, key, span) ->
-                        anchored :=
-                          ( key,
-                            span,
+                      (fun (aep, key, span, insertion_general) ->
+                        if insertion_general then
+                          delta :=
                             {
                               pattern = aep;
                               instances = [ { inst with ipat = aep } ];
-                            } )
-                          :: !anchored)
+                            }
+                            :: !delta
+                        else
+                          anchored :=
+                            ( key,
+                              span,
+                              {
+                                pattern = aep;
+                                instances = [ { inst with ipat = aep } ];
+                              } )
+                            :: !anchored)
                       vs
                 | exception ((Stack_overflow | Out_of_memory | Sys.Break) as e)
                   ->

@@ -659,8 +659,7 @@ let test_transform_insert_prepend_after_opener () =
   let out = transform ~language:"typescript" ~pattern ~source in
   Alcotest.(check string)
     "inserted before the first element"
-    "@Component({\n  standalone: false,\n  selector: 'x',\n})\nclass C {}\n"
-    out
+    "@Component({\n  standalone: false,\n  selector: 'x',\n})\nclass C {}\n" out
 
 (* A multi-line [+] block keeps its relative indentation: the block's common
    indent is stripped and the inferred indent prefixed, so how far the author
@@ -699,8 +698,7 @@ let test_transform_insert_between_ellipses_rejected () =
   let raises pattern =
     try
       ignore
-        (transform ~language:"typescript" ~pattern
-           ~source:"f({ a: 1, b: 2 });");
+        (transform ~language:"typescript" ~pattern ~source:"f({ a: 1, b: 2 });");
       false
     with Failure _ -> true
   in

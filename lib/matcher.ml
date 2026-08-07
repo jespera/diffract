@@ -574,13 +574,15 @@ let validate_insertion_anchors tokens hunks =
   in
   List.iter
     (fun h ->
-      if h.del_idxs = [] && h.add <> None && (not (anchors h.prev_tok))
-         && not (anchors h.next_tok)
+      if
+        h.del_idxs = [] && h.add <> None
+        && (not (anchors h.prev_tok))
+        && not (anchors h.next_tok)
       then
         failwith
           "a '+' insertion between two '...' lines has no anchor: the split \
-           between the two captured runs is arbitrary, so the insertion \
-           point would be too. Anchor the '+' line to a concrete neighbour — \
+           between the two captured runs is arbitrary, so the insertion point \
+           would be too. Anchor the '+' line to a concrete neighbour — \
            directly after the opening delimiter/head or directly before the \
            closing delimiter.")
     hunks
@@ -1055,8 +1057,8 @@ let pattern_warnings pattern_text =
                    (Printf.sprintf
                       "warning: the line %S starts with '%c' but has no space \
                        after it, so it is read as context, not as an edit \
-                       marker. Write \"%c %s\" for an edit line, or indent \
-                       the line with a leading space for context."
+                       marker. Write \"%c %s\" for an edit line, or indent the \
+                       line with a leading space for context."
                       line line.[0] line.[0]
                       (String.sub line 1 (len - 1)))
                else None)
@@ -1065,37 +1067,37 @@ let pattern_warnings pattern_text =
   in
   marker_typos
   @ List.filter_map
-    (fun (s : section) ->
-      let is_transform = replace_side s.body <> None in
-      let is_foreach = match s.scope with Foreach _ -> true | _ -> false in
-      (* Whole-container marking: no context line carries content, so nothing
+      (fun (s : section) ->
+        let is_transform = replace_side s.body <> None in
+        let is_foreach = match s.scope with Foreach _ -> true | _ -> false in
+        (* Whole-container marking: no context line carries content, so nothing
          in the match is preserved. *)
-      let marks_whole =
-        not
-          (List.exists
-             (function Ctx s -> String.trim s <> "" | _ -> false)
-             (classify_spatch s.body))
-      in
-      if
-        is_transform && (not is_foreach) && marks_whole
-        && (s.mode = Partial || s.mode = Field)
-      then
-        let what, dropped =
-          match s.mode with
-          | Partial -> ("container", "extra elements it doesn't list")
-          | _ ->
-              ( "declaration",
-                "ignored fields (decorators, return types, modifiers)" )
+        let marks_whole =
+          not
+            (List.exists
+               (function Ctx s -> String.trim s <> "" | _ -> false)
+               (classify_spatch s.body))
         in
-        Some
-          (Printf.sprintf
-             "warning: this %s-mode section marks the whole matched %s for \
-              replacement, so %s will be dropped. To change part of it while \
-              keeping the rest, mark only that part (context lines are \
-              preserved) or use a `foreach`/`on` section."
-             (mode_name s.mode) what dropped)
-      else None)
-    p.sections
+        if
+          is_transform && (not is_foreach) && marks_whole
+          && (s.mode = Partial || s.mode = Field)
+        then
+          let what, dropped =
+            match s.mode with
+            | Partial -> ("container", "extra elements it doesn't list")
+            | _ ->
+                ( "declaration",
+                  "ignored fields (decorators, return types, modifiers)" )
+          in
+          Some
+            (Printf.sprintf
+               "warning: this %s-mode section marks the whole matched %s for \
+                replacement, so %s will be dropped. To change part of it while \
+                keeping the rest, mark only that part (context lines are \
+                preserved) or use a `foreach`/`on` section."
+               (mode_name s.mode) what dropped)
+        else None)
+      p.sections
 
 let token_str = function
   | Stmatch.Concrete { text; node_type } ->
@@ -1335,24 +1337,30 @@ let element_cleanup source lo hi =
 let render_insertion source pos repl =
   let len = String.length source in
   let is_hspace c = c = ' ' || c = '\t' in
-  let back = ref pos in
-  while !back > 0 && is_hspace source.[!back - 1] do
-    decr back
-  done;
-  let splice_at =
-    if !back = 0 || source.[!back - 1] = '\n' then Some !back
+  (* The newline adjacent to [pos] across horizontal whitespace, scanning
+     back first (pos at the start of a line) then forward (pos at the end
+     of one). [`Line nl] renders as whole lines around that newline;
+     [`Bof] is the file-start edge (no preceding newline); [`Inline] keeps
+     the tight splice. *)
+  let boundary =
+    let back = ref pos in
+    while !back > 0 && is_hspace source.[!back - 1] do
+      decr back
+    done;
+    if !back = 0 then `Bof
+    else if source.[!back - 1] = '\n' then `Line (!back - 1)
     else begin
       let f = ref pos in
       while !f < len && is_hspace source.[!f] do
         incr f
       done;
       let f = if !f < len && source.[!f] = '\r' then !f + 1 else !f in
-      if f < len && source.[f] = '\n' then Some (f + 1) else None
+      if f < len && source.[f] = '\n' then `Line f else `Inline
     end
   in
-  match splice_at with
-  | None -> (pos, repl)
-  | Some at ->
+  match boundary with
+  | `Inline -> (pos, repl)
+  | (`Line _ | `Bof) as b -> (
       let indent_of_line_starting i =
         let j = ref i in
         while !j < len && is_hspace source.[!j] do
@@ -1360,23 +1368,25 @@ let render_insertion source pos repl =
         done;
         String.sub source i (!j - i)
       in
+      let nl = match b with `Line nl -> nl | `Bof -> -1 in
       let prev_indent =
-        if at = 0 then ""
+        if nl <= 0 then ""
         else begin
-          let s = ref (at - 1) in
+          let s = ref nl in
           while !s > 0 && source.[!s - 1] <> '\n' do
             decr s
           done;
           indent_of_line_starting !s
         end
       in
-      let next_indent = if at < len then indent_of_line_starting at else "" in
+      let next_indent =
+        if nl + 1 < len then indent_of_line_starting (nl + 1) else ""
+      in
       let indent =
         if String.length prev_indent >= String.length next_indent then
           prev_indent
         else next_indent
       in
-      let lines = String.split_on_char '\n' repl in
       let hprefix_len l =
         let n = String.length l in
         let j = ref 0 in
@@ -1385,6 +1395,7 @@ let render_insertion source pos repl =
         done;
         !j
       in
+      let lines = String.split_on_char '\n' repl in
       let common =
         List.fold_left
           (fun acc l ->
@@ -1392,15 +1403,25 @@ let render_insertion source pos repl =
           max_int lines
       in
       let common = if common = max_int then 0 else common in
-      let rendered =
-        lines
-        |> List.map (fun l ->
-            if String.trim l = "" then "\n"
-            else
-              indent ^ String.sub l common (String.length l - common) ^ "\n")
-        |> String.concat ""
+      let line_of l =
+        if String.trim l = "" then ""
+        else indent ^ String.sub l common (String.length l - common)
       in
-      (at, rendered)
+      (* Splice at the end of the preceding line's content (back across any
+         trailing blanks from the newline), with a LEADING newline per
+         inserted line — byte-wise the same output as splicing after the
+         newline, but the zero-width edit now sits exactly at the byte where
+         a tree diff places an insertion between siblings (the preceding
+         token's end), which is what placement checks compare against. *)
+      match b with
+      | `Line nl ->
+          let at = ref nl in
+          while !at > 0 && is_hspace source.[!at - 1] do
+            decr at
+          done;
+          (!at, String.concat "" (List.map (fun l -> "\n" ^ line_of l) lines))
+      | `Bof ->
+          (0, String.concat "" (List.map (fun l -> line_of l ^ "\n") lines)))
 
 let surgical_edits ~list_context hunks (m : M.match_result) seq_renderings
     source =

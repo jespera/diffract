@@ -62,7 +62,21 @@ let changed_regions ?(ignore_separators = false) (d : Tree_diff.diff) :
     | Tree_diff.Unchanged -> ()
     | Tree_diff.Replaced -> add b.start_byte b.end_byte (after_text a)
     | Tree_diff.Modified { child_changes } ->
-        let cursor = ref b.start_byte in
+        (* The walk is in named-children coordinates ({!Tree_diff} matches
+           named children), so a leading [Added] would land its zero-width
+           region at [b.start_byte] — on the container's opening delimiter,
+           where no insertion can go. Start the cursor after the leading
+           anonymous run (the opener tokens): the first between-siblings
+           position. Any leading Same/Changed child overwrites the cursor,
+           so only leading insertions see the difference. *)
+        let cursor =
+          let rec lead acc = function
+            | (c : Tree.src Tree.child) :: rest ->
+                if c.node.is_named then acc else lead c.node.end_byte rest
+            | [] -> acc
+          in
+          ref (lead b.start_byte b.children)
+        in
         List.iter
           (fun (cc : Tree_diff.child_change) ->
             match cc with
@@ -297,6 +311,35 @@ let spans_overlap s e rs re =
   || (s = e && rs <= s && s <= re)
   || (rs = re && s <= rs && rs <= e)
 
+(* A pure insertion's edit point and the diff's insertion region can sit on
+   opposite sides of a separator: the child matcher may pair the before-side
+   separator with either the leading or the trailing after-side one, so the
+   region lands before the trailing comma while the matcher's line-boundary
+   splice lands after it — the same insertion, one attribution apart. A
+   zero-width edit therefore also touches a zero-width region when nothing
+   but separator/whitespace trivia lies between the two points. This only
+   redistributes attribution: the content leg still requires the edit to
+   reproduce the after-source exactly, so the bridge cannot admit a wrong
+   edit, only stop a right one from being shed. *)
+let zero_width_trivia_bridge source s e rs re =
+  s = e && rs = re
+  &&
+  let lo = min s rs and hi = max s rs in
+  lo >= 0
+  && hi <= String.length source
+  &&
+  let ok = ref true in
+  for i = lo to hi - 1 do
+    match source.[i] with
+    | ' ' | '\t' | '\n' | '\r' | ',' | ';' -> ()
+    | _ -> ok := false
+  done;
+  !ok
+
+let edit_touches_region source (ed : Matcher.edit) rs re =
+  spans_overlap ed.start_byte ed.end_byte rs re
+  || zero_width_trivia_bridge source ed.start_byte ed.end_byte rs re
+
 (** Per-site safety gate: the operational form of the safety property (design
     §2.3) — with [t'' = apply(rule, t)], [d(t,t'') + d(t'',t') = d(t,t')]. Two
     legs (§3.1):
@@ -388,7 +431,7 @@ let site_eval ~ctx ~language ~pattern_text (si : site_info) : site_evaluation =
         List.for_all
           (fun (ed : Matcher.edit) ->
             List.exists
-              (fun (rs, re, _) -> spans_overlap ed.start_byte ed.end_byte rs re)
+              (fun (rs, re, _) -> edit_touches_region si.si_before ed rs re)
               si.si_regions)
           edits
       in
@@ -524,7 +567,7 @@ let site_eval ~ctx ~language ~pattern_text (si : site_info) : site_evaluation =
                   if
                     List.exists
                       (fun (ed : Matcher.edit) ->
-                        spans_overlap ed.start_byte ed.end_byte rs re)
+                        edit_touches_region si.si_before ed rs re)
                       edits
                   then a + extent r
                   else a)
@@ -551,7 +594,7 @@ let site_eval ~ctx ~language ~pattern_text (si : site_info) : site_evaluation =
                   let touched =
                     List.exists
                       (fun (ed : Matcher.edit) ->
-                        spans_overlap ed.start_byte ed.end_byte rs re)
+                        edit_touches_region si.si_before ed rs re)
                       edits
                   in
                   if not touched then None

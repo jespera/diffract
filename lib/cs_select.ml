@@ -319,12 +319,24 @@ let propose_delta_pooled (env : tier_env) (delta_raw : cluster list) :
   let delta_clusters =
     pre_group_identical delta_raw
     |> List.filter (fun c ->
-        List.length c.instances >= Cs_config.default.min_support)
+        let enough = List.length c.instances >= Cs_config.default.min_support in
+        if (not enough) && Cs_trace.on () then
+          Printf.eprintf "delta-keyed: pool of %d below floor:\n%s\n---\n%!"
+            (List.length c.instances)
+            (render_pattern_body c.pattern);
+        enough)
     |> List.filter_map (fun c ->
         let safe = safe_instances env c.pattern c.instances in
         if List.length safe >= Cs_config.default.min_support then
           Some { c with instances = safe }
-        else None)
+        else begin
+          if Cs_trace.on () then
+            Printf.eprintf
+              "delta-keyed: pool gate-shed (%d -> %d safe):\n%s\n---\n%!"
+              (List.length c.instances) (List.length safe)
+              (render_pattern_body c.pattern);
+          None
+        end)
   in
   if Cs_trace.on () then
     Cs_trace.trace "delta-keyed: %d raw, %d pooled+safe\n%!"
@@ -860,7 +872,12 @@ let live_anchored_candidates (env : tier_env) ~(anchored : anchored_stream)
                 pattern_safe_at env ~language:i.language ~pattern_text i.file)
               c.instances
           in
-          if safe = [] then None
+          if safe = [] then begin
+            if Cs_trace.on () then
+              Printf.eprintf "anchored: gate rejected everywhere:\n%s\n---\n%!"
+                pattern_text;
+            None
+          end
           else Some (pattern_text, { c with instances = safe }))
       anchored.an_grouped
   in

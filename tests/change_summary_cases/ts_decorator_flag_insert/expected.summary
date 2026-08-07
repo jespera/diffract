@@ -1,0 +1,21 @@
+# rule R1  support=2  language=typescript
+@@
+match: strict
+@@
+  Component(
+  ...
+  {
+  ...
++ standalone: false,
+  }
+  ...
+  )
+# sites R1
+alpha.component.ts
+beta.component.ts
+
+# residual
+--- a/fmt.pipe.ts
++++ b/fmt.pipe.ts
+@@ -2,0 +3,1 @@
++  standalone: false,

@@ -152,12 +152,12 @@ val summarize :
     with a one-line count ([# sites R1  8 file(s)]).
 
     [?residuals] controls the residual section: [`Grouped] collapses moved-file
-    residuals into a [# renames] digest, groups repeated hunks by edit
-    signature under [# residual-groups] (each with an exemplar), and prints
-    only what no group covers — with the six-line git/path header per residual
-    reduced to one. See {!Cs_group}. Both are set by [--format text-minimal],
-    where residuals, not rules, are the bulk: 79,022 of 79,455 bytes on the
-    pekko corpus, 71% of that being repeated path headers. *)
+    residuals into a [# renames] digest, groups repeated hunks by edit signature
+    under [# residual-groups] (each with an exemplar), and prints only what no
+    group covers — with the six-line git/path header per residual reduced to
+    one. See {!Cs_group}. Both are set by [--format text-minimal], where
+    residuals, not rules, are the bulk: 79,022 of 79,455 bytes on the pekko
+    corpus, 71% of that being repeated path headers. *)
 val format_summary :
   ?sites:[ `Full | `Count ] ->
   ?residuals:[ `Full | `Grouped ] ->
