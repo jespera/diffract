@@ -288,4 +288,32 @@ partial/field section marks the **whole container** — a body with no context
 line, so every matched token is removed and the edit spans the whole match,
 dropping the tolerated extras / ignored fields. That is the honest reading of
 "replace the whole thing", but an easy mistake in modes built to tolerate/
-ignore content, so it warns rather than errors.
+ignore content, so it warns rather than errors. A second warning covers the
+marker syntax itself: a column-0 `+`/`-` not followed by a space is read as
+context, not as an edit marker (typically surfacing as "No matches found"),
+so such a line draws a warning — for `-` only in sections that already have
+real edit lines, since a bare `-expr` in a pure-match body is plausibly
+arithmetic.
+
+**Pure insertions render as lines (`render_insertion`).** A `+`-only hunk is
+anchored between context tokens, and its splice point usually sits at a line
+boundary — the pattern author wrote the `+` block as whole lines
+(`@Component({` / `...` / `+ standalone: false,` / `})`). At a line boundary
+the insertion becomes whole lines: spliced at the end of the preceding line's
+content, each inserted line newline-led and indented like the deeper of its
+two neighbouring lines, the block's own common indentation stripped first
+(pattern-side indentation never leaks; relative indentation within a
+multi-line block is preserved). This is the one exception to "the `+` content
+is the bare element" above needing qualification: for a whole-line insertion
+the `+` line *does* carry its element separator (`+ standalone: false,`) —
+there is no `-` span whose surroundings could supply it — while indentation
+is still inferred, never restated. An *inline* anchor (a one-line container)
+keeps the tight verbatim splice, separators included, exactly as written.
+The splice lands at the preceding token's end (before the newline) so the
+zero-width edit coincides with where a tree diff places an insertion between
+siblings — load-bearing for change-summary's placement gate.
+
+Two insertion forms are rejected/flagged at compile: a `+` line flanked by
+two `...` context lines has no anchor (the split between two adjacent
+captured runs is arbitrary, so the insertion point would be too), and is
+rejected with a pointer to the opener/closer-anchored formulations.

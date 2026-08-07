@@ -1,0 +1,5 @@
+fun connect() {
+    configure(
+        endpoint,
+    )
+}

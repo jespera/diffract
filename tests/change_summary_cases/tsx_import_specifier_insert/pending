@@ -5,3 +5,11 @@ inserted specifier, remaining specifiers as a sequence metavar. The WidgetView
 site inserts at alphabetical mid-position with a prettier multi-line reflow —
 its t'' would differ from the after in specifier order, so it stays an honest
 residual.
+
+The v1 insertion channel (ellipsis-context, edge positions) does not cover
+this case even though UserList/UserPanel insert at the prepend edge: the
+imports are ONE-LINE, so the emitted rule's [+] splice is inline and cannot
+reproduce the site's spacing byte-exactly (` useCallback, ` needs the
+surrounding one-line spacing convention, i.e. separator/spacing synthesis).
+Line-structured containers are covered by ts_decorator_flag_insert /
+kotlin_arg_prepend_insert; this fixture is the inline + mid-position tier.

@@ -19,9 +19,13 @@
 # reflow a one-line decorator to multi-line, and ~330 manual ng19-compat
 # lines concentrated in projects/schematics. feature-libs/cart is the largest
 # perfectly-pure slice; feature-libs/order is held out as the generalization
-# check — 83 insertions across 63 files, 3 of them reflow sites, which are
-# the documented holdout boundary (an insertion rule cannot also relayout the
-# decorator, so those files close partially).
+# check — 83 insertions across 63 files, 3 of them one-line-decorator reflow
+# sites concentrated in 2 spec files. Those 2 files are the documented
+# holdout regressions: at a one-line decorator the insertion rule's splice is
+# inline (there is no line boundary to render against), which can neither
+# reproduce prettier's reflow nor synthesize the missing separator. The
+# reflow shape is the v2 boundary; the remaining 61 files reconstruct
+# byte-exactly.
 #
 # Guard note: the schematic is conditional (insert only where `standalone` is
 # absent) — a negative condition diffract cannot state. It never bites in

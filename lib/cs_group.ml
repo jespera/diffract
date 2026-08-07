@@ -53,8 +53,14 @@ let words (s : string) : string array =
   let i = ref 0 in
   while !i < n do
     let start = !i in
-    if is_word_char s.[!i] then while !i < n && is_word_char s.[!i] do incr i done
-    else if is_blank s.[!i] then while !i < n && is_blank s.[!i] do incr i done
+    if is_word_char s.[!i] then
+      while !i < n && is_word_char s.[!i] do
+        incr i
+      done
+    else if is_blank s.[!i] then
+      while !i < n && is_blank s.[!i] do
+        incr i
+      done
     else incr i;
     out := String.sub s start (!i - start) :: !out
   done;
@@ -66,8 +72,8 @@ let words (s : string) : string array =
     makes two hunks "the same edit" regardless of the code around them.
 
     Runs that are whitespace on both sides are dropped: a reflowed line that
-    also gains an import should group with the plain import insertion, not
-    split off into a group of its own. *)
+    also gains an import should group with the plain import insertion, not split
+    off into a group of its own. *)
 let signature (before : string) (after : string) : (string * string) list =
   let rm = Buffer.create 32 and ad = Buffer.create 32 in
   let keep = Buffer.create 16 and keep_n = ref 0 in
@@ -128,18 +134,20 @@ let signature (before : string) (after : string) : (string * string) list =
   let seen = Hashtbl.create 8 in
   List.rev !segs
   |> List.filter (fun s ->
-         if Hashtbl.mem seen s then false
-         else begin
-           Hashtbl.add seen s ();
-           true
-         end)
+      if Hashtbl.mem seen s then false
+      else begin
+        Hashtbl.add seen s ();
+        true
+      end)
 
 (* Truncate to at most [n] bytes without splitting a UTF-8 sequence. *)
 let ellipsize n s =
   if String.length s <= n then s
   else begin
     let cut = ref n in
-    while !cut > 0 && Char.code s.[!cut] land 0xC0 = 0x80 do decr cut done;
+    while !cut > 0 && Char.code s.[!cut] land 0xC0 = 0x80 do
+      decr cut
+    done;
     String.sub s 0 !cut ^ "…"
   end
 
@@ -218,7 +226,9 @@ let parse_diff (d : string) : parsed =
   close ();
   let head = List.rev !head in
   let find p =
-    List.find_map (fun l -> if starts_with p l then Some (after_prefix p l) else None) head
+    List.find_map
+      (fun l -> if starts_with p l then Some (after_prefix p l) else None)
+      head
   in
   let hunks = List.rev !hunks in
   {
@@ -255,7 +265,8 @@ type digest = {
           residuals left with nothing are dropped *)
 }
 
-let key_of segs = String.concat "\x00" (List.concat_map (fun (r, a) -> [ r; a ]) segs)
+let key_of segs =
+  String.concat "\x00" (List.concat_map (fun (r, a) -> [ r; a ]) segs)
 
 let digest (residuals : residual list) : digest =
   let parsed = List.map (fun r -> (r, parse_diff r.res_diff)) residuals in
@@ -296,12 +307,12 @@ let digest (residuals : residual list) : digest =
       let edits =
         List.rev !order
         |> List.map (fun k ->
-               let n, (edit, ex) = Hashtbl.find tbl k in
-               { re_edit = edit; re_count = !n; re_exemplar = ex })
+            let n, (edit, ex) = Hashtbl.find tbl k in
+            { re_edit = edit; re_count = !n; re_exemplar = ex })
         |> List.sort (fun a b ->
-               match compare b.re_count a.re_count with
-               | 0 -> compare a.re_edit b.re_edit
-               | c -> c)
+            match compare b.re_count a.re_count with
+            | 0 -> compare a.re_edit b.re_edit
+            | c -> c)
       in
       Some (List.length moved, edits)
     end
@@ -325,10 +336,13 @@ let digest (residuals : residual list) : digest =
           match Hashtbl.find_opt tbl k with
           | Some (n, files, _) ->
               incr n;
-              if not (List.mem r.res_file !files) then files := r.res_file :: !files
+              if not (List.mem r.res_file !files) then
+                files := r.res_file :: !files
           | None ->
               Hashtbl.add tbl k
-                (ref 1, ref [ r.res_file ], (describe segs, (h.hk_minus, h.hk_plus)));
+                ( ref 1,
+                  ref [ r.res_file ],
+                  (describe segs, (h.hk_minus, h.hk_plus)) );
               order := k :: !order)
         p.pd_hunks)
     content;
@@ -336,26 +350,24 @@ let digest (residuals : residual list) : digest =
   let dg_groups =
     List.rev !order
     |> List.filter_map (fun k ->
-           let n, files, (edit, ex) = Hashtbl.find tbl k in
-           if !n < 2 then None
-           else begin
-             Hashtbl.replace grouped_keys k ();
-             Some
-               {
-                 g_edit = edit;
-                 g_count = !n;
-                 g_files = List.length !files;
-                 g_exemplar = ex;
-               }
-           end)
+        let n, files, (edit, ex) = Hashtbl.find tbl k in
+        if !n < 2 then None
+        else begin
+          Hashtbl.replace grouped_keys k ();
+          Some
+            {
+              g_edit = edit;
+              g_count = !n;
+              g_files = List.length !files;
+              g_exemplar = ex;
+            }
+        end)
     |> List.sort (fun a b ->
-           match compare b.g_count a.g_count with
-           | 0 -> compare a.g_edit b.g_edit
-           | c -> c)
+        match compare b.g_count a.g_count with
+        | 0 -> compare a.g_edit b.g_edit
+        | c -> c)
   in
-  let dg_grouped =
-    List.fold_left (fun acc g -> acc + g.g_count) 0 dg_groups
-  in
+  let dg_grouped = List.fold_left (fun acc g -> acc + g.g_count) 0 dg_groups in
   let dg_rest =
     List.filter_map
       (fun ((r : residual), p) ->
@@ -371,8 +383,7 @@ let digest (residuals : residual list) : digest =
               not (Hashtbl.mem grouped_keys k))
             p.pd_hunks
         in
-        if keep = [] then None
-        else Some (r, List.map (fun h -> h.hk_body) keep))
+        if keep = [] then None else Some (r, List.map (fun h -> h.hk_body) keep))
       content
   in
   { dg_renames; dg_groups; dg_grouped; dg_total = !total; dg_rest }

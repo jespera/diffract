@@ -1339,6 +1339,68 @@ cluster" reporting mode could group identical residuals without promoting
 them to rules; not in scope for the staged milestones. The same applies
 symmetrically to pure removals.
 
+**Delimited-container insertions (v1 insertion channel).** The "no
+structural anchor" argument above is about *statement-position* additions
+— a new import statement has no container to hang on. An addition INTO a
+bracket-delimited container does have an anchor: the container itself.
+The ellipsis-context machinery (§3.2) renders it
+
+```
+@@
+match: strict
+@@
+  Component(
+  ...
+  {
+  ...
++ standalone: false,
+  }
+  ...
+  )
+```
+
+— a context-only match side (a `+` line binds nothing, so the container
+head and delimiters carry the whole match), the inserted run glued onto
+one `+` line (element plus separator: `+` text IS the output, unlike a
+`-` span, which deletes source bytes wherever they lie), and a single
+ellipsis per side so the `+` line sits adjacent to a concrete token (the
+matcher rejects an insertion flanked by two `...` as unanchorable). Only
+edge positions are proposed — a run adjacent to the opener/head (prepend)
+or to the closer (append); mid-list insertions stay residual, their
+position inside the captured run being arbitrary.
+
+The emitted position is *discovered, not assumed*: the proposer reads the
+run's edge off each site, and the gate sheds any site where applying the
+rule does not reproduce the after-source — a wrong position surfaces as a
+move in the re-diff and fails the content leg. Two coordinate-system
+details make the gate see these sites at all: placement compares the
+matcher's zero-width edit against the diff's zero-width insertion region
+modulo separator/whitespace trivia (the child matcher may attribute a
+shared separator to either side of the run), and `changed_regions` starts
+its cursor after a container's leading delimiter run, so a prepend's
+region sits inside the container rather than on its opening bracket.
+
+Support pools on the insertion itself: the variants are one arity-free
+text shared by every site, so they join the delta-keyed round-1 channel
+(pooled by exact identity, behavioural support from the gate) rather than
+the anchored round-2 stream of site-local realisations. On insertion
+chains, a level with exactly one preserved named child (a call's callee,
+a decorator's name) keeps it concrete — an insertion's entire match power
+is context, and holing the head would leave the anchorless `_H0(...)`
+form that `has_concrete` rightly rejects.
+
+Corpus: `evaluation/spartacus-standalone.sh` (the Angular v19
+`standalone: false` sweep) — 3 rules / 0 residuals / 64/64 factored, with
+the order-slice holdout closing 61/63 files byte-exactly. The two
+remaining holdout files contain one-line decorators the schematic also
+reflowed: an insertion into an inline container has no line boundary to
+render against, which is the v2 tier together with sorted/mid-position
+placement (`tsx_import_specifier_insert` stays pending). Statement-
+position additions — this section's import example — remain residuals.
+Golden fixtures: `ts_decorator_flag_insert` (append; its support-1 @Pipe
+site stays residual, pinning the pool floor) and
+`kotlin_arg_prepend_insert` (prepend, through a non-TS grammar).
+
 ### 5.6 File-level operations
 
 **Input.**

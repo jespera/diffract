@@ -1,0 +1,11 @@
+# rule R1  support=2  language=kotlin
+@@
+match: strict
+@@
+  configure(
++ retries,
+  ...
+  )
+# sites R1
+client.kt
+server.kt
