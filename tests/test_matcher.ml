@@ -2405,6 +2405,92 @@ let test_text_only_scoped_to_single_strict () =
           ~pattern_text:"@@\nmatch: partial\nmetavar $x: single\n@@\n{a: $x}"
           tree))
 
+(* required_literals — the search prefilter's needle extraction. Every
+   word-like Concrete token of the match IR is verbatim-required in a
+   matching source; metavars, ellipsis, [+]-line content and foreach
+   sections must contribute nothing. *)
+let literals ~language pattern =
+  Matcher.required_literals ~ctx ~language ~pattern_text:pattern
+
+let test_required_literals_jsx_partial () =
+  Alcotest.(check (list string))
+    "identifiers kept (longest first); metavar, ellipsis, punctuation dropped"
+    [ "HedebyTable"; "getRowId" ]
+    (literals ~language:"tsx"
+       "@@\n\
+        match: partial\n\
+        metavar F: single\n\
+        @@\n\
+        <HedebyTable<...>  getRowId=F />")
+
+let test_required_literals_plus_line_excluded () =
+  Alcotest.(check (list string))
+    "match side only: - line kept, + line excluded"
+    [ "oldName" ]
+    (literals ~language:"typescript"
+       "@@\nmatch: strict\nmetavar $x: single\n@@\n- oldName($x)\n+ newName($x)")
+
+let test_required_literals_multi_section_union () =
+  Alcotest.(check (list string))
+    "conjunctive sections both contribute"
+    [ "wrapper"; "inner" ]
+    (literals ~language:"typescript"
+       "@@\n\
+        match: strict\n\
+        metavar $body: single\n\
+        @@\n\
+        wrapper($body)\n\
+        @@\n\
+        match: strict\n\
+        on $body\n\
+        @@\n\
+        inner()")
+
+let test_required_literals_foreach_excluded () =
+  Alcotest.(check (list string))
+    "foreach section literals not required (per-element, may never fire)"
+    [ "matchExhaustive" ]
+    (literals ~language:"typescript"
+       "@@\n\
+        match: strict\n\
+        metavar $TAG: single\n\
+        metavar $PROPS: sequence\n\
+        @@\n\
+        - matchExhaustive($TAG, { $PROPS });\n\
+        + match($TAG)$PROPS.exhaustive();\n\
+        @@\n\
+        match: strict\n\
+        foreach $PROPS\n\
+        metavar $VAL: single\n\
+        @@\n\
+        - deprecated: $VAL\n\
+        + current: $VAL")
+
+let test_required_literals_none () =
+  Alcotest.(check (list string))
+    "all-metavar pattern yields no needles (no prefilter possible)" []
+    (literals ~language:"typescript"
+       "@@\nmatch: strict\nmetavar $x: single\nmetavar $y: single\n@@\n$x + $y")
+
+let test_source_may_match () =
+  let literals = [ "HedebyTable"; "getRowId" ] in
+  Alcotest.(check bool)
+    "both needles present -> may match" true
+    (Matcher.source_may_match ~literals
+       "<HedebyTable getRowId={(r) => r.id} />");
+  Alcotest.(check bool)
+    "needle at the very end of source found" true
+    (Matcher.source_may_match ~literals:[ "getRowId" ] "const f = x.getRowId");
+  Alcotest.(check bool)
+    "one needle absent -> cannot match" false
+    (Matcher.source_may_match ~literals "<HedebyTable rows={rows} />");
+  Alcotest.(check bool)
+    "needle longer than source -> cannot match" false
+    (Matcher.source_may_match ~literals:[ "HedebyTable" ] "short");
+  Alcotest.(check bool)
+    "no needles -> every source may match" true
+    (Matcher.source_may_match ~literals:[] "anything")
+
 let tests =
   let open Alcotest in
   [
@@ -2624,4 +2710,16 @@ let tests =
       test_text_only_finds_role_mismatch;
     test_case "explain: hint scoped to single strict section" `Quick
       test_text_only_scoped_to_single_strict;
+    test_case "required_literals: JSX partial pattern" `Quick
+      test_required_literals_jsx_partial;
+    test_case "required_literals: + line excluded" `Quick
+      test_required_literals_plus_line_excluded;
+    test_case "required_literals: multi-section union (incl. on $VAR)" `Quick
+      test_required_literals_multi_section_union;
+    test_case "required_literals: foreach section excluded" `Quick
+      test_required_literals_foreach_excluded;
+    test_case "required_literals: all-metavar pattern -> none" `Quick
+      test_required_literals_none;
+    test_case "source_may_match: needle presence decides" `Quick
+      test_source_may_match;
   ]
