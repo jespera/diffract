@@ -91,8 +91,8 @@ let unparsed_note ~ctx ~language source_text =
   | [] -> None
   | rs -> Some (Diffract.Tree.format_regions rs)
 
-let transform_file ~ctx ~language ~pattern_text ~in_place file_path =
-  let source_text = In_channel.with_open_text file_path In_channel.input_all in
+let transform_source ~ctx ~language ~pattern_text ~in_place ~file_path
+    source_text =
   let unparsed = unparsed_note ~ctx ~language source_text in
   let transformed =
     Diffract.Matcher.transform ~ctx ~language ~pattern_text ~source_text
@@ -109,10 +109,21 @@ let transform_file ~ctx ~language ~pattern_text ~in_place file_path =
     (true, diff, unparsed)
   end
 
+(* Literal prefilter for directory scans: texts that must occur verbatim in
+   any file a match can be found in ({!Diffract.Matcher.required_literals}),
+   so a file lacking one is skipped without parsing. On a malformed pattern
+   return no literals — the per-file path then surfaces the error exactly as
+   it did before the prefilter existed. *)
+let prefilter_literals ~ctx ~language ~pattern_text =
+  try Diffract.Matcher.required_literals ~ctx ~language ~pattern_text
+  with Failure _ -> []
+
 let scan_directory_apply ~ctx ~language ~pattern_text ~include_pattern
     ~exclude_dirs ~in_place ~verbose dir_path =
   let files = find_files ~pattern:include_pattern ~exclude_dirs dir_path in
   let total_files = List.length files in
+  let literals = prefilter_literals ~ctx ~language ~pattern_text in
+  let skipped = ref 0 in
   let total_edits = ref 0 in
   let files_changed = ref 0 in
   let errors = ref [] in
@@ -125,20 +136,33 @@ let scan_directory_apply ~ctx ~language ~pattern_text ~include_pattern
       if verbose then
         Printf.eprintf "[apply] (%d/%d) %s\n%!" (i + 1) total_files file_path;
       try
-        let changed, diff, unparsed =
-          transform_file ~ctx ~language ~pattern_text ~in_place file_path
+        let source_text =
+          In_channel.with_open_text file_path In_channel.input_all
         in
-        (match unparsed with
-        | Some lines -> unparsed_files := (file_path, lines) :: !unparsed_files
-        | None -> ());
-        if changed then begin
-          incr files_changed;
-          incr total_edits;
-          if not in_place then Buffer.add_string output diff
+        if not (Diffract.Matcher.source_may_match ~literals source_text) then
+          incr skipped
+        else begin
+          let changed, diff, unparsed =
+            transform_source ~ctx ~language ~pattern_text ~in_place ~file_path
+              source_text
+          in
+          (match unparsed with
+          | Some lines ->
+              unparsed_files := (file_path, lines) :: !unparsed_files
+          | None -> ());
+          if changed then begin
+            incr files_changed;
+            incr total_edits;
+            if not in_place then Buffer.add_string output diff
+          end
         end
       with Failure msg | Sys_error msg ->
         errors := (file_path, msg) :: !errors)
     files;
+  if verbose && literals <> [] then
+    Printf.eprintf "[apply] prefilter: skipped %d of %d files (literals: %s)\n%!"
+      !skipped total_files
+      (String.concat ", " literals);
   Buffer.output_buffer stdout output;
   Printf.printf "Transformed %d file(s) (scanned %d files)\n" !files_changed
     total_files;
@@ -343,23 +367,22 @@ let print_no_match_hint locations =
          structurally,\n\
          write the pattern in that context (e.g. as a type, not an expression).\n"
 
-let search_file ~ctx ~language ~pattern_text file_path =
+let search_source ~ctx ~language ~pattern_text source_text =
   try
-    let source_text =
-      In_channel.with_open_text file_path In_channel.input_all
-    in
     (* Parse once; reuse the tree for both matching and parse diagnostics. *)
     let tree = Diffract.Tree.parse ~ctx ~language source_text in
     let results =
       Diffract.Matcher.find_in_tree ~ctx ~language ~pattern_text tree
     in
-    Ok (source_text, results, Diffract.Tree.unparsed_regions tree)
+    Ok (results, Diffract.Tree.unparsed_regions tree)
   with Failure msg | Sys_error msg -> Error msg
 
 let scan_directory_search ~ctx ~language ~pattern_text ~include_pattern
     ~exclude_dirs ~explain ~verbose dir_path =
   let files = find_files ~pattern:include_pattern ~exclude_dirs dir_path in
   let total_files = List.length files in
+  let literals = prefilter_literals ~ctx ~language ~pattern_text in
+  let skipped = ref 0 in
   let total_matches = ref 0 in
   let files_with_matches = ref 0 in
   let files_with_parse_errors = ref [] in
@@ -372,22 +395,33 @@ let scan_directory_search ~ctx ~language ~pattern_text ~include_pattern
     (fun i file_path ->
       if verbose then
         Printf.eprintf "[search] (%d/%d) %s\n%!" (i + 1) total_files file_path;
-      match search_file ~ctx ~language ~pattern_text file_path with
-      | Error msg -> errors := (file_path, msg) :: !errors
-      | Ok (source_text, results, unparsed) ->
-          if unparsed <> [] then
-            files_with_parse_errors :=
-              (file_path, unparsed) :: !files_with_parse_errors;
-          if results <> [] then begin
-            incr files_with_matches;
-            total_matches := !total_matches + List.length results;
-            List.iter
-              (fun r ->
-                Buffer.add_string output
-                  (format_search_match ~file_path ~source_text r))
-              results
-          end)
+      match In_channel.with_open_text file_path In_channel.input_all with
+      | exception Sys_error msg -> errors := (file_path, msg) :: !errors
+      | source_text when
+          not (Diffract.Matcher.source_may_match ~literals source_text) ->
+          incr skipped
+      | source_text -> (
+          match search_source ~ctx ~language ~pattern_text source_text with
+          | Error msg -> errors := (file_path, msg) :: !errors
+          | Ok (results, unparsed) ->
+              if unparsed <> [] then
+                files_with_parse_errors :=
+                  (file_path, unparsed) :: !files_with_parse_errors;
+              if results <> [] then begin
+                incr files_with_matches;
+                total_matches := !total_matches + List.length results;
+                List.iter
+                  (fun r ->
+                    Buffer.add_string output
+                      (format_search_match ~file_path ~source_text r))
+                  results
+              end))
     files;
+  if verbose && literals <> [] then
+    Printf.eprintf
+      "[search] prefilter: skipped %d of %d files (literals: %s)\n%!" !skipped
+      total_files
+      (String.concat ", " literals);
   Buffer.output_buffer stdout output;
   Printf.printf "Found %d match(es) in %d file(s) (scanned %d files)\n"
     !total_matches !files_with_matches total_files;
@@ -419,6 +453,11 @@ let scan_directory_search ~ctx ~language ~pattern_text ~include_pattern
          (fun file_path ->
            match In_channel.with_open_text file_path In_channel.input_all with
            | exception Sys_error _ -> []
+           (* Text-only matches need the same literal tokens as text, so the
+              prefilter applies to this pass too. *)
+           | source_text when
+               not (Diffract.Matcher.source_may_match ~literals source_text) ->
+               []
            | source_text ->
                let tree = Diffract.Tree.parse ~ctx ~language source_text in
                text_only_locations ~ctx ~language ~pattern_text ~file_path
@@ -542,8 +581,12 @@ let run_apply pattern_path target language include_pattern exclude_patterns
               ~include_pattern:glob ~exclude_dirs ~in_place ~verbose target;
             `Ok ())
       else begin
+        let source_text =
+          In_channel.with_open_text target In_channel.input_all
+        in
         let changed, diff, unparsed =
-          transform_file ~ctx ~language ~pattern_text ~in_place target
+          transform_source ~ctx ~language ~pattern_text ~in_place
+            ~file_path:target source_text
         in
         if not changed then print_endline "No matches found"
         else if not in_place then print_string diff;
