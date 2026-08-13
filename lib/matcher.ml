@@ -1009,6 +1009,59 @@ let text_only_find_in_tree ~ctx ~language ~pattern_text
           ({ sections = [ m ] } : composite_match))
   | _ -> []
 
+(* A useful prefilter needle: length ≥ 2 with at least one word character.
+   Purely an efficiency choice — every [Concrete] token's text is verbatim-
+   required (see the .mli) — but punctuation tokens occur in virtually every
+   file and so reject nothing while still costing a scan. *)
+let word_like s =
+  String.length s >= 2
+  && String.exists
+       (fun c ->
+         (c >= 'a' && c <= 'z')
+         || (c >= 'A' && c <= 'Z')
+         || (c >= '0' && c <= '9')
+         || c = '_')
+       s
+
+let required_literals ~ctx ~language ~pattern_text =
+  let p = parse_pattern pattern_text in
+  let ir, _foreaches = compile_to_ir ~ctx ~language p in
+  ir_tokens ir
+  |> List.filter_map (function
+      | Stmatch.Concrete { text; _ } when word_like text -> Some text
+      | _ -> None)
+  |> List.sort_uniq (fun a b ->
+      (* Longest first: the longest needle is the best rarity proxy, and
+         [source_may_match] short-circuits on the first absent one. *)
+      match compare (String.length b) (String.length a) with
+      | 0 -> compare a b
+      | c -> c)
+
+(* Non-allocating substring search (naive with a first-char skip). Needles
+   are few and short and the haystack is one source file, so naive scanning
+   is plenty; what matters is not allocating per position the way a
+   [String.sub]-based scan does. Both loops are tail-recursive. *)
+let contains_string ~needle hay =
+  let n = String.length needle and m = String.length hay in
+  n = 0
+  || (n <= m
+     &&
+     let c0 = String.unsafe_get needle 0 in
+     let limit = m - n in
+     let rec eq_from i j =
+       j >= n
+       || String.unsafe_get hay (i + j) = String.unsafe_get needle j
+          && eq_from i (j + 1)
+     in
+     let rec at i =
+       i <= limit
+       && ((String.unsafe_get hay i = c0 && eq_from i 1) || at (i + 1))
+     in
+     at 0)
+
+let source_may_match ~literals source =
+  List.for_all (fun needle -> contains_string ~needle source) literals
+
 let find ~ctx ~language ~pattern_text ~source_text =
   let tree = Tree.parse ~ctx ~language source_text in
   find_in_tree ~ctx ~language ~pattern_text tree
