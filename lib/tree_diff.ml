@@ -403,11 +403,74 @@ let same_children_alignment ~before_source ~after_source (bn : Tree.src Tree.t)
   done;
   List.rev !out
 
+(** {2 Phase B3: derivation-level context descent}
+
+    A cross-type pair that would collapse to an opaque [Replaced] often hides a
+    wrap or unwrap: one side's real counterpart is a {e descendant} of the other
+    (hdiff-style insertion/deletion of a one-hole context), possibly stacked
+    with further edits inside. The mapping phases can't express this — they pair
+    siblings at one level — so recover it here, where the structure is built:
+    peel one context level per step and recurse.
+
+    The peel criterion is metric, not a tuned similarity floor. A subtree [c] of
+    [a] has a leaf stream that is a contiguous substring of [a]'s, so
+    [d(c,a) = |a| − |c|] identically, and the triangle inequality gives
+    [d(b,c) ≥ d(b,a) − (|a| − |c|)] always. Peeling [a] down to [c] is accepted
+    iff equality holds — the context insertion lies on a leaf-metric geodesic
+    from [b] to [a], meaning the peel is a refinement of the change, never a
+    detour. (This is the same [Leaf_metric] geodesic the change-summary gate
+    uses.) A rewrite that merely {e re-words} a node in place — Kotlin
+    [class Foo {…}] → [object Foo {…}] — fails the equation for every proper
+    descendant, so it stays a same-level [Replaced]. One substance guard on top:
+    the peeled core must share at least one leaf token with the far side
+    ([d ≤ n + m − 2]), rejecting content-free peels like [foo()] → [bar] that
+    are metrically neutral but relate nothing. *)
+
+let descent_max_leaves = 256
+let leftover_pair_cap = 16
+
+(** Does a derived change contain positive evidence of correspondence — an
+    unchanged node somewhere inside? Used to accept or reject a speculative
+    leftover pairing: structure whose every path bottoms out in [Replaced]
+    relates nothing and should stay Removed+Added. *)
+let rec has_common_anchor = function
+  | Unchanged -> true
+  | Replaced -> false
+  | Modified { child_changes } ->
+      List.exists
+        (function
+          | Same _ -> true
+          | Changed { change; _ } -> has_common_anchor change
+          | Removed _ | Added _ -> false)
+        child_changes
+
+(** Does a derived change express {e no} difference at all — every path bottoms
+    out in [Same]/[Unchanged], with no [Added]/[Removed]/[Replaced] anywhere?
+    Such structure is only trustworthy where the enclosing bytes really are
+    equal; standing in for a pair that differs (in anonymous tokens the
+    named-children walk can't see — a brace wrap) it would claim a change out
+    of existence. *)
+let rec is_vacuous = function
+  | Unchanged -> true
+  | Replaced -> false
+  | Modified { child_changes } ->
+      List.for_all
+        (function
+          | Same _ -> true
+          | Changed { change; _ } -> is_vacuous change
+          | Removed _ | Added _ -> false)
+        child_changes
+
 (** Derive the structured diff for a matched pair of nodes. *)
 let rec derive_change mapping ~before_source ~after_source
     (before_n : Tree.src Tree.t) (after_n : Tree.src Tree.t) =
   if Tree.equal before_source before_n after_source after_n then Unchanged
-  else if before_n.node_type <> after_n.node_type then Replaced
+  else if before_n.node_type <> after_n.node_type then
+    match
+      descend_change mapping ~before_source ~after_source before_n after_n
+    with
+    | Some ch -> ch
+    | None -> Replaced
   else
     let before_children = before_n.named_children in
     let after_children = after_n.named_children in
@@ -494,6 +557,76 @@ and derive_child_changes mapping ~before_source ~after_source before_children
         done
     | None -> ()
   done;
+  (* Phase B3 leftover pairing: siblings the mapping left as Removed+Added may
+     still correspond — as a same-level rewrite the mapping phases were too
+     conservative to pair, or across levels via a context wrap/unwrap that only
+     {!descend_change} can express. Speculatively derive the change for each
+     leftover combination, closest leaf-distance first, and keep a pairing only
+     when the derived structure contains positive evidence (an unchanged node
+     somewhere inside — {!has_common_anchor}); an all-[Replaced] derivation
+     relates nothing and the leftovers stay Removed+Added. The derived change is
+     stashed so emission below doesn't recompute it. *)
+  let stashed : (int, node_change) Hashtbl.t = Hashtbl.create 4 in
+  (let unmatched_b =
+     List.filter (fun bi -> before_partner.(bi) = -1) (List.init blen Fun.id)
+   in
+   let unused_a =
+     List.filter (fun ai -> not after_used.(ai)) (List.init alen Fun.id)
+   in
+   if
+     unmatched_b <> [] && unused_a <> []
+     && List.length unmatched_b * List.length unused_a <= leftover_pair_cap
+   then begin
+     let leaves_b = Hashtbl.create 4 and leaves_a = Hashtbl.create 4 in
+     let leaves_of tbl source (arr : Tree.src Tree.t array) i =
+       match Hashtbl.find_opt tbl i with
+       | Some l -> l
+       | None ->
+           let l = Leaf_metric.leaves ~source arr.(i) in
+           Hashtbl.add tbl i l;
+           l
+     in
+     let combos =
+       List.concat_map
+         (fun bi ->
+           List.filter_map
+             (fun ai ->
+               let lb = leaves_of leaves_b before_source before_arr bi in
+               let la = leaves_of leaves_a after_source after_arr ai in
+               let n = Array.length lb and m = Array.length la in
+               if n = 0 || m = 0 || n > descent_max_leaves || m > descent_max_leaves
+               then None
+               else
+                 (* Require at least one shared leaf token (d ≤ n + m − 2):
+                    combinations relating nothing can't produce an anchor. *)
+                 match Leaf_metric.distance_upto ~bound:(n + m - 2) lb la with
+                 | Some d -> Some (d, bi, ai)
+                 | None -> None)
+             unused_a)
+         unmatched_b
+     in
+     List.iter
+       (fun (_, bi, ai) ->
+         if before_partner.(bi) = -1 && not after_used.(ai) then begin
+           let change =
+             derive_change mapping ~before_source ~after_source before_arr.(bi)
+               after_arr.(ai)
+           in
+           (* Non-vacuous required: a pairing that expresses no difference
+              (equal leaf streams under differing parents — the brace-wrap
+              trap) explains nothing the parent's anonymous tokens don't
+              still have to account for; keep those leftovers Removed+Added. *)
+           if
+             (match change with Replaced -> false | c -> has_common_anchor c)
+             && not (is_vacuous change)
+           then begin
+             before_partner.(bi) <- ai;
+             after_used.(ai) <- true;
+             Hashtbl.replace stashed bi change
+           end
+         end)
+       (List.sort compare combos)
+   end);
   (* Build result in order *)
   let next_after = ref 0 in
   for bi = 0 to blen - 1 do
@@ -507,8 +640,11 @@ and derive_child_changes mapping ~before_source ~after_source before_children
       done;
       (* Emit the pair *)
       let change =
-        derive_change mapping ~before_source ~after_source before_arr.(bi)
-          after_arr.(ai)
+        match Hashtbl.find_opt stashed bi with
+        | Some c -> c
+        | None ->
+            derive_change mapping ~before_source ~after_source before_arr.(bi)
+              after_arr.(ai)
       in
       (match change with
       | Unchanged -> result := Same { node = before_arr.(bi) } :: !result
@@ -526,6 +662,96 @@ and derive_child_changes mapping ~before_source ~after_source before_children
       result := Added { node = after_arr.(ai) } :: !result
   done;
   List.rev !result
+
+(** Attempt a context peel for a cross-type pair (see the Phase B3 note above).
+    Candidates are the named children of either side: peeling [a] down to child
+    [c] treats [a]'s other children as [Added] context around the recursive
+    change [(b, c)]; peeling [b] symmetrically emits [Removed] context. A
+    candidate is admissible iff its context step is on a leaf-metric geodesic
+    (the [distance_upto ~bound] hit is exact because the bound is also the
+    triangle-inequality lower bound) and the core shares at least one leaf
+    token with the far side. Among admissible candidates the smallest remaining
+    distance wins; ties keep the first found (after-side candidates first). *)
+and descend_change mapping ~before_source ~after_source (b : Tree.src Tree.t)
+    (a : Tree.src Tree.t) : node_change option =
+  let bl = Leaf_metric.leaves ~source:before_source b in
+  let al = Leaf_metric.leaves ~source:after_source a in
+  let nb = Array.length bl and na = Array.length al in
+  if nb = 0 || na = 0 || nb > descent_max_leaves || na > descent_max_leaves
+  then None
+  else begin
+    let d_ba = Leaf_metric.distance bl al in
+    let best :
+        (int * [ `After of Tree.src Tree.t | `Before of Tree.src Tree.t ])
+        option
+        ref =
+      ref None
+    in
+    let consider side (c : Tree.src Tree.t) =
+      let c_source, n_container, far =
+        match side with
+        | `After -> (after_source, na, bl)
+        | `Before -> (before_source, nb, al)
+      in
+      let cl = Leaf_metric.leaves ~source:c_source c in
+      let nc = Array.length cl in
+      let bound = d_ba - (n_container - nc) in
+      let better =
+        match !best with None -> true | Some (d0, _) -> bound < d0
+      in
+      if
+        nc > 0 && bound >= 0
+        && bound <= Array.length far + nc - 2
+        && better
+      then
+        match Leaf_metric.distance_upto ~bound cl far with
+        | Some _ ->
+            best :=
+              Some
+                (bound, match side with `After -> `After c | `Before -> `Before c)
+        | None -> ()
+    in
+    List.iter (fun c -> consider `After c) a.named_children;
+    List.iter (fun c -> consider `Before c) b.named_children;
+    (* When leaf tokens changed ([d_ba > 0]) a vacuous splice would claim
+       nothing changed while bytes did — the peeled context was anonymous
+       tokens only (a brace or paren wrap), which named-children coordinates
+       cannot express. Keep the coarse [Replaced] there (same trap
+       {!same_children_alignment} documents). At [d_ba = 0] the pair is a pure
+       node-type re-wrap of the identical token stream (Kotlin
+       [value_argument] around the same expression), and the vacuous
+       structure is faithful. *)
+    let guard cc =
+      if d_ba > 0 && is_vacuous (Modified { child_changes = cc }) then None
+      else Some (Modified { child_changes = cc })
+    in
+    match !best with
+    | None -> None
+    | Some (_, `After core) ->
+        guard
+          (List.map
+             (fun (child : Tree.src Tree.t) ->
+               if child == core then
+                 match
+                   derive_change mapping ~before_source ~after_source b core
+                 with
+                 | Unchanged -> Same { node = b }
+                 | ch -> Changed { before = b; after = core; change = ch }
+               else Added { node = child })
+             a.named_children)
+    | Some (_, `Before core) ->
+        guard
+          (List.map
+             (fun (child : Tree.src Tree.t) ->
+               if child == core then
+                 match
+                   derive_change mapping ~before_source ~after_source core a
+                 with
+                 | Unchanged -> Same { node = core }
+                 | ch -> Changed { before = core; after = a; change = ch }
+               else Removed { node = child })
+             b.named_children)
+  end
 
 let diff ~(before : Tree.src Tree.tree) ~(after : Tree.src Tree.tree) =
   let mapping =
