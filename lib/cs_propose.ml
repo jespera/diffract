@@ -101,9 +101,14 @@ let extraction_pairs (child_changes : Tree_diff.child_change list) :
 let collect_change_pairs_multi (d : Tree_diff.diff) : Tree_diff.change_pair list
     =
   let out = ref [] in
-  let emitted : (int * int, unit) Hashtbl.t = Hashtbl.create 16 in
+  let emitted : (int * int * int * int, unit) Hashtbl.t = Hashtbl.create 16 in
   let emit (b : Tree.src Tree.t) (a : Tree.src Tree.t) =
-    let key = (b.start_byte, b.end_byte) in
+    (* Keyed on both sides' ranges: multiple descendant chains meeting at the
+       same ancestor produce the same (b, a) pair, which one-sided keying was
+       enough for — but a Tree_diff context splice pairs the same before node
+       with the container and the core at adjacent levels, and both levels are
+       distinct, wanted emissions. *)
+    let key = (b.start_byte, b.end_byte, a.start_byte, a.end_byte) in
     if not (Hashtbl.mem emitted key) then begin
       Hashtbl.add emitted key ();
       out :=
@@ -116,9 +121,9 @@ let collect_change_pairs_multi (d : Tree_diff.diff) : Tree_diff.change_pair list
         :: !out
     end
   in
-  let rec collect ~b ~a = function
+  let rec collect ?(peel = false) ~b ~a = function
     | Tree_diff.Unchanged -> ()
-    | Tree_diff.Replaced -> emit b a
+    | Tree_diff.Replaced -> if not peel then emit b a
     | Tree_diff.Modified { child_changes } ->
         (* Emit at every Modified ancestor along the change chain.
            A given level may produce a pattern whose rendered text
@@ -142,12 +147,22 @@ let collect_change_pairs_multi (d : Tree_diff.diff) : Tree_diff.change_pair list
            removeExtends family). Scale is handled downstream by
            {!Cs_config.dendrogram_bucket_cap}: emission stays complete,
            clustering samples. *)
-        emit b a;
+        if not peel then emit b a;
         List.iter (fun (r, a) -> emit r a) (extraction_pairs child_changes);
         List.iter
           (function
             | Tree_diff.Changed { before; after; change } ->
-                collect ~b:before ~a:after change
+                (* A child pair sharing a side (the same physical node) with
+                   this level is a partial peel step of a Tree_diff context
+                   splice — the same change minus some already-peeled context,
+                   never a level of its own. Emitting those floods the
+                   dendrogram with same-file nested near-duplicates (they
+                   become each other's nearest neighbours, and the vertical
+                   merges anti-unify into incoherent junk). Recurse without
+                   emitting; the cascade's start (the composite) and its core
+                   (both sides fresh) still emit. *)
+                let peel = before == b || after == a in
+                collect ~peel ~b:before ~a:after change
             | _ -> ())
           child_changes
   in
