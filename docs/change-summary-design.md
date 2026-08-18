@@ -149,10 +149,12 @@ form a DAG: `cs_types` ← `cs_pattern` ← {`cs_propose`, `cs_cluster`,
 | `cs_tier` | tiered loop, chain-effect accounting, residual emission (§4.4) |
 | `cs_io` | `.summary` formatting and the directory-pair loader (§9) |
 
-The proposer offers four candidate channels (design §3.1–§3.2):
+The proposer offers five candidate channels (design §3.1–§3.2):
 multi-level extraction, cross-side content-extraction pairs (§4.3),
-delta-keyed scope-holed pairs (§3.2), and anchored lattice-descent
-variants (§3.2). (A 2026-06-18 attempt to retire the delta-keyed channel
+delta-keyed scope-holed pairs (§3.2), anchored lattice-descent
+variants (§3.2), and AU-intersection mining (§3.2b — shared sub-edits
+recovered from the dendrogram merges the coherence cut rejects). (A
+2026-06-18 attempt to retire the delta-keyed channel
 was reverted: it changed *no* golden fixture, but on the real soak corpora
 it materially shapes the type-parameter rename family — a reminder that
 channel-retirement must be measured on the real corpora, not the fixtures
@@ -717,6 +719,73 @@ those files, and the pool dies — the gate, not the emission, decides.
 Fixture: `kotlin_delta_pooled_drop` (three files, one
 `Notification<User>` drop each under different anchors → one rule,
 support 3). All other soaks byte-identical.
+
+### 3.2b AU-intersection mining
+
+The delta-keyed channel (§3.2) holes a pair's *preserved* children — a
+per-pair heuristic for "this is anchor, that is delta" based on
+structural-hash preservation. Its generalization is recurrence: hole a
+position because the *instances actually differ there*. That evidence
+lives where two instances first meet — the anti-unification itself —
+and the pipeline already computes it: every pair of change pairs in a
+dendrogram bucket meets at some internal node (the merge tree is
+complete), and the coherence cut visits every internal node it rejects.
+A rejected merge's pattern is the aligned intersection of all instances
+beneath it; a *concrete* before/after divergence inside it is a delta
+every one of those instances shares, buried under the per-file holes
+that sank the merge. Mining recovers it
+(`Cs_cluster.cut_dendrogram ?on_reject` →
+`Cs_pattern.extract_components` → `Cs_select.propose_intersection`):
+
+1. **Hole identification.** A position holding `Hole i` on the before
+   side and `Hole j` on the after side is per-instance content the edit
+   *rewrites* (a preserved position gets the same index on both sides
+   from the shared `hole_for` memo). No component can express the
+   rewrite — the values differ per instance — but it can *pass it
+   through*: identifying `j := i` makes it an ordinary bound hole; the
+   per-file edit falls to a later tier or the residual, and the safety
+   gate certifies the arrangement site by site. This is the delta-keyed
+   move extended from preserved to *edited* children. Identification is
+   positional through structurally parallel nodes, and by LCS alignment
+   inside a same-type pair whose arities diverge — the differ-opaque
+   flat-node case (a dotted import path losing a segment).
+2. **Descent.** Walk the common spine of the identified pattern and
+   emit each differing subtree pair along the way — the minimal delta
+   and every enclosing context level up to (and now including) the
+   identified whole, each level trading anchors against holes for the
+   gate to arbitrate. Each emission must stand alone: concrete
+   match-side content, and hole closure (every after-side hole bound on
+   the component's own before side — content flowing across a split
+   means the split is unsound there).
+3. **One delta per component.** A level whose difference splits into
+   two or more independent minimal deltas is a co-occurrence, not a
+   component: emitted, it would beat the axes' own general rules on
+   concrete-token specificity at exactly the sites where they happen to
+   coincide (the `tsx_remap_overfire_bait` shape). Mining emits
+   irreducible deltas and their single-delta context chains only;
+   composite multi-part rules remain the dendrogram's to propose, with
+   coherence applied.
+4. **Pooling and gating.** Components are hole-renumbered to a
+   canonical form, pooled by identity across rejected nodes (instances
+   deduplicated — nested rejections share them), and gated like any
+   cluster. Deliberately *no* hole-fraction cut — the delta-channel
+   precedent: a pass-through component is inherently hole-heavy and
+   exactly as general as its cross-instance evidence; the gate decides
+   meaning. One suppression: a mined component whose sole minimal delta
+   some single-delta candidate from another channel already carries is
+   dropped — mining is a recall channel, and redundant same-delta
+   variants at other context levels only perturb family arbitration. A
+   delta that is merely *part* of a multi-delta rule is not suppressed:
+   the composite fires only where all its parts co-occur, so the
+   standalone delta still buys recall at partial sites.
+
+Fixture: `kotlin_import_fused_migration` — an import migration
+(`legacy.old._` → `modern._`, an arity-collapsing edit in the flat path
+node) fused with a per-file head-segment rename in the same node. The
+differ cannot leaf-pair it, delta-keyed cannot key it (the head is
+edited, not preserved); mining emits
+`import _H0.legacy.old._H1._H2 → import _H0.modern._H1._H2` at full
+support, with the head renames left to per-file residuals.
 
 ### 3.3 Evaluation-based semantics
 
