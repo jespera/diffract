@@ -859,6 +859,248 @@ let anti_unify_pat (p1 : pat_node) (p2 : pat_node) : pat_node =
   let go = mk_anti_unify (make_hole_for ()) in
   go p1 p2
 
+(* ── AU-intersection component extraction ────────────────────────────
+   Recurrence-driven decomposition (the generalization of the delta-keyed
+   idea, design §3.2): an anti-unified [edit_pat] is the aligned
+   intersection of every instance beneath a dendrogram node. Inside it,
+   a position where the before and after sides are *equal* (same leaf,
+   or the same hole index — content the edit preserves, whether or not
+   the instances vary on it) is context; a position where they *differ
+   concretely* is a delta every instance shares. When the whole pattern
+   fails coherence — per-file material holed it past the threshold —
+   those shared deltas are still recoverable: walk the equal spine and
+   emit each differing subtree pair, at every enclosing level down to
+   the minimal component, as a standalone candidate. Levels rather than
+   just minima because context is a trade the gate should arbitrate: the
+   minimal component drops anchors (over-general, geodesic-checked), an
+   enclosing level keeps them (specific, but carries more holes). *)
+
+(** Renumber an [edit_pat]'s holes densely from 0 in first-appearance
+    order (before side first), preserving before/after sharing. Extracted
+    components inherit arbitrary indices from their source pattern; a
+    canonical numbering lets structurally-equal components extracted from
+    different dendrogram nodes pool by [(=)]. *)
+let renumber_edit_holes (ep : edit_pat) : edit_pat =
+  let tbl : (int, int) Hashtbl.t = Hashtbl.create 8 in
+  let next = ref 0 in
+  let rec go = function
+    | Hole h ->
+        let h' =
+          match Hashtbl.find_opt tbl h with
+          | Some v -> v
+          | None ->
+              let v = !next in
+              incr next;
+              Hashtbl.add tbl h v;
+              v
+        in
+        Hole h'
+    | Ellipsis -> Ellipsis
+    | Leaf _ as l -> l
+    | PNode n ->
+        PNode
+          {
+            n with
+            children =
+              List.map (fun c -> { c with child = go c.child }) n.children;
+          }
+  in
+  let before = go ep.before in
+  let after = go ep.after in
+  { before; after }
+
+(** Extract standalone sub-edit candidates from an anti-unified pattern.
+
+    First, {e hole identification}: a position where the before side has
+    [Hole i] and the after side [Hole j] is per-instance content that the
+    edit {e rewrites} (a preserved position gets the same index on both
+    sides from the shared [hole_for] memo). A component cannot express
+    that rewrite — the values differ per instance — but it can {e pass it
+    through}: identifying [j := i] turns the position into an ordinary
+    bound hole, the rule reproduces the before content, and the
+    per-instance rewrite falls to a later tier or the residual, which the
+    safety gate certifies site by site. This is the delta-keyed move
+    (scope-holing a pair's {e preserved} children) generalized to
+    {e edited} children. Identified pairs are found positionally through
+    structurally parallel nodes, and by {!lcs_align} inside a
+    same-node-type pair whose arities diverge (a dotted import path
+    losing a segment — the differ-opaque flat-node case). An after-hole
+    that also occurs on the before side somewhere else is already a
+    binding source and is never identified over.
+
+    Then the descent: walk the common spine of the (identified) pattern —
+    recursing only through structurally parallel nodes — and emit every
+    differing subtree pair along the way as a standalone candidate. The
+    root pair is emitted only when identification changed it (the caller
+    already has the raw pattern; the identified whole is new — it is
+    exactly the anchored, scope-holed form delta-keyed would have built
+    had the varying positions been preserved). Each emission must stand
+    alone: [has_concrete] on the before side (a component with no
+    concrete match-side content relates nothing), and hole closure —
+    every after-side hole bound on the component's own before side;
+    content flowing across a split means the split is unsound there, so
+    that level is emitted whole or not at all.
+
+    Results are hole-renumbered ({!renumber_edit_holes}) and
+    deduplicated. Purely structural — coherence thresholds and support
+    are the caller's concern. *)
+(** Structural parallelism: same node type, arity, and field names —
+    children pair positionally, so a before/after descent can separate
+    their differences. *)
+let pat_parallel (nb : pat_node) (na : pat_node) =
+  match (nb, na) with
+  | PNode nb, PNode na ->
+      nb.node_type = na.node_type
+      && nb.is_named = na.is_named
+      && List.length nb.children = List.length na.children
+      && List.for_all2
+           (fun (cb : pat_child) (ca : pat_child) ->
+             cb.field_name = ca.field_name)
+           nb.children na.children
+  | _ -> false
+
+(** The minimal deltas of an edit pattern: the differing before/after
+    subtree pairs that no parallel descent separates further —
+    hole-renumbered so the same delta extracted from different contexts
+    compares equal. The identity of what a pattern {e changes}, with its
+    context stripped. *)
+let minimal_deltas (ep : edit_pat) : edit_pat list =
+  let out = ref [] in
+  let rec go (b : pat_node) (a : pat_node) : bool =
+    (* returns: does the subtree pair contain any delta? *)
+    if b = a then false
+    else begin
+      let below =
+        if pat_parallel b a then
+          match (b, a) with
+          | PNode nb, PNode na ->
+              List.fold_left2
+                (fun acc (cb : pat_child) (ca : pat_child) ->
+                  let d = go cb.child ca.child in
+                  acc || d)
+                false nb.children na.children
+          | _ -> false
+        else false
+      in
+      if not below then
+        out := renumber_edit_holes { before = b; after = a } :: !out;
+      true
+    end
+  in
+  ignore (go ep.before ep.after);
+  List.sort_uniq compare !out
+
+let extract_components (ep : edit_pat) : edit_pat list =
+  let parallel = pat_parallel in
+  (* ── identification pass ── *)
+  let before_holes = collect_holes [] ep.before in
+  let ident : (int, int) Hashtbl.t = Hashtbl.create 8 in
+  let rec identify (b : pat_node) (a : pat_node) =
+    if b <> a then
+      match (b, a) with
+      | Hole i, Hole j ->
+          if i <> j && (not (List.mem j before_holes))
+             && not (Hashtbl.mem ident j)
+          then Hashtbl.add ident j i
+      | PNode nb, PNode na when parallel b a ->
+          List.iter2
+            (fun (cb : pat_child) (ca : pat_child) ->
+              identify cb.child ca.child)
+            nb.children na.children
+      | PNode nb, PNode na
+        when nb.node_type = na.node_type && nb.is_named = na.is_named ->
+          (* Arity-divergent same-type pair: align what aligns (holes
+             match holes, leaves match leaves of the same type) and
+             identify through the matches; the unmatched leftovers are
+             the delta and stay concrete. *)
+          let arr_b = Array.of_list nb.children in
+          let arr_a = Array.of_list na.children in
+          List.iter
+            (fun (i, j) -> identify arr_b.(i).child arr_a.(j).child)
+            (lcs_align arr_b arr_a)
+      | _ -> ()
+  in
+  identify ep.before ep.after;
+  let ep =
+    if Hashtbl.length ident = 0 then ep
+    else begin
+      let rec subst = function
+        | Hole j -> (
+            match Hashtbl.find_opt ident j with
+            | Some i -> Hole i
+            | None -> Hole j)
+        | (Ellipsis | Leaf _) as p -> p
+        | PNode n ->
+            PNode
+              {
+                n with
+                children =
+                  List.map (fun c -> { c with child = subst c.child }) n.children;
+              }
+      in
+      { ep with after = subst ep.after }
+    end
+  in
+  (* ── descent ──
+     [walk] returns the number of {e minimal deltas} in the subtree pair —
+     positions where the two sides differ and no parallel descent below
+     them separates the difference further. A level is emitted only when
+     it carries at most one: the minimal delta itself, or a context
+     extension of a single delta (each level of that chain trades anchors
+     against holes; the gate arbitrates). A level whose difference splits
+     into two or more independent minimal deltas is a {e fusion of
+     co-occurrences}, not a component — emitting it would let two
+     unrelated axes that happened to change together at the mined
+     instances outrank their own general rules on concrete-token
+     specificity (the shape the [tsx_remap_overfire_bait] fixture
+     guards). Composite multi-part rules are the dendrogram's to propose,
+     with coherence applied; mining only recovers irreducible shared
+     deltas and their context chains. *)
+  let out = ref [] in
+  let seen : (edit_pat, unit) Hashtbl.t = Hashtbl.create 16 in
+  let emit b a =
+    let holes_closed =
+      let hb = collect_holes [] b in
+      List.for_all (fun h -> List.mem h hb) (collect_holes [] a)
+    in
+    if has_concrete b && holes_closed then begin
+      let c = renumber_edit_holes { before = b; after = a } in
+      if not (Hashtbl.mem seen c) then begin
+        Hashtbl.add seen c ();
+        out := c :: !out
+      end
+    end
+  in
+  let rec walk ~is_root (b : pat_node) (a : pat_node) : int =
+    if b = a then 0
+    else begin
+      let deltas_below =
+        if parallel b a then
+          match (b, a) with
+          | PNode nb, PNode na ->
+              (* Templates need not match: a template-only divergence (a
+                 separator change) has no differing children and counts
+                 as this node's own minimal delta; a template divergence
+                 alongside child edits stays at this level while the
+                 children are still mined independently. *)
+              List.fold_left2
+                (fun acc (cb : pat_child) (ca : pat_child) ->
+                  acc + walk ~is_root:false cb.child ca.child)
+                0 nb.children na.children
+          | _ -> 0
+        else 0
+      in
+      let n = max deltas_below 1 in
+      if n <= 1 && not is_root then emit b a;
+      n
+    end
+  in
+  (* Identification produced a pattern the cut never saw — the whole is a
+     candidate then too, not just its parts (subject to the same
+     single-delta rule). *)
+  ignore (walk ~is_root:(Hashtbl.length ident = 0) ep.before ep.after);
+  List.rev !out
+
 let rec max_hole_node = function
   | Hole h -> h
   | Ellipsis -> -1
