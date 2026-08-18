@@ -565,16 +565,8 @@ let propose_intersection (env : tier_env) ~(base : cluster list)
   List.iter
     (fun (c : cluster) ->
       match minimal_deltas c.pattern with
-      | [ d ] ->
-          if Cs_trace.on () then
-            Printf.eprintf "intersection: base single-delta:\n%s\n---\n%!"
-              (render_pattern_body d);
-          Hashtbl.replace suppressed d ()
-      | ds ->
-          if Cs_trace.on () then
-            Printf.eprintf "intersection: base %d-delta cluster:\n%s\n---\n%!"
-              (List.length ds)
-              (render_pattern_body c.pattern))
+      | [ d ] -> Hashtbl.replace suppressed d ()
+      | _ -> ())
     base;
   let redundant ep =
     match minimal_deltas ep with
