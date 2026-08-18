@@ -143,13 +143,15 @@ Ellipsis (`...`) can be used as anonymous sequence matching:
 @@
 match: strict
 @@
-<?php
 function test() {
     ...
     echo "middle";
     ...
 }
 ```
+(PHP pattern bodies are bare PHP — no `<?php` tag: the `php_only`
+grammar variant parses fragments directly, and a tag in the body
+mis-tokenizes the pattern.)
 - `...` matches zero or more nodes (like sequence metavars)
 - Auto-detects context: adds `;` in statement position, not in argument position
 - Does NOT replace `...$var` (PHP spread operator is preserved)
