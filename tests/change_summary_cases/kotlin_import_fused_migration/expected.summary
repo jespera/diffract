@@ -1,0 +1,34 @@
+# rule R1  support=3  language=kotlin
+@@
+match: strict
+metavar _H0: single
+metavar _H1: single
+metavar _H2: single
+@@
+- import _H0.legacy.old._H1._H2
++ import _H0.modern._H1._H2
+# sites R1
+a.kt
+b.kt
+c.kt
+
+# residual  rule=R1
+--- a/a.kt
++++ b/a.kt
+@@ -1,1 +1,1 @@
+-import alpha.modern.widget.Button
++import alphax.modern.widget.Button
+
+# residual  rule=R1
+--- a/b.kt
++++ b/b.kt
+@@ -1,1 +1,1 @@
+-import beta.modern.dialog.Prompt
++import betay.modern.dialog.Prompt
+
+# residual  rule=R1
+--- a/c.kt
++++ b/c.kt
+@@ -1,1 +1,1 @@
+-import gamma.modern.list.Grid
++import gammaz.modern.list.Grid

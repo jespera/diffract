@@ -52,6 +52,13 @@ type options = {
           the capped tier misses re-propose in later tiers over the shrunken
           remainder. Deterministic (stable input-order prefix) and trace-logged,
           never silent. *)
+  intersection_components_cap : int;
+      (** AU-intersection mining: at most this many coherent components are
+          kept per rejected dendrogram merge ({!Cs_pattern.extract_components}
+          emits every enclosing level of every shared sub-edit, so a large
+          composite can yield many). Identical components pool across rejected
+          nodes before evaluation, so the cap bounds proposal volume, not
+          support. *)
   anchor_sample : int;
       (** declaration anchoring: how many of a two-sided cluster's instances to
           re-anchor under their enclosing declaration when proposing a
@@ -74,5 +81,6 @@ let default =
     selector_depth_limit = 5;
     emission_threshold = 0.5;
     dendrogram_bucket_cap = 400;
+    intersection_components_cap = 12;
     anchor_sample = 12;
   }

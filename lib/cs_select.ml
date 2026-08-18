@@ -30,8 +30,9 @@ type scored_candidate = {
     [box(foo()).get()⤳foo()] ∧ [box(42).get()⤳42] → [box(_H0).get()⤳_H0]) — so
     we must NOT split on it. A single pre-grouped cluster skips the dendrogram.
 *)
-let propose_two_sided_clusters ~safe_instances (initial : cluster list) :
-    cluster list =
+let propose_two_sided_clusters ~safe_instances
+    ?(on_reject = fun (_ : edit_pat) (_ : instance list) -> ())
+    (initial : cluster list) : cluster list =
   match initial with
   | [] -> []
   | [ c ] ->
@@ -64,7 +65,9 @@ let propose_two_sided_clusters ~safe_instances (initial : cluster list) :
             ~label:"dendrogram bucket" bucket
         in
         let root = build_dendrogram bucket in
-        let clusters, _singletons = cut_dendrogram ~safe_instances 2 root in
+        let clusters, _singletons =
+          cut_dendrogram ~safe_instances ~on_reject 2 root
+        in
         List.map respecialize clusters
       in
       let tbl = Hashtbl.create 16 in
@@ -533,6 +536,122 @@ let propose_delta_pooled ?(label = "delta-keyed") (env : tier_env)
       (List.length delta_raw)
       (List.length delta_clusters);
   delta_clusters
+
+(** PROPOSE: AU-intersection candidates — shared sub-edits mined from the
+    dendrogram merges the coherence cut rejected. A rejected merge's pattern is
+    the aligned intersection of every instance beneath it; a concrete
+    before/after divergence inside it is a delta all of them share, buried
+    under the per-file holes that sank the merge. {!Cs_pattern.extract_components}
+    pulls those out at every enclosing context level; here each component
+    becomes a cluster carrying the rejected node's instances (its evidence —
+    every one of them exhibits the component, by anti-unification), identical
+    components pool across nodes, and the pools are gated like any cluster.
+    Support and sites are still evaluation's to decide (§3.3) — instances only
+    seed [cand_files]. Instance [ipat] is the component itself (the delta-keyed
+    precedent): re-specialization over survivors is then the identity, which is
+    right — the component is already exactly as general as its evidence. *)
+let propose_intersection (env : tier_env) ~(base : cluster list)
+    (mined : (edit_pat * instance list) list) : cluster list =
+  (* Redundancy suppression: mining is a recall channel. A base cluster
+     that is itself single-delta already carries that delta with
+     dendrogram-vetted context; re-proposing the same delta at other
+     context levels adds nothing the gate can distinguish on evidence,
+     but the extra variants perturb family arbitration and application
+     order (the [tsx_remap_overfire_bait] shape). A delta only part of a
+     multi-delta base rule is NOT suppressed — the composite fires only
+     where all its parts co-occur, so the standalone delta still buys
+     recall at partial sites. *)
+  let suppressed : (edit_pat, unit) Hashtbl.t = Hashtbl.create 16 in
+  List.iter
+    (fun (c : cluster) ->
+      match minimal_deltas c.pattern with
+      | [ d ] ->
+          if Cs_trace.on () then
+            Printf.eprintf "intersection: base single-delta:\n%s\n---\n%!"
+              (render_pattern_body d);
+          Hashtbl.replace suppressed d ()
+      | ds ->
+          if Cs_trace.on () then
+            Printf.eprintf "intersection: base %d-delta cluster:\n%s\n---\n%!"
+              (List.length ds)
+              (render_pattern_body c.pattern))
+    base;
+  let redundant ep =
+    match minimal_deltas ep with
+    | [ d ] -> Hashtbl.mem suppressed d
+    | _ -> false
+  in
+  (* Structural predicates only — deliberately no hole-fraction cut, the
+     delta-channel precedent: an identified component passes per-file
+     content through as holes, so its fraction is inherently high, and
+     the pattern is exactly as general as its cross-instance evidence.
+     Volume is bounded by the per-node cap and identity pooling; meaning
+     is decided by the evaluation gate. *)
+  let coherent ep =
+    has_concrete ep.before && has_concrete_edit ep && no_orphan_after_holes ep
+    && no_junk_passthrough ep
+  in
+  let take n l =
+    let rec go n acc = function
+      | x :: rest when n > 0 -> go (n - 1) (x :: acc) rest
+      | _ -> List.rev acc
+    in
+    go n [] l
+  in
+  let raw =
+    List.concat_map
+      (fun (pat, insts) ->
+        extract_components pat
+        |> List.filter (fun ep -> coherent ep && not (redundant ep))
+        |> take Cs_config.default.intersection_components_cap
+        |> List.map (fun ep ->
+            {
+              pattern = ep;
+              instances = List.map (fun i -> { i with ipat = ep }) insts;
+            }))
+      mined
+  in
+  let clusters =
+    pre_group_identical raw
+    |> List.map (fun c ->
+        (* Nested rejected merges share instances (a leaf sits under every
+           rejected ancestor), so pooling duplicates sites — dedupe on
+           identity before support counts anything. *)
+        let instances =
+          List.sort_uniq
+            (fun (a : instance) (b : instance) ->
+              compare
+                (a.file, a.site_start, a.site_end)
+                (b.file, b.site_start, b.site_end))
+            c.instances
+        in
+        { c with instances })
+    |> List.filter (fun c ->
+        List.length c.instances >= Cs_config.default.min_support)
+    |> List.filter_map (fun c ->
+        let safe = safe_instances env c.pattern c.instances in
+        if List.length safe >= Cs_config.default.min_support then
+          Some { c with instances = safe }
+        else begin
+          if Cs_trace.on () then
+            Printf.eprintf
+              "intersection: pool gate-shed (%d -> %d safe):\n%s\n---\n%!"
+              (List.length c.instances) (List.length safe)
+              (render_pattern_body c.pattern);
+          None
+        end)
+  in
+  if Cs_trace.on () then begin
+    Cs_trace.trace "intersection: %d rejected merges, %d pooled+safe\n%!"
+      (List.length mined) (List.length clusters);
+    List.iter
+      (fun c ->
+        Printf.eprintf "intersection: pooled+safe (%d insts):\n%s\n---\n%!"
+          (List.length c.instances)
+          (render_pattern_body c.pattern))
+      clusters
+  end;
+  clusters
 
 (* ── The anchored stream (§3.2) ───────────────────────────────────
    Anchored variants: support pools on the DELTA. A delta whose distinct
@@ -1162,15 +1281,19 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
     Cs_trace.timed "propose: two-sided extract" (fun () ->
         collect_initial_clusters ?on_file:(on_file_for "two-sided") ~ctx cs)
   in
-  let base_two_sided, delta_clusters, deep_clusters, anchored =
+  let base_two_sided, delta_clusters, deep_clusters, intersection_clusters, anchored
+      =
     Cs_trace.timed "propose: two-sided cluster" (fun () ->
         let initial =
           Cs_trace.timed "  pre-group" (fun () -> pre_group_identical raw)
         in
         trace_initial_histogram raw initial;
+        let mined = ref [] in
         let base_two_sided =
           Cs_trace.timed "  two-sided clusters" (fun () ->
               propose_two_sided_clusters ~safe_instances:(safe_instances env)
+                ~on_reject:(fun pat insts ->
+                  mined := (pat, insts) :: !mined)
                 initial)
         in
         let delta =
@@ -1184,9 +1307,23 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
         let anchored =
           Cs_trace.timed "  anchored" (fun () -> propose_anchored anchored_raw)
         in
-        (base_two_sided, delta, deep, anchored))
+        let intersection =
+          Cs_trace.timed "  intersection mine" (fun () ->
+              (* Suppression base: every candidate another channel already
+                 carries — dendrogram clusters, pooled deltas, deep chain
+                 variants, and the anchored stream's realisations. *)
+              let anchored_clusters =
+                List.map (fun (_, _, c) -> c) anchored.an_pooled
+              in
+              propose_intersection env
+                ~base:(base_two_sided @ delta @ deep @ anchored_clusters)
+                !mined)
+        in
+        (base_two_sided, delta, deep, intersection, anchored))
   in
-  let two_sided_clusters = base_two_sided @ delta_clusters in
+  let two_sided_clusters =
+    base_two_sided @ delta_clusters @ intersection_clusters
+  in
   let candidates =
     Cs_trace.timed "propose: one-sided extract" (fun () ->
         collect_one_sided_candidates ?on_file:(on_file_for "one-sided") ~ctx cs)

@@ -358,7 +358,8 @@ let respecialize (c : cluster) : cluster =
       { c with pattern }
 
 let cut_dendrogram ?(threshold = Cs_config.default.max_hole_fraction)
-    ?(safe_instances = fun (_ : edit_pat) insts -> insts) min_size root =
+    ?(safe_instances = fun (_ : edit_pat) insts -> insts)
+    ?(on_reject = fun (_ : edit_pat) (_ : instance list) -> ()) min_size root =
   let is_coherent ep =
     let s = edit_size ep in
     (* The match side must always carry concrete content (a named
@@ -412,6 +413,15 @@ let cut_dendrogram ?(threshold = Cs_config.default.max_hole_fraction)
       | DMerge m ->
           let pat = coarse m.pattern insts in
           if not (is_coherent pat && try_emit pat insts) then begin
+            (* AU-intersection mining: a rejected merge still aligned its
+               instances — hand its pattern to the caller so shared
+               sub-edits can be extracted as standalone candidates
+               ({!Cs_pattern.extract_components}). Every leaf pair in the
+               dendrogram meets at some internal node, so rejected merges
+               see every pair the bucket ever considered — including
+               pairs whose anchors are too heterogeneous to ever merge
+               coherently. *)
+            on_reject pat insts;
             go m.left;
             go m.right
           end
