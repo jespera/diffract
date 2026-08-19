@@ -475,14 +475,43 @@ let trace_initial_histogram raw initial =
     (no dendrogram participation), gated like any cluster. A pool of ≥ 2
     identical scope-holed pairs is a delta whose support spans anchors;
     evaluation later extends it to every file it fires in. *)
-let propose_delta_pooled (env : tier_env) (delta_raw : cluster list) :
-    cluster list =
+let propose_delta_pooled ?(label = "delta-keyed") (env : tier_env)
+    (delta_raw : cluster list) : cluster list =
+  (* Re-specialized twin of a pool: anti-unify the pool's instances' own
+     [ipat]s — holes survive only where the sites actually differ, every
+     position they agree on comes back concrete. For the plain delta channel
+     this is the identity ([ipat] is the holed pattern itself); for the deep
+     chain variants [ipat] is the site's concrete pattern, so the twin is the
+     readable, evidence-exact form of the pooled key ("abstract only the
+     parts of the context that vary"). Both are kept as candidates: where
+     concreteness breaks the §3.2 re-parse the twin dies at the gate and the
+     holed key survives; where both fire, application-order specificity
+     prefers the concrete-richer twin. *)
+  let with_twins (pools : cluster list) : cluster list =
+    List.concat_map
+      (fun (c : cluster) ->
+        match c.instances with
+        | [] | [ _ ] -> [ c ]
+        | i :: rest ->
+            let twin =
+              List.fold_left (fun acc j -> anti_unify_edits acc j.ipat) i.ipat
+                rest
+            in
+            if twin = c.pattern then [ c ]
+            else if
+              has_concrete twin.before && has_concrete_edit twin
+              && no_orphan_after_holes twin
+              && no_junk_passthrough twin
+            then [ c; { c with pattern = twin } ]
+            else [ c ])
+      pools
+  in
   let delta_clusters =
-    pre_group_identical delta_raw
+    pre_group_identical delta_raw |> with_twins
     |> List.filter (fun c ->
         let enough = List.length c.instances >= Cs_config.default.min_support in
         if (not enough) && Cs_trace.on () then
-          Printf.eprintf "delta-keyed: pool of %d below floor:\n%s\n---\n%!"
+          Printf.eprintf "%s: pool of %d below floor:\n%s\n---\n%!" label
             (List.length c.instances)
             (render_pattern_body c.pattern);
         enough)
@@ -493,14 +522,14 @@ let propose_delta_pooled (env : tier_env) (delta_raw : cluster list) :
         else begin
           if Cs_trace.on () then
             Printf.eprintf
-              "delta-keyed: pool gate-shed (%d -> %d safe):\n%s\n---\n%!"
+              "%s: pool gate-shed (%d -> %d safe):\n%s\n---\n%!" label
               (List.length c.instances) (List.length safe)
               (render_pattern_body c.pattern);
           None
         end)
   in
   if Cs_trace.on () then
-    Cs_trace.trace "delta-keyed: %d raw, %d pooled+safe\n%!"
+    Cs_trace.trace "%s: %d raw, %d pooled+safe\n%!" label
       (List.length delta_raw)
       (List.length delta_clusters);
   delta_clusters
@@ -1017,24 +1046,25 @@ let select_round ~(anchored : anchored_stream) ~covered ~selected pool floor =
    safety-checking and evaluating it would be wasted work. Returns the
    live realisations as candidates, deduped (via [reg]) against the
    general ones already proposed. *)
-let live_anchored_candidates (env : tier_env) ~(anchored : anchored_stream)
-    ~covered reg : (string * string) list =
-  let region_covered file ds de =
-    match Hashtbl.find_opt env.site_db file with
-    | None -> false
-    | Some si ->
-        let idx = ref (-1) in
+let region_covered (env : tier_env) ~covered file ds de =
+  match Hashtbl.find_opt env.site_db file with
+  | None -> false
+  | Some si ->
+      let idx = ref (-1) in
+      List.iteri
+        (fun i (rs, re, _) ->
+          if !idx < 0 && rs <= ds && de <= re then idx := i)
+        si.si_regions;
+      if !idx < 0 then
         List.iteri
           (fun i (rs, re, _) ->
-            if !idx < 0 && rs <= ds && de <= re then idx := i)
+            if !idx < 0 && spans_overlap ds de rs re then idx := i)
           si.si_regions;
-        if !idx < 0 then
-          List.iteri
-            (fun i (rs, re, _) ->
-              if !idx < 0 && spans_overlap ds de rs re then idx := i)
-            si.si_regions;
-        !idx >= 0 && Hashtbl.mem covered (file, !idx)
-  in
+      !idx >= 0 && Hashtbl.mem covered (file, !idx)
+
+let live_anchored_candidates (env : tier_env) ~(anchored : anchored_stream)
+    ~covered reg : (string * string) list =
+  let region_covered = region_covered env ~covered in
   let pool_live key lang =
     match Hashtbl.find_opt anchored.an_pool_sites (lang, key) with
     | Some l -> List.exists (fun (f, ds, de) -> not (region_covered f ds de)) !l
@@ -1084,6 +1114,40 @@ let live_anchored_candidates (env : tier_env) ~(anchored : anchored_stream)
       else None)
     anchored_clusters
 
+(* ── lazy deep chains ── The deep delta variants ({!Cs_propose.delta_keyed_deep})
+   are anchored context-chain forms of a delta. Where round 1 already covers a
+   region, they would only re-factor it — and observedly worse: they preempt
+   the anchored stream's ellipsis-context realisations and displace
+   arity-general rules with clunkier context-chain forms (a decorator-property
+   insertion, a constructor-parameter type rename). So, like the anchored
+   realisations, they are RECALL: gated and evaluated only when some instance
+   sits in a region round 1 left uncovered, and selected in round 2. *)
+let live_deep_candidates (env : tier_env) ~(deep_clusters : cluster list)
+    ~covered reg : (string * string) list =
+  let region_covered = region_covered env ~covered in
+  let live =
+    List.filter
+      (fun (c : cluster) ->
+        List.exists
+          (fun (i : instance) ->
+            not (region_covered i.file i.site_start i.site_end))
+          c.instances)
+      deep_clusters
+  in
+  if Cs_trace.on () then
+    Cs_trace.trace "deep: %d pooled+safe, %d live (gated lazily)\n%!"
+      (List.length deep_clusters) (List.length live);
+  List.filter_map
+    (fun (c : cluster) ->
+      let language = lang_of c in
+      let pattern_text = render_pattern_body c.pattern in
+      if language <> "" && not (reg_mem reg (pattern_text, language)) then begin
+        reg_add reg ~language pattern_text;
+        Some (pattern_text, language)
+      end
+      else None)
+    live
+
 (** One tier of the pipeline (§3.3): propose → evaluate → select over a
     changeset, returning the selected rules in application order
     (specificity-descending — see [sort_for_application]), unnumbered
@@ -1094,11 +1158,11 @@ let live_anchored_candidates (env : tier_env) ~(anchored : anchored_stream)
 let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
   let env = Cs_trace.timed "site db" (fun () -> make_tier_env ~ctx cs) in
   (* ── PROPOSE: the candidate channels ─────────────────────────── *)
-  let raw, delta_raw, anchored_raw =
+  let raw, delta_raw, deep_raw, anchored_raw =
     Cs_trace.timed "propose: two-sided extract" (fun () ->
         collect_initial_clusters ?on_file:(on_file_for "two-sided") ~ctx cs)
   in
-  let base_two_sided, delta_clusters, anchored =
+  let base_two_sided, delta_clusters, deep_clusters, anchored =
     Cs_trace.timed "propose: two-sided cluster" (fun () ->
         let initial =
           Cs_trace.timed "  pre-group" (fun () -> pre_group_identical raw)
@@ -1113,10 +1177,14 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
           Cs_trace.timed "  delta pool" (fun () ->
               propose_delta_pooled env delta_raw)
         in
+        let deep =
+          Cs_trace.timed "  deep pool" (fun () ->
+              propose_delta_pooled ~label:"deep" env deep_raw)
+        in
         let anchored =
           Cs_trace.timed "  anchored" (fun () -> propose_anchored anchored_raw)
         in
-        (base_two_sided, delta, anchored))
+        (base_two_sided, delta, deep, anchored))
   in
   let two_sided_clusters = base_two_sided @ delta_clusters in
   let candidates =
@@ -1216,15 +1284,16 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
         (List.filter (fun sc -> not (is_exempt sc)) evaluated_general)
         Cs_config.default.min_support);
   let anchored_cands = live_anchored_candidates env ~anchored ~covered reg in
+  let deep_cands = live_deep_candidates env ~deep_clusters ~covered reg in
   let evaluated_anchored =
     Cs_trace.timed "evaluate: anchored" (fun () ->
         List.filter_map
           (eval_candidate env ~anchored ~field_cand_files)
-          anchored_cands)
+          (anchored_cands @ deep_cands))
   in
-  (* Round 2: the anchored realisations, plus any general candidate that
-     was exempt (a textual coincidence), over the regions round 1 left
-     open. *)
+  (* Round 2: the anchored realisations and the deep chain variants, plus
+     any general candidate that was exempt (a textual coincidence), over
+     the regions round 1 left open. *)
   Cs_trace.timed "select: round 2" (fun () ->
       select_round ~anchored ~covered ~selected
         (List.filter is_exempt evaluated_general @ evaluated_anchored)

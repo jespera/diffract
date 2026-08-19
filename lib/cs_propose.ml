@@ -595,6 +595,251 @@ let ellipsize_level (bn : Tree.src Tree.t) (an : Tree.src Tree.t)
       | _ -> None
     end
 
+(** Deep (chain-recursive) delta-keyed variant. [delta_keyed_pair] holes a
+    pair's preserved children but keeps every changed child fully concrete —
+    at the delta's own level that IS the delta, but at an ancestor level the
+    changed child is a whole subtree containing per-site variation, so the
+    variant is site-specific and its identity pool stays at 1. This variant
+    recurses instead: when a level has exactly one changed child on each side,
+    that pair is generalized by the same rules, all the way down to the level
+    where the change stops being a single-child chain (the delta, kept
+    concrete). The result is identical across sites that share the delta and
+    the chain's structure, so pools form at {e every} context level — the
+    gate then decides which level's render actually fires (§3.2's re-parse
+    mismatch kills fragment levels; an anchored statement-ish level
+    survives). Emitted for every change pair the multi-level extraction
+    visits, so each suffix of the context chain is a candidate.
+
+    Per-level generalization of the preserved siblings, by container shape:
+    - {b bracket-delimited levels} take the {!ellipsize_level} form —
+      [{ ... <delta> ... }] — so the list's arity is NOT baked into the
+      pattern. Holing each preserved sibling instead pools only same-arity
+      sites, and such an arity-baked variant can then hijack a family from
+      its arity-general rule on application-order specificity, dropping the
+      off-arity sites to residuals (observed: a decorator-property insertion
+      whose one-prior-property variant stole the spec-file sites). When the
+      ellipsis form declines (mid-list insertion, degenerate shapes), the
+      preserved siblings stay {e concrete} — the level still carries the
+      recursed generalization below, but pools only among sites that agree
+      on the siblings, rather than generalizing along the wrong axis.
+    - {b fixed-shape levels} (declarations, annotations — arity set by the
+      grammar) hole each preserved named child, delta-keyed's own rule;
+      anonymous tokens stay concrete.
+
+    No hole-fraction cut: recursion accumulates holes by design (each
+    context level trades anchors for pooling), and the pool is gated like
+    any cluster — the delta-channel precedent that meaning is decided by
+    evaluation. The other structural checks (concrete match side, closed
+    after-holes, no junk pass-through) still apply.
+
+    Returns [None] when nothing was generalized anywhere (the variant would
+    equal the concrete pair). *)
+let delta_keyed_deep (cp : Tree_diff.change_pair) : edit_pat option =
+  let pnode_shaped source (n : Tree.src Tree.t) =
+    n.children <> []
+    && (not (has_silent_concrete_delimiters ~source ~node:n))
+    && not (has_quote_delim_children ~source ~node:n)
+  in
+  let next_hole = ref 0 in
+  let generalized = ref false in
+  let keep (n : Tree.src Tree.t) = not n.is_extra in
+  let rec go depth (b : Tree.src Tree.t) (a : Tree.src Tree.t) :
+      pat_node * pat_node =
+    let concrete () = (of_src cp.before_source b, of_src cp.after_source a) in
+    if
+      depth > 8
+      || (not (pnode_shaped cp.before_source b))
+      || (not (pnode_shaped cp.after_source a))
+      || b.node_type <> a.node_type
+    then concrete ()
+    else begin
+      let kept (n : Tree.src Tree.t) =
+        List.filter
+          (fun (c : Tree.src Tree.child) -> not c.node.is_extra)
+          n.children
+      in
+      let bks = kept b and aks = kept a in
+      let aks_arr = Array.of_list aks in
+      let used = Array.make (Array.length aks_arr) false in
+      (* Greedy in-order hash matching, as in [delta_keyed_pair]. *)
+      let b_assign =
+        List.map
+          (fun (c : Tree.src Tree.child) ->
+            let m = ref None in
+            Array.iteri
+              (fun i (ac : Tree.src Tree.child) ->
+                if !m = None && (not used.(i)) && ac.node.hash = c.node.hash
+                then begin
+                  used.(i) <- true;
+                  m := Some i
+                end)
+              aks_arr;
+            match !m with
+            | Some i when c.node.is_named -> (c, `Pres i)
+            | Some i -> (c, `Anon i)
+            | None -> (c, `Delta))
+          bks
+      in
+      let delta_b =
+        List.filter (fun (_, m) -> m = `Delta) b_assign |> List.map fst
+      in
+      let delta_a = List.filteri (fun i _ -> not used.(i)) aks in
+      (* Recurse only through a one-child-per-side chain: with several changed
+         children the level is where deltas fuse, and each stays concrete
+         (delta_keyed_pair parity). *)
+      let recursed =
+        match (delta_b, delta_a) with
+        | [ db ], [ da ] -> Some (db, go (depth + 1) db.node da.node)
+        | _ -> None
+      in
+      let before_child ((c : Tree.src Tree.child), m) hole_of =
+        match (m, recursed) with
+        | `Pres _, _ -> hole_of c m
+        | `Delta, Some (db, (rb, _)) when db == c -> rb
+        | _ -> of_src cp.before_source c.node
+      in
+      let after_child i (c : Tree.src Tree.child) hole_of =
+        if used.(i) then hole_of i
+        else
+          match recursed with
+          | Some (_, (_, ra)) -> ra
+          | None -> of_src cp.after_source c.node
+      in
+      (* Bracket-shaped level? Try the arity-free ellipsis form first. Only
+         the opener/closer, a potential kept head, and the delta children are
+         ever read from the pattern-child arrays, so preserved siblings get a
+         placeholder rather than paying [of_src] on (possibly large) subtrees
+         they'd never render. *)
+      let bracketish =
+        match (bks, aks) with
+        | b0 :: _ :: _, a0 :: _ :: _ ->
+            (not b0.node.is_named)
+            && (not a0.node.is_named)
+            && String.length b0.node.node_type = 1
+            && String.contains "([{<" b0.node.node_type.[0]
+        | _ -> false
+      in
+      let ellipsized =
+        if not bracketish then None
+        else begin
+          let placeholder = Hole 0 in
+          let pat_children source recursed_pat delta_test children real_idx =
+            List.mapi
+              (fun i (c : Tree.src Tree.child) ->
+                let child =
+                  if delta_test i c then
+                    match recursed_pat with
+                    | Some p -> p
+                    | None -> of_src source c.node
+                  else if i = 0 || i = 1 || i = List.length children - 1 then
+                    of_src source c.node
+                  else if real_idx i c then of_src source c.node
+                  else placeholder
+                in
+                { field_name = c.field_name; child })
+              children
+          in
+          let b_delta_idx =
+            List.mapi
+              (fun i (_, m) -> if m = `Delta then Some i else None)
+              b_assign
+            |> List.filter_map Fun.id
+          in
+          let bc =
+            pat_children cp.before_source
+              (match recursed with Some (_, (rb, _)) -> Some rb | None -> None)
+              (fun i _ -> List.mem i b_delta_idx)
+              bks
+              (fun i _ -> List.mem i b_delta_idx)
+          in
+          let ac =
+            pat_children cp.after_source
+              (match recursed with Some (_, (_, ra)) -> Some ra | None -> None)
+              (fun i _ -> not used.(i))
+              aks
+              (fun i _ -> not used.(i))
+          in
+          let b_pairs =
+            List.map
+              (fun (c, m) ->
+                ( c,
+                  match m with
+                  | `Pres i | `Anon i -> Some i
+                  | `Delta -> None ))
+              b_assign
+          in
+          match ellipsize_level b a b_pairs aks used bc ac with
+          | Some (pb, pa, _form) ->
+              generalized := true;
+              Some (pb, pa)
+          | None -> None
+        end
+      in
+      match ellipsized with
+      | Some pair -> pair
+      | None ->
+          (* Fixed-shape level: hole preserved named children. At a bracket
+             level whose ellipsis form declined, keep them concrete instead —
+             an arity-baked hole pattern generalizes along the wrong axis. *)
+          let hole_of_a = Array.make (Array.length aks_arr) None in
+          let before =
+            PNode
+              {
+                node_type = b.node_type;
+                is_named = b.is_named;
+                children =
+                  List.map
+                    (fun ((c : Tree.src Tree.child), m) ->
+                      {
+                        field_name = c.field_name;
+                        child =
+                          before_child (c, m) (fun c' m' ->
+                              match m' with
+                              | `Pres i when not bracketish ->
+                                  let h = !next_hole in
+                                  incr next_hole;
+                                  generalized := true;
+                                  hole_of_a.(i) <- Some h;
+                                  Hole h
+                              | _ -> of_src cp.before_source c'.node);
+                      })
+                    b_assign;
+                template =
+                  build_template ~source:cp.before_source ~node:b ~keep ();
+              }
+          in
+          let after =
+            PNode
+              {
+                node_type = a.node_type;
+                is_named = a.is_named;
+                children =
+                  List.mapi
+                    (fun i (c : Tree.src Tree.child) ->
+                      {
+                        field_name = c.field_name;
+                        child =
+                          after_child i c (fun i' ->
+                              match hole_of_a.(i') with
+                              | Some h -> Hole h
+                              | None -> of_src cp.after_source c.node);
+                      })
+                    aks;
+                template =
+                  build_template ~source:cp.after_source ~node:a ~keep ();
+              }
+          in
+          (before, after)
+    end
+  in
+  let before, after = go 0 cp.before_node cp.after_node in
+  let ep = { before; after } in
+  if
+    !generalized && has_concrete ep.before && has_concrete_edit ep
+    && no_orphan_after_holes ep && no_junk_passthrough ep
+  then Some ep
+  else None
+
 (* The 4th component marks an insertion-form variant (the chain ended in an
    ellipsis-context insertion): those are GENERAL candidates — one arity-free
    text shared by every site, the opposite of a site-local anchored
@@ -1049,22 +1294,30 @@ let anchored_variants (cp : Tree_diff.change_pair) :
       sels
   end
 
-(* Returns (base clusters, delta-keyed clusters, anchored variants).
-   The base clusters feed the dendrogram as before; the delta-keyed and
-   anchored variants deliberately stay OUT of it — adding them as
+(* Returns (base clusters, delta-keyed clusters, deep chain variants,
+   anchored variants). The base clusters feed the dendrogram as before; the
+   other three streams deliberately stay OUT of it — adding them as
    dendrogram inputs changes its merge geometry for everyone (observed:
    displaced extraction and call-level rules on the golden cases). The
-   delta-keyed variants pool by exact pattern identity; the anchored
-   variants pool by DELTA key, so a context-dependent change whose
-   anchors differ per site still accumulates delta-level support. *)
+   delta-keyed and deep variants pool by exact pattern identity; the
+   anchored variants pool by DELTA key, so a context-dependent change whose
+   anchors differ per site still accumulates delta-level support. The deep
+   stream is kept separate from the plain delta stream because it is
+   round-2 material: an anchored context-chain form competes with the
+   nice ellipsis-context rules only for regions round 1 leaves uncovered
+   (see the selection notes in {!Cs_select}). *)
 let collect_initial_clusters ?on_file ~ctx (cs : changeset) :
-    cluster list * cluster list * (string * (int * int) * cluster) list =
+    cluster list
+    * cluster list
+    * cluster list
+    * (string * (int * int) * cluster) list =
   let modified =
     List.filter (function Modified _ -> true | _ -> false) cs.files
   in
   let total = List.length modified in
   let initial = ref [] in
   let delta = ref [] in
+  let deep = ref [] in
   let anchored = ref [] in
   List.iteri
     (fun i fc ->
@@ -1103,7 +1356,8 @@ let collect_initial_clusters ?on_file ~ctx (cs : changeset) :
                 initial := { pattern = ep; instances = [ inst ] } :: !initial;
                 (* §3.2 delta-keyed variant: same site, scope-holed
                    pattern, collected on its own channel. *)
-                (match delta_keyed_pair cp with
+                let dep = delta_keyed_pair cp in
+                (match dep with
                 | Some dep ->
                     delta :=
                       {
@@ -1112,6 +1366,17 @@ let collect_initial_clusters ?on_file ~ctx (cs : changeset) :
                       }
                       :: !delta
                 | None -> ());
+                (* Deep (chain-recursive) variant: pools at ancestor
+                   context levels too. Instances keep their CONCRETE
+                   pattern as [ipat], so a pool can later re-specialize
+                   to its cross-site evidence (holes only where sites
+                   differ) — the holed pattern is the pooling key and
+                   the re-parse-robust fallback. Skipped when equal to
+                   the plain variant (same site would pool twice). *)
+                (match delta_keyed_deep cp with
+                | Some ddep when Some ddep <> dep ->
+                    deep := { pattern = ddep; instances = [ inst ] } :: !deep
+                | _ -> ());
                 (* §3.2 anchored variants: preserved siblings literal,
                    changed-chain interior holed, keyed by the delta —
                    one per path choice at branching levels. Insertion-form
@@ -1154,7 +1419,7 @@ let collect_initial_clusters ?on_file ~ctx (cs : changeset) :
                 path (Printexc.to_string e))
       | Added _ | Deleted _ -> ())
     modified;
-  (!initial, !delta, !anchored)
+  (!initial, !delta, !deep, !anchored)
 
 (** Collect one-sided candidates (M1.5) across a changeset's [Modified] files.
     Each candidate carries its pat_node shape and site metadata. Used internally
