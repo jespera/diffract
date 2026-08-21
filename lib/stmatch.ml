@@ -16,7 +16,7 @@
     views on [drive] selecting different success conditions. *)
 
 type pattern_token =
-  | Concrete of { text : string; node_type : string }
+  | Concrete of { text : string; node_type : string; in_string : bool }
   | Subtree of { name : string option }
   | Siblings of { name : string option }
 
@@ -116,6 +116,7 @@ module Make (C : Cursor.S) = struct
      order (seed bindings come first since they originated from earlier
      pattern positions). *)
   let drive ~mode ?(initial_bindings = []) ?(ignore_node_type = false)
+      ?(lexical = true)
       ?(descend = false) ?(spans : (int * int) array option = None)
       (pattern : pattern_token list) (initial_cursor : C.t) : drive_result =
     let pattern = Array.of_list pattern in
@@ -249,7 +250,9 @@ module Make (C : Cursor.S) = struct
             let leaf = C.move_first_leaf !cursor in
             if
               C.leaf_text leaf <> t.text
-              || ((not ignore_node_type) && C.leaf_node_type leaf <> t.node_type)
+              || (not ignore_node_type)
+                 && C.leaf_node_type leaf <> t.node_type
+                 && ((not lexical) || C.in_string !cursor <> t.in_string)
             then raise Mismatch
             else record i (C.byte_range !cursor)
       done
@@ -414,6 +417,7 @@ module Make (C : Cursor.S) = struct
     | _ -> None
 
   let match_prefix ?(initial_bindings = []) ?(ignore_node_type = false)
+      ?(lexical = true)
       ?(descend = false) ?(spans = None) pattern cursor =
     match pattern with
     | [] ->
@@ -428,6 +432,7 @@ module Make (C : Cursor.S) = struct
     | _ -> (
         match
           drive ~mode:Drive_match_prefix ~initial_bindings ~ignore_node_type
+            ~lexical
             ~descend ~spans pattern cursor
         with
         | Drive_source_exhausted (remaining, c, b) -> Some (remaining, c, b)
@@ -479,8 +484,7 @@ module Make (C : Cursor.S) = struct
     let rec loop ts ls =
       match (ts, ls) with
       | [], [] -> true
-      | Concrete { text; node_type } :: ts', l :: ls'
-        when text = C.leaf_text l && node_type = C.leaf_node_type l ->
+      | Concrete { text; _ } :: ts', l :: ls' when text = C.leaf_text l ->
           loop ts' ls'
       | _ -> false
     in
@@ -698,7 +702,8 @@ module Make (C : Cursor.S) = struct
               let matched =
                 match
                   match_prefix ~initial_bindings:bindings ~ignore_node_type
-                    ~spans:(Some local) remaining (C.clone child)
+                    ~lexical:false ~spans:(Some local) remaining
+                    (C.clone child)
                 with
                 | Some (remaining', _, bindings') -> (
                     let consumed =

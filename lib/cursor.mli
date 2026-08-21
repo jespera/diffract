@@ -65,6 +65,15 @@ module type S = sig
       ["identifier"], ["string_content"], [","]). *)
   val leaf_node_type : leaf -> string
 
+  (** [in_string c] is true iff [c]'s current position lies inside a
+      string-like literal — some ancestor (or the current node itself) is
+      quote-delimited ({!Tree.string_delimited}). Consulted by the matcher's
+      lexical leaf comparison only when a text-equal leaf pair disagrees on
+      node type: differing roles are accepted, but code never matches string
+      contents (and vice versa). Implementations over hand-built test trees
+      may approximate (e.g. by node-type naming convention). *)
+  val in_string : t -> bool
+
   (** [subtree_equal c1 c2] returns true iff the subtrees at [c1]'s and [c2]'s
       current positions are structurally equal — same node types, same leaf
       text, same children structure. Used by the matcher for non-linear pattern

@@ -30,13 +30,14 @@ let matches pattern tree =
 (* Concrete tokens default to node_type "identifier", matching the
    leaves built by [id] in test_cursor.ml. *)
 let con text : Stmatch.pattern_token =
-  Concrete { text; node_type = "identifier" }
+  Concrete { text; node_type = "identifier"; in_string = false }
 
 let sub : Stmatch.pattern_token = Subtree { name = None }
 let sib : Stmatch.pattern_token = Siblings { name = None }
 
 (* Concrete with explicit type, for node-type discrimination tests. *)
-let con_t text node_type : Stmatch.pattern_token = Concrete { text; node_type }
+let con_t text node_type : Stmatch.pattern_token =
+  Concrete { text; node_type; in_string = false }
 
 (* String shorthand to build a sequence of one-char concrete tokens. *)
 let cons s =
@@ -500,10 +501,10 @@ let test_nonlinear_siblings_equal_sequences () =
   let foo = leaf "kw" "foo" in
   let bar = leaf "kw" "bar" in
   let foo_pat : Stmatch.pattern_token =
-    Concrete { text = "foo"; node_type = "kw" }
+    Concrete { text = "foo"; node_type = "kw"; in_string = false }
   in
   let bar_pat : Stmatch.pattern_token =
-    Concrete { text = "bar"; node_type = "kw" }
+    Concrete { text = "bar"; node_type = "kw"; in_string = false }
   in
   let tree = nd [ id "a"; id "b"; foo; id "a"; id "b"; bar ] in
   Alcotest.(check bool)
@@ -516,10 +517,10 @@ let test_nonlinear_siblings_different_sequences_fail () =
   let foo = leaf "kw" "foo" in
   let bar = leaf "kw" "bar" in
   let foo_pat : Stmatch.pattern_token =
-    Concrete { text = "foo"; node_type = "kw" }
+    Concrete { text = "foo"; node_type = "kw"; in_string = false }
   in
   let bar_pat : Stmatch.pattern_token =
-    Concrete { text = "bar"; node_type = "kw" }
+    Concrete { text = "bar"; node_type = "kw"; in_string = false }
   in
   let tree = nd [ id "a"; id "b"; foo; id "a"; id "c"; bar ] in
   Alcotest.(check bool)
@@ -532,10 +533,10 @@ let test_nonlinear_siblings_different_lengths_fail () =
   let foo = leaf "kw" "foo" in
   let bar = leaf "kw" "bar" in
   let foo_pat : Stmatch.pattern_token =
-    Concrete { text = "foo"; node_type = "kw" }
+    Concrete { text = "foo"; node_type = "kw"; in_string = false }
   in
   let bar_pat : Stmatch.pattern_token =
-    Concrete { text = "bar"; node_type = "kw" }
+    Concrete { text = "bar"; node_type = "kw"; in_string = false }
   in
   let tree = nd [ id "a"; id "b"; foo; id "a"; bar ] in
   Alcotest.(check bool)
@@ -546,7 +547,7 @@ let test_nonlinear_siblings_records_one_binding () =
   (* Two occurrences of P should produce a single Sequence binding. *)
   let foo = leaf "kw" "foo" in
   let foo_pat : Stmatch.pattern_token =
-    Concrete { text = "foo"; node_type = "kw" }
+    Concrete { text = "foo"; node_type = "kw"; in_string = false }
   in
   let tree = nd [ id "a"; id "b"; foo; id "a"; id "b" ] in
   let bs = bindings_of [ nseq "P"; foo_pat; nseq "P" ] tree in
@@ -605,10 +606,10 @@ let test_nonlinear_siblings_zero_zero () =
   let foo = leaf "kw" "foo" in
   let bar = leaf "kw" "bar" in
   let foo_pat : Stmatch.pattern_token =
-    Concrete { text = "foo"; node_type = "kw" }
+    Concrete { text = "foo"; node_type = "kw"; in_string = false }
   in
   let bar_pat : Stmatch.pattern_token =
-    Concrete { text = "bar"; node_type = "kw" }
+    Concrete { text = "bar"; node_type = "kw"; in_string = false }
   in
   let tree = nd [ foo; bar ] in
   Alcotest.(check bool)

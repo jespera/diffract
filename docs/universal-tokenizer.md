@@ -99,13 +99,23 @@ require them. The matcher has no other dependency on tree-sitter
 or on `Tree`. Navigation is mutating per stsearch's reference
 (§6.5); `clone` provides snapshots for the checkpoint stack.
 
-Concrete literal tokens carry both their text *and* the node type
-the tokenizer observed for that leaf. Leaf equality at match time
-compares `(text, node_type)` — not text alone. This is a
-deliberate extension over stsearch's text-only comparison and
-disambiguates leaves that happen to share text but represent
-different constructs (e.g. Kotlin's identifier `hello` vs string
-content `"hello"`). See §3.10.
+Concrete literal tokens carry their text, the node type the
+tokenizer observed for the leaf, and a string-interiority bit
+(`in_string`, computed from the pattern parse's own ancestry via
+quote-delimiter detection — `Tree.string_delimited`). Leaf equality
+at match time is **lexical**: text must agree, and when the two
+sides' node types differ the match survives iff both sides agree on
+string-interiority. Rationale: a pattern body is a fragment, and its
+re-parse assigns context-dependent *roles* unreliably (`owner:`
+standalone is a labeled statement; `React.FC` standalone is an
+expression), so comparing role names rejects against noise — the
+historical cause of silent zero-match patterns. String-interiority
+is the part of the classification a lexer gets right regardless of
+context, and it preserves the distinction that matters: code never
+matches string contents (e.g. Kotlin's identifier `hello` never
+matches the content of `"hello"`). Field mode is the exception: its
+per-candidate source-context re-tokenization already assigns correct
+roles, so it keeps strict node-type comparison. See §3.10.
 
 ### 2.2 The asymmetry made explicit
 
@@ -191,7 +201,8 @@ the only language-specific data, and it's already linked.
 
 STMatch directly. Pattern token sequence walked against source AST
 via cursor. Wildcards bind to subtrees with left-spine backtracking;
-literals match leaves on both text and node type (see §2.1). Both
+literals match leaves lexically — text plus string-interiority
+agreement when node types differ (see §2.1). Both
 pattern and cursor must end together for the match to succeed.
 
 ### 3.2 Partial mode

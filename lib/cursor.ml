@@ -12,6 +12,7 @@ module type S = sig
   val narrow : t -> t
   val leaf_text : leaf -> string
   val leaf_node_type : leaf -> string
+  val in_string : t -> bool
   val subtree_equal : t -> t -> bool
   val is_named : t -> bool
   val byte_range : t -> int * int

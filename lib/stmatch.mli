@@ -1,7 +1,10 @@
 (** Sequence-to-tree pattern matching.
 
     The algorithm walks a flat list of pattern tokens against a tree accessed
-    via a {!Cursor.S}. Concrete tokens match leaves on both text and node type;
+    via a {!Cursor.S}. Concrete tokens match leaves lexically: on text, always;
+    node type disagreement is tolerated iff both sides agree on string-
+    interiority (differing syntactic roles are a fragment-parse artifact, but
+    code never matches string contents — see the [Concrete] doc);
     subtree wildcards bind to one complete subtree with left-spine backtracking;
     sibling wildcards match zero or more adjacent subtrees.
 
@@ -17,9 +20,19 @@
 
 (** A token in the pattern stream. *)
 type pattern_token =
-  | Concrete of { text : string; node_type : string }
-      (** A literal token. Matches a source leaf iff both [text] and [node_type]
-          agree. *)
+  | Concrete of { text : string; node_type : string; in_string : bool }
+      (** A literal token. Matches a source leaf iff [text] agrees, and either
+          [node_type] agrees (the common case — bit-for-bit the historical
+          strict behaviour) or the leaf's string-interiority agrees with
+          [in_string]. The relaxation exists because a pattern body is a
+          fragment: its parse assigns context-dependent roles wrongly
+          ([owner:] standalone is a labeled statement; its [owner] leaf a
+          [statement_identifier]), and comparing those role names rejects
+          against noise. String-interiority is the part of the classification
+          a lexer gets right regardless of context, and it preserves the one
+          distinction that matters: code never matches string contents.
+          [in_string] is computed by the tokenizer from the pattern parse's
+          own ancestry ({!Tree.string_delimited}). *)
   | Subtree of { name : string option }
       (** Subtree wildcard. Matches one complete subtree of any shape.
           [name = None] is anonymous (no binding recorded). [name = Some n]
@@ -126,6 +139,7 @@ module Make (C : Cursor.S) : sig
   val match_prefix :
     ?initial_bindings:binding list ->
     ?ignore_node_type:bool ->
+    ?lexical:bool ->
     ?descend:bool ->
     ?spans:(int * int) array option ->
     pattern_token list ->

@@ -84,6 +84,16 @@ val named_children : 'kind t -> 'kind t list
 (** [text source node] extracts the source text for a node *)
 val text : string -> _ t -> string
 
+(** [string_delimited ~source node] is true iff [node] is a string-like
+    literal: its content is wrapped in quote delimiters (double quote,
+    single quote, or backtick), detected lexically — either a
+    silently-consumed opening quote at the node's first byte, or an unnamed
+    single-byte quote child. Grammar-agnostic (no node-type names
+    consulted). A leaf is string-interior iff one of its ancestors
+    satisfies this; the matcher's lexical leaf comparison uses that bit to
+    keep code from matching string contents. *)
+val string_delimited : source:string -> _ t -> bool
+
 (** [hash node] returns a precomputed structural hash. Two nodes with different
     hashes are guaranteed to be structurally different. Two nodes with the same
     hash are very likely (but not guaranteed) to be structurally equal. The hash

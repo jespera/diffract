@@ -13,6 +13,11 @@ type frame = {
 type t = {
   source : string;  (** shared with all clones; immutable *)
   mutable stack : frame list;
+  in_string_base : bool;
+      (** string-interiority of the context this cursor was scoped from:
+          sub-cursors ([narrow], [named_children], [all_children]) drop
+          their ancestor frames, so a cursor created inside a string
+          literal carries the bit here. OR-ed into {!in_string}. *)
 }
 
 (* Filter [Tree.child list] down to the nodes the matcher should see.
@@ -26,14 +31,26 @@ let filter_children (children : Tree.src Tree.child list) : Tree.src Tree.t list
       if c.node.is_extra then None else Some c.node)
     children
 
-let of_node ~source node = { source; stack = [ { curr = node; right = [] } ] }
+let of_node ~source node =
+  { source; stack = [ { curr = node; right = [] } ]; in_string_base = false }
 let of_tree (tree : Tree.src Tree.tree) = of_node ~source:tree.source tree.root
 
 let clone c =
   {
     source = c.source;
     stack = List.map (fun f -> { curr = f.curr; right = f.right }) c.stack;
+    in_string_base = c.in_string_base;
   }
+
+(* Ancestors are all on the stack, so string-interiority is a stack scan
+   (plus the scoping context's bit). Called only from the matcher's lexical
+   fallback (text equal, node types differ), so the walk is off the hot
+   path. *)
+let in_string c =
+  c.in_string_base
+  || List.exists
+       (fun f -> Tree.string_delimited ~source:c.source f.curr)
+       c.stack
 
 (* Reset the cursor's stack so the current node is the root of navigation
    — no upward escape via [move_next_subtree]. Used by multi-section
@@ -41,7 +58,12 @@ let clone c =
 let narrow c =
   match c.stack with
   | [] -> failwith "Tree_sitter_cursor: empty stack (logic error)"
-  | f :: _ -> { source = c.source; stack = [ { curr = f.curr; right = [] } ] }
+  | f :: _ ->
+      {
+        source = c.source;
+        stack = [ { curr = f.curr; right = [] } ];
+        in_string_base = in_string c;
+      }
 
 let current_node c =
   match c.stack with
@@ -105,19 +127,22 @@ let byte_range c =
 
 let named_children c =
   let n = current_node c in
+  let base = in_string c in
   List.filter_map
     (fun (child : Tree.src Tree.child) ->
       if child.node.is_named && not child.node.is_extra then
-        Some (of_node ~source:c.source child.node)
+        Some { (of_node ~source:c.source child.node) with in_string_base = base }
       else None)
     n.children
 
 let all_children c =
   let n = current_node c in
+  let base = in_string c in
   List.filter_map
     (fun (child : Tree.src Tree.child) ->
       if child.node.is_extra then None
-      else Some (of_node ~source:c.source child.node))
+      else
+        Some { (of_node ~source:c.source child.node) with in_string_base = base })
     n.children
 
 (* Collect every non-extra leaf reachable under [node] in pre-order. For the
