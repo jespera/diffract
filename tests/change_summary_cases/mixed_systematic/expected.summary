@@ -8,10 +8,10 @@ metavar _H0: single
 
 @@
 match: strict
-metavar _H0: single
+metavar _H1: single
 @@
-- _H0.write
-+ _H0.set
+- _H1.write
++ _H1.set
 # sites R1
 auth.ts
 rates.ts

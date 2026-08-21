@@ -2,19 +2,22 @@
 @@
 match: strict
 @@
-- ::WorkflowState
-+ ::ExternalWorkflowState
+- WorkflowState(
++ ExternalWorkflowState(
+              value = lookup(id),
+          )
 # sites R1
-ServiceB.kt
+ServiceA.kt
 
 # rule R2  support=1  language=kotlin
 @@
 match: strict
-metavar _H0: single
 @@
-- state = WorkflowState(
-+ state = ExternalWorkflowState(
-              _H0,
-          )
+  build(
+  ...
+- ::WorkflowState
++ ::ExternalWorkflowState
+  ...
+  )
 # sites R2
-ServiceA.kt
+ServiceB.kt

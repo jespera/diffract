@@ -2,14 +2,14 @@
 @@
 match: strict
 @@
-- LegacyClient
-+ Client
+- LegacyClient.send
++ Client.send
 
 @@
 match: strict
 @@
-- legacy
-+ current
+- com.example.legacy
++ com.example.current
 # sites R1
 legacy/LegacyAlpha.kt
 legacy/LegacyBeta.kt
