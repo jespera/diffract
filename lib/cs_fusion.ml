@@ -209,12 +209,23 @@ let materialise_group ?(min_support = Cs_config.default.min_support)
                 (render_pattern_body b.fn_pattern))
             group
         in
-        [
-          ( List.map (fun n -> n.fn_pattern) sorted,
-            inter,
-            language,
-            List.length inter );
-        ]
+        (* Disjoint hole namespaces per section: the sections were derived
+           independently, so equal hole indices are collisions, not intent —
+           and same-name metavars across sections are THREADED by the
+           matcher (a shared binding), which would wrongly constrain the
+           conjunctive (e.g. [fetchUser(_H0)] ∧ [resetCache(_H0)] demanding
+           the same argument at both sites). Deliberate sharing is a user
+           construct; fused sections get fresh names. *)
+        let shifted =
+          let off = ref 0 in
+          List.map
+            (fun n ->
+              let ep = shift_holes !off n.fn_pattern in
+              off := !off + max_hole n.fn_pattern + 1;
+              ep)
+            sorted
+        in
+        [ (shifted, inter, language, List.length inter) ]
 
 (** Pre-cluster singletons whose patterns are structurally equal into
     multi-instance clusters. Clustering singletons at ~1000-site scale runs
