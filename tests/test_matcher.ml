@@ -2375,23 +2375,32 @@ let test_scala_transform_smoke () =
           + logger.info($x)"
        ~source:"def f() = { println(\"hi\") }")
 
-(* text_only_find_in_tree — backs the `search --explain` hint: locations whose
-   tokens match as text but in a different syntactic role than the pattern. *)
+(* Lexical comparison closed the role-mismatch papercut: a pattern whose
+   fragment parse assigns the wrong role ([React.FC] standalone reads FC as a
+   [property_identifier], the source has a [type_identifier]) now matches
+   directly — the historical `search --explain` motivating case. text_only
+   remains for what lexical still (deliberately) rejects: same text inside a
+   string literal. *)
 let test_text_only_finds_role_mismatch () =
   let src = "const C: React.FC = x;" in
   let pattern = "@@\nmatch: strict\n@@\nReact.FC" in
-  (* Strict (structural) search finds nothing: standalone, React.FC's FC is a
-     property_identifier, but in the source it's a type_identifier. *)
   Alcotest.(check int)
-    "strict structural search finds nothing" 0
+    "lexical strict search finds the role-mismatched occurrence" 1
     (List.length (find ~language:"tsx" ~pattern ~source:src));
-  (* Text-only locates the type-position occurrence — what the hint reports. *)
-  let tree = Tree.parse ~ctx ~language:"tsx" src in
+  (* String interiors stay out of reach of strict search; text-only (the
+     --explain fallback) still reports them. A single-token pattern, because
+     string content is one leaf — multi-token code text never aligns with it. *)
+  let pattern_fc = "@@\nmatch: strict\n@@\nFC" in
+  let src_str = {|const s = "FC";|} in
   Alcotest.(check int)
-    "text-only finds the role-mismatched occurrence" 1
+    "strict search does not match inside a string" 0
+    (List.length (find ~language:"tsx" ~pattern:pattern_fc ~source:src_str));
+  let tree = Tree.parse ~ctx ~language:"tsx" src_str in
+  Alcotest.(check int)
+    "text-only finds the in-string occurrence" 1
     (List.length
        (Matcher.text_only_find_in_tree ~ctx ~language:"tsx"
-          ~pattern_text:pattern tree))
+          ~pattern_text:pattern_fc tree))
 
 let test_text_only_scoped_to_single_strict () =
   (* The hint is scoped to a single global strict section; a partial pattern

@@ -34,6 +34,30 @@ let text source node =
 (** Get the precomputed structural hash of a node *)
 let hash t = t.hash
 
+(** Is [node] a string-like literal — a node whose content is wrapped in
+    quote delimiters? Detected lexically, not by node-type name, so it is
+    grammar-agnostic: either the node's own first byte is a quote character
+    that no child covers (grammars that consume delimiters silently —
+    Kotlin string literals), or an unnamed child is a bare quote token
+    (grammars that expose delimiters — TS/JS strings and templates).
+    Childless nodes are never string-delimited themselves (their enclosing
+    literal, if any, is). Used by the matcher's lexical leaf comparison:
+    a leaf is "string interior" iff some ancestor satisfies this. *)
+let string_delimited ~source (node : 'a t) : bool =
+  let quote c = c = '"' || c = '\'' || c = '`' in
+  match node.children with
+  | [] -> false
+  | first :: _ ->
+      (first.node.start_byte > node.start_byte
+      && String.length source > node.start_byte
+      && quote source.[node.start_byte])
+      || List.exists
+           (fun (c : 'a child) ->
+             (not c.node.is_named)
+             && c.node.end_byte = c.node.start_byte + 1
+             && quote source.[c.node.start_byte])
+           node.children
+
 (** Structural equality ignoring positions/formatting. Uses hash for fast
     rejection. Takes two source strings because nodes from different parses
     reference different source buffers for leaf text extraction. *)

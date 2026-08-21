@@ -106,8 +106,8 @@ let preprocess_ellipsis text =
    (single or sequence). No `$` prefix is assumed; the preamble is the sole
    authority. Whole-leaf comparison avoids any substring/boundary issue (a
    metavar named [obj] does not match inside [object] — different leaves). *)
-let classify_leaf ~single_metavars ~sequence_metavars ~ellipsis_map source
-    (node : Tree.pat Tree.t) : Stmatch.pattern_token =
+let classify_leaf ~single_metavars ~sequence_metavars ~ellipsis_map ~in_string
+    source (node : Tree.pat Tree.t) : Stmatch.pattern_token =
   let text = Tree.text source node in
   if List.mem text single_metavars then Stmatch.Subtree { name = Some text }
   else if List.mem text sequence_metavars then
@@ -115,7 +115,7 @@ let classify_leaf ~single_metavars ~sequence_metavars ~ellipsis_map source
   else
     match List.assoc_opt text ellipsis_map with
     | Some name -> Stmatch.Siblings { name = Some name }
-    | None -> Stmatch.Concrete { text; node_type = node.node_type }
+    | None -> Stmatch.Concrete { text; node_type = node.node_type; in_string }
 
 (* Walk a parsed pattern tree's leaves in document order, classifying each.
    [keep] decides whether a leaf contributes a token (used to restrict to a
@@ -142,7 +142,7 @@ let walk_leaves ~single_metavars ~sequence_metavars ~ellipsis_map
     in
     go ()
   in
-  let rec walk (node : Tree.pat Tree.t) =
+  let rec walk ~in_string (node : Tree.pat Tree.t) =
     if node.is_extra && not (Tree.is_error node) then ()
     else
       match node.children with
@@ -158,13 +158,18 @@ let walk_leaves ~single_metavars ~sequence_metavars ~ellipsis_map
             flush_before node.start_byte;
             tokens :=
               classify_leaf ~single_metavars ~sequence_metavars ~ellipsis_map
-                source node
+                ~in_string source node
               :: !tokens
           end
       | children ->
-          List.iter (fun (c : Tree.pat Tree.child) -> walk c.node) children
+          let in_string =
+            in_string || Tree.string_delimited ~source node
+          in
+          List.iter
+            (fun (c : Tree.pat Tree.child) -> walk ~in_string c.node)
+            children
   in
-  walk root;
+  walk ~in_string:false root;
   flush_before max_int;
   List.rev !tokens
 
@@ -196,7 +201,7 @@ let walk_leaves_with_lines ~single_metavars ~sequence_metavars ~ellipsis_map
     in
     go ()
   in
-  let rec walk (node : Tree.pat Tree.t) =
+  let rec walk ~in_string (node : Tree.pat Tree.t) =
     if node.is_extra && not (Tree.is_error node) then ()
     else
       match node.children with
@@ -205,14 +210,17 @@ let walk_leaves_with_lines ~single_metavars ~sequence_metavars ~ellipsis_map
             flush_before node.start_byte;
             let tok =
               classify_leaf ~single_metavars ~sequence_metavars ~ellipsis_map
-                source node
+                ~in_string source node
             in
             tokens := (tok, line_of node.start_byte) :: !tokens
           end
       | children ->
-          List.iter (fun (c : Tree.pat Tree.child) -> walk c.node) children
+          let in_string = in_string || Tree.string_delimited ~source node in
+          List.iter
+            (fun (c : Tree.pat Tree.child) -> walk ~in_string c.node)
+            children
   in
-  walk root;
+  walk ~in_string:false root;
   flush_before max_int;
   List.rev !tokens
 

@@ -15,7 +15,8 @@ let parse_kotlin source = Tree.parse ~ctx ~language:"kotlin" source
 let parse_tsx source = Tree.parse ~ctx ~language:"tsx" source
 
 (* Convenience constructors for pattern tokens. *)
-let con text node_type : Stmatch.pattern_token = Concrete { text; node_type }
+let con text node_type : Stmatch.pattern_token =
+  Concrete { text; node_type; in_string = false }
 let sub : Stmatch.pattern_token = Subtree { name = None }
 
 (* ========================================================================= *)
@@ -133,6 +134,12 @@ let test_partial_pattern_else_clause () =
    picks the right one based on the pattern's requested type, using
    manual cursor positioning to put each leaf under test. *)
 let test_leaf_type_distinguishes_same_text () =
+  (* Lexical comparison semantics: node-type disagreement alone no longer
+     rejects (a fragment's re-parse assigns roles unreliably), but
+     string-interiority still does — code never matches string contents.
+     The string leaf is addressed via its enclosing [string] node so the
+     cursor sees the quote-delimited ancestor, as any production walk
+     (which starts at or above the statement) would. *)
   let source = {|x + "x";|} in
   let tree = parse_ts source in
   let identifier_x =
@@ -140,13 +147,18 @@ let test_leaf_type_distinguishes_same_text () =
     | [ n ] -> n
     | _ -> failwith "expected exactly one identifier"
   in
-  let string_x =
-    match Tree.find_by_type "string_fragment" tree.root with
+  let string_node =
+    match Tree.find_by_type "string" tree.root with
     | [ n ] -> n
-    | _ -> failwith "expected exactly one string_fragment"
+    | _ -> failwith "expected exactly one string"
   in
   assert (Tree.text source identifier_x = "x");
-  assert (Tree.text source string_x = "x");
+  let con_str text node_type : Stmatch.pattern_token =
+    (* production-consistent string-content token: the tokenizer computes
+       [in_string] from the pattern parse's own ancestry, so a
+       string-fragment leaf always carries [true] *)
+    Concrete { text; node_type; in_string = true }
+  in
   let ok c pat msg =
     Alcotest.(check bool) msg true (M.match_at pat c |> Option.is_some)
   in
@@ -159,16 +171,22 @@ let test_leaf_type_distinguishes_same_text () =
     "identifier leaf matches identifier pattern";
   no
     (Tree_sitter_cursor.of_node ~source identifier_x)
-    [ con "x" "string_fragment" ]
-    "identifier leaf rejects string_fragment pattern";
+    [ con_str "x" "string_fragment" ]
+    "identifier leaf rejects string-content pattern token";
+  ignore string_node;
+  let count pat =
+    List.length (M.find_matches pat (Tree_sitter_cursor.of_tree tree))
+  in
+  Alcotest.(check int)
+    "string-content pattern token finds only the string's x" 1
+    (count [ con_str "x" "string_fragment" ]);
+  Alcotest.(check int)
+    "identifier pattern token finds only the identifier x" 1
+    (count [ con "x" "identifier" ]);
   ok
-    (Tree_sitter_cursor.of_node ~source string_x)
-    [ con "x" "string_fragment" ]
-    "string_fragment leaf matches string_fragment pattern";
-  no
-    (Tree_sitter_cursor.of_node ~source string_x)
-    [ con "x" "identifier" ]
-    "string_fragment leaf rejects identifier pattern"
+    (Tree_sitter_cursor.of_node ~source identifier_x)
+    [ con "x" "property_identifier" ]
+    "role mismatch alone is tolerated (lexical comparison)"
 
 (* Siblings wildcard via Tree_sitter_cursor, with a twist: one of the
    absorbed source children is itself a nested call (`b()`). The

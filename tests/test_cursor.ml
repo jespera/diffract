@@ -116,6 +116,25 @@ end = struct
   let leaf_text l = l.leaf_text
   let leaf_node_type l = l.leaf_node_type
 
+  (* Hand-built test trees have no source bytes to detect quote delimiters
+     from, so string-interiority is approximated by naming convention: a
+     position is inside a string iff some node on the stack (the current
+     node included) has a node type containing "string". This lets the
+     stmatch tests exercise the lexical comparison's one hard boundary
+     (code never matches string contents) without real parses. *)
+  let in_string c =
+    let stringy (n : tree) =
+      let t = n.node_type in
+      let lt = String.lowercase_ascii t in
+      let sub = "string" in
+      let ls = String.length lt and lsub = String.length sub in
+      let rec go i =
+        i + lsub <= ls && (String.sub lt i lsub = sub || go (i + 1))
+      in
+      go 0
+    in
+    List.exists (fun f -> stringy f.curr) c.stack
+
   (* Structural equality on the current node via OCaml's polymorphic [=].
      Safe here because the test tree type has no mutable fields. *)
   let subtree_equal c1 c2 = current_node c1 = current_node c2

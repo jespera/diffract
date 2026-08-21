@@ -44,10 +44,10 @@ let gen_source n =
 (* Pattern A: distinctive Concrete first. Anchor search would target `foo`. *)
 let pattern_distinctive =
   [
-    Stmatch.Concrete { text = "foo"; node_type = "identifier" };
-    Stmatch.Concrete { text = "("; node_type = "(" };
+    Stmatch.Concrete { text = "foo"; node_type = "identifier"; in_string = false };
+    Stmatch.Concrete { text = "("; node_type = "("; in_string = false };
     Stmatch.Subtree { name = Some "x" };
-    Stmatch.Concrete { text = ")"; node_type = ")" };
+    Stmatch.Concrete { text = ")"; node_type = ")"; in_string = false };
   ]
 
 (* Pattern B: wildcard first; first Concrete is `(`. Anchor search couldn't
@@ -56,19 +56,19 @@ let pattern_distinctive =
 let pattern_wildcard_first =
   [
     Stmatch.Subtree { name = Some "fn" };
-    Stmatch.Concrete { text = "("; node_type = "(" };
+    Stmatch.Concrete { text = "("; node_type = "("; in_string = false };
     Stmatch.Subtree { name = Some "x" };
-    Stmatch.Concrete { text = ")"; node_type = ")" };
+    Stmatch.Concrete { text = ")"; node_type = ")"; in_string = false };
   ]
 
 (* Pattern C: common Concrete first (`bar` instead of `foo`). For a 1-in-5
    distribution of foo's, bar appears 5x as often. *)
 let pattern_common =
   [
-    Stmatch.Concrete { text = "bar"; node_type = "identifier" };
-    Stmatch.Concrete { text = "("; node_type = "(" };
+    Stmatch.Concrete { text = "bar"; node_type = "identifier"; in_string = false };
+    Stmatch.Concrete { text = "("; node_type = "("; in_string = false };
     Stmatch.Subtree { name = Some "x" };
-    Stmatch.Concrete { text = ")"; node_type = ")" };
+    Stmatch.Concrete { text = ")"; node_type = ")"; in_string = false };
   ]
 
 (* Pattern D: non-linear within a single argument list — pair($x, ..., $x).
@@ -77,14 +77,14 @@ let pattern_common =
    Siblings absorption is at one structural level (it works). *)
 let pattern_nonlinear =
   [
-    Stmatch.Concrete { text = "pair"; node_type = "identifier" };
-    Stmatch.Concrete { text = "("; node_type = "(" };
+    Stmatch.Concrete { text = "pair"; node_type = "identifier"; in_string = false };
+    Stmatch.Concrete { text = "("; node_type = "("; in_string = false };
     Stmatch.Subtree { name = Some "x" };
-    Stmatch.Concrete { text = ","; node_type = "," };
+    Stmatch.Concrete { text = ","; node_type = ","; in_string = false };
     Stmatch.Siblings { name = None };
-    Stmatch.Concrete { text = ","; node_type = "," };
+    Stmatch.Concrete { text = ","; node_type = ","; in_string = false };
     Stmatch.Subtree { name = Some "x" };
-    Stmatch.Concrete { text = ")"; node_type = ")" };
+    Stmatch.Concrete { text = ")"; node_type = ")"; in_string = false };
   ]
 
 (* Pattern E: many concrete tokens — long sequence. Exercises the
@@ -92,12 +92,12 @@ let pattern_nonlinear =
    tokens before failing. *)
 let pattern_long =
   [
-    Stmatch.Concrete { text = "baz"; node_type = "identifier" };
-    Stmatch.Concrete { text = "("; node_type = "(" };
+    Stmatch.Concrete { text = "baz"; node_type = "identifier"; in_string = false };
+    Stmatch.Concrete { text = "("; node_type = "("; in_string = false };
     Stmatch.Subtree { name = Some "x" };
-    Stmatch.Concrete { text = ","; node_type = "," };
+    Stmatch.Concrete { text = ","; node_type = ","; in_string = false };
     Stmatch.Subtree { name = Some "y" };
-    Stmatch.Concrete { text = ")"; node_type = ")" };
+    Stmatch.Concrete { text = ")"; node_type = ")"; in_string = false };
   ]
 
 (* ========================================================================= *)
