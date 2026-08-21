@@ -1,9 +1,10 @@
 # rule R1  support=3  language=kotlin
 @@
 match: strict
+metavar _H0: single
 @@
-- legacyHandler
-+ modernHandler
+- legacyHandler(_H0)
++ modernHandler(_H0)
 # sites R1
 Activity1.kt
 Activity2.kt

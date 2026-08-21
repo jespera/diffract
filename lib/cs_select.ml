@@ -85,6 +85,123 @@ let propose_two_sided_clusters ~safe_instances (initial : cluster list) :
       |> List.concat_map (fun s ->
           process_bucket (List.rev !(Hashtbl.find tbl s)))
 
+(* ── Anchoredness ────────────────────────────────────────────────
+   Does the pattern state WHERE the edit applies? 1 iff the matching
+   lines ([-] and context) carry at least two word tokens (metavars
+   included — a binding is an anchor): [_H0.apiUrl ⤳ _H0.baseUrl],
+   [legacyStore.fetch ⤳ store.get]. 0 for a single-token edit — a grep,
+   not a rule ([apiUrl ⤳ baseUrl]). Under lexical matching bare forms
+   fire freely, and the shorter-pattern tie-breaks would prefer them
+   over the anchored statement of the same change; this bit, used BELOW
+   coverage and support, breaks those ties toward the anchor. A bare
+   form still wins when it explains more (a true global rename), and
+   remains available as recall. Context FRAMES deliberately do not add
+   a level: a frame that survives selection must pay for its length via
+   coverage or the delta/metavar tie-breaks below — junk frames ([{]
+   around an edit, [fun _H0() {]) otherwise beat the frameless statement
+   of the same edit. Textual, like [match_side_specificity]. *)
+let anchoredness pattern_text =
+  let is_word c =
+    (c >= 'a' && c <= 'z')
+    || (c >= 'A' && c <= 'Z')
+    || (c >= '0' && c <= '9')
+    || c = '_'
+  in
+  let count_words l seed =
+    let n = String.length l in
+    let acc = ref seed in
+    let i = ref 0 in
+    while !i < n do
+      if is_word l.[!i] then begin
+        let j = ref !i in
+        while !j < n && is_word l.[!j] do
+          incr j
+        done;
+        incr acc;
+        i := !j
+      end
+      else incr i
+    done;
+    !acc
+  in
+  let lines = String.split_on_char '\n' pattern_text in
+  let ats = ref 0 in
+  let words = ref 0 in
+  List.iter
+    (fun l ->
+      if String.trim l = "@@" then incr ats
+      else if !ats >= 2 && !ats mod 2 = 0 then
+        let n = String.length l in
+        if n = 0 then ()
+        else if l.[0] = '+' then ()
+        else if l.[0] = '-' then
+          words := count_words (String.sub l 1 (n - 1)) !words
+        else words := count_words l !words)
+    lines;
+  if !words >= 2 then 1 else 0
+
+(* Row-7 tie-break (orthogonality): at equal coverage, support, and
+   anchoredness, prefer the candidate whose edit changes FEWER tokens —
+   the size of the symmetric difference between the [-] and [+] lines'
+   word sets. A fused co-occurrence ([- priority="default"
+   + variant="secondary"], four differing tokens) couples two axes that
+   general rules state separately ([- _M0="default" + _M0="secondary"],
+   two); the finer factoring wins its regions, and the coarser form
+   survives only where the axes never occur apart. *)
+let delta_token_count pattern_text =
+  let is_word c =
+    (c >= 'a' && c <= 'z')
+    || (c >= 'A' && c <= 'Z')
+    || (c >= '0' && c <= '9')
+    || c = '_'
+  in
+  let words l seed =
+    let n = String.length l in
+    let acc = ref seed in
+    let i = ref 0 in
+    while !i < n do
+      if is_word l.[!i] then begin
+        let j = ref !i in
+        while !j < n && is_word l.[!j] do
+          incr j
+        done;
+        acc := String.sub l !i (!j - !i) :: !acc;
+        i := !j
+      end
+      else incr i
+    done;
+    !acc
+  in
+  let lines = String.split_on_char '\n' pattern_text in
+  let ats = ref 0 in
+  let minus = ref [] in
+  let plus = ref [] in
+  List.iter
+    (fun l ->
+      if String.trim l = "@@" then incr ats
+      else if !ats >= 2 && !ats mod 2 = 0 then
+        let n = String.length l in
+        if n = 0 then ()
+        else if l.[0] = '-' then minus := words (String.sub l 1 (n - 1)) !minus
+        else if l.[0] = '+' then plus := words (String.sub l 1 (n - 1)) !plus)
+    lines;
+  List.length (List.filter (fun w -> not (List.mem w !plus)) !minus)
+  + List.length (List.filter (fun w -> not (List.mem w !minus)) !plus)
+
+(* Row-6 tie-break (evidence-exactness): at equal coverage, support, and
+   anchoredness, the pattern with FEWER metavars wins — [Notification<User>
+   ⤳ Notification] over [_H0<User> ⤳ _H0]. A hole claims generality the
+   corpus never witnessed; when the sites genuinely vary, the holed form
+   has higher support and wins earlier. Counted from the declarations. *)
+let metavar_count pattern_text =
+  List.fold_left
+    (fun n l ->
+      match String.split_on_char ' ' (String.trim l) with
+      | "metavar" :: _ -> n + 1
+      | _ -> n)
+    0
+    (String.split_on_char '\n' pattern_text)
+
 (** PROPOSE: pick one representative per change-family among the two-sided
     clusters. Multi-level emission hands us several clusters stating the same
     change at nested granularities (statement / declarator / member) with
@@ -108,11 +225,17 @@ let arbitrate_fusion_inputs ~eval_at ~all_files
         List.map (fun i -> (f, i)) e.ev_resolved)
   in
   let scored =
+    (* more resolved regions, then anchored over bare (see
+       [has_anchoring_context]), then shorter pattern text *)
     List.map (fun c -> (c, resolved_of c)) two_sided_clusters
     |> List.sort (fun (a, ra) (b, rb) ->
+        let anch c =
+          let t = render_pattern_body c.pattern in
+          (-anchoredness t, delta_token_count t, metavar_count t)
+        in
         compare
-          (-List.length ra, String.length (render_pattern_body a.pattern))
-          (-List.length rb, String.length (render_pattern_body b.pattern)))
+          (-List.length ra, anch a, String.length (render_pattern_body a.pattern))
+          (-List.length rb, anch b, String.length (render_pattern_body b.pattern)))
   in
   let claimed : (string * int, unit) Hashtbl.t = Hashtbl.create 32 in
   List.filter_map
@@ -831,10 +954,38 @@ let select_round ~(anchored : anchored_stream) ~covered ~selected pool floor =
                the corpus happens not to contain. Candidates that are
                equally headed (the common case) fall through to
                fewest-concrete exactly as before. *)
+            let anchored_ctx =
+              (* below support, above shortness: an anchored statement of
+                 the change beats the frameless/bare forms lexical
+                 matching lets fire (see [anchoredness]) — but only when
+                 it explains just as much. A bare rename that covers more
+                 occurrences (a true global rename) still wins on
+                 support. *)
+              anchoredness sc.sc_pattern
+            in
+            (* Support enters twice. FILE COUNT (extension size) ranks
+               high: a family spanning more files is a stronger rule, and
+               it is grep-robust — under lexical matching a bare token
+               rule fires at every occurrence (inflating its FIRES count
+               with hits inside regions other rules already explain) but
+               reaches no more files than the anchored statement of the
+               same change, so they tie here and the shape tie-breaks
+               below decide. Raw fires ([sc_support]) drops to a late
+               tie-break. Explaining genuinely more is [m]'s job, first
+               as always. *)
             let key =
               ( m,
                 clean,
+                List.length sc.sc_extension,
+                anchored_ctx,
+                -delta_token_count sc.sc_pattern,
+                (* fires above fewest-metavars: a hole whose sites vary
+                   fires more, and that generality is earned ([priority=_H0]
+                   over the per-value [priority="primary"]); at equal fires
+                   the hole is unwitnessed and the concrete form wins
+                   (row 6 — [Notification<User>] over [_H0<User>]). *)
                 sc.sc_support,
+                -metavar_count sc.sc_pattern,
                 headed,
                 -concrete,
                 -String.length sc.sc_pattern,

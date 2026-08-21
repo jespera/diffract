@@ -3,12 +3,8 @@
 match: strict
 metavar _H0: single
 @@
-  (
-  ...
 - private readonly _H0: Logger
 + private readonly _H0: ScopedLogger
-  ...
-  )
 # sites R1
 alpha.ts
 beta.ts

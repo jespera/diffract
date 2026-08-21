@@ -2,14 +2,9 @@
 @@
 match: strict
 metavar _H0: single
-metavar _H1: single
 @@
-  <_H1
-  ...
 - priority=_H0
 + variant=_H0
-  ...
-  />
 # sites R1
 alpha.tsx
 beta.tsx

@@ -1,14 +1,9 @@
-# rule R1  support=4  language=tsx
+# rule R1  support=2  language=tsx
 @@
 match: strict
-metavar _H0: single
 @@
-  <Button
-  ...
-- priority=_H0
-+ variant=_H0
-  ...
-  />
+- priority="default"
++ variant="secondary"
 # sites R1
 a.tsx
 b.tsx
@@ -18,12 +13,8 @@ b.tsx
 match: strict
 metavar _H0: single
 @@
-  <Button
-  ...
-- _H0="default"
-+ _H0="secondary"
-  ...
-  />
+- priority=_H0
++ variant=_H0
 # sites R2
 a.tsx
 b.tsx

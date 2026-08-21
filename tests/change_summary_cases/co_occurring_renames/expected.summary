@@ -1,15 +1,17 @@
 # rule R1  support=6  language=typescript
 @@
 match: strict
+metavar _H0: single
 @@
-- fetchUser
-+ getUser
+- fetchUser(_H0)
++ getUser(_H0)
 
 @@
 match: strict
+metavar _H1: single
 @@
-- resetCache
-+ invalidate
+- resetCache(_H1)
++ invalidate(_H1)
 # sites R1
 file1.ts
 file2.ts

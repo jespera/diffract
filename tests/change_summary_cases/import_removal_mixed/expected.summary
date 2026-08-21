@@ -11,10 +11,8 @@ c.kt
 # rule R2  support=7  language=kotlin
 @@
 match: strict
-metavar _H0: single
 @@
-- _H0<AppUserId>
-+ _H0
+- <AppUserId>
 # sites R2
 a.kt
 b.kt
