@@ -45,17 +45,29 @@ let hash t = t.hash
     a leaf is "string interior" iff some ancestor satisfies this. *)
 let string_delimited ~source (node : 'a t) : bool =
   let quote c = c = '"' || c = '\'' || c = '`' in
+  let heredoc_at i =
+    (* [<<<] (PHP heredoc/nowdoc) — the quote-less string introducer;
+       the same class of language-lexicon fact as a quote character. *)
+    i + 2 < String.length source
+    && source.[i] = '<'
+    && source.[i + 1] = '<'
+    && source.[i + 2] = '<'
+  in
   match node.children with
   | [] -> false
   | first :: _ ->
       (first.node.start_byte > node.start_byte
       && String.length source > node.start_byte
-      && quote source.[node.start_byte])
+      && (quote source.[node.start_byte] || heredoc_at node.start_byte))
       || List.exists
            (fun (c : 'a child) ->
              (not c.node.is_named)
-             && c.node.end_byte = c.node.start_byte + 1
-             && quote source.[c.node.start_byte])
+             && ((c.node.end_byte = c.node.start_byte + 1
+                 && quote source.[c.node.start_byte])
+                || heredoc_at c.node.start_byte
+                   && (not c.node.is_named)
+                   && c.node.end_byte - c.node.start_byte >= 3
+                   && String.sub source c.node.start_byte 3 = "<<<"))
            node.children
 
 (** Structural equality ignoring positions/formatting. Uses hash for fast
