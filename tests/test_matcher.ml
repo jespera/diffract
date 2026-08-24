@@ -2402,6 +2402,25 @@ let test_text_only_finds_role_mismatch () =
        (Matcher.text_only_find_in_tree ~ctx ~language:"tsx"
           ~pattern_text:pattern_fc tree))
 
+(* PHP heredoc/nowdoc: a quote-LESS string form — [Tree.string_delimited]
+   recognizes the [<<<] introducer, so code patterns stay out of heredoc
+   interiors just as they stay out of quoted strings. Guards the lexical
+   comparison's one hard boundary for the delimiter form quotes don't
+   cover. *)
+let test_lexical_heredoc_interior_excluded () =
+  let src = "<?php\nfunction f() {\n  $x = <<<EOT\nfoo\nEOT;\n  foo();\n}\n" in
+  (* php_only parses bare PHP; strip the tag for the source under test. *)
+  let src = String.concat "" (String.split_on_char '\r' src) in
+  let src =
+    match String.index_opt src '\n' with
+    | Some i -> String.sub src (i + 1) (String.length src - i - 1)
+    | None -> src
+  in
+  Alcotest.(check int)
+    "heredoc interior does not match a code pattern" 1
+    (List.length
+       (find ~language:"php" ~pattern:"@@\nmatch: strict\n@@\nfoo" ~source:src))
+
 let test_text_only_scoped_to_single_strict () =
   (* The hint is scoped to a single global strict section; a partial pattern
      (or multi-section / on / foreach) yields no hint locations. *)
@@ -2719,6 +2738,8 @@ let tests =
       test_text_only_finds_role_mismatch;
     test_case "explain: hint scoped to single strict section" `Quick
       test_text_only_scoped_to_single_strict;
+    test_case "lexical: heredoc interior excluded" `Quick
+      test_lexical_heredoc_interior_excluded;
     test_case "required_literals: JSX partial pattern" `Quick
       test_required_literals_jsx_partial;
     test_case "required_literals: + line excluded" `Quick
