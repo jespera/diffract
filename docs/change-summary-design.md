@@ -667,9 +667,17 @@ Consequence: delta-keyed emission with the scope holed (`_H0<User>`)
 is not just the support-pooling fix — it is also the form that evades
 the re-parse mismatch, because the delta's own leaves keep their
 grammatical role while the varying scope is absorbed by node-type-
-agnostic holes. A matcher-side robustness layer (identifier-kind leaf
-equivalence derived from grammar metadata) would widen the safe set
-further but is not a prerequisite.
+agnostic holes.
+
+> **Superseded (lexical matching).** The matcher no longer compares
+> leaf node types — leaf equality is text plus string-interiority
+> agreement (`docs/universal-tokenizer.md` §2.1) — so step 2 above no
+> longer happens: `- Notification<User> + Notification` fires as
+> written. The hole-camouflage role of delta-keyed is therefore gone;
+> only its chain-independent pooling remains, and measured on the
+> public harness and the soak corpus that residue is one webxforge
+> rule (see the selection notes in §3.3 for what replaced the implicit
+> filtering the re-parse mismatch used to provide).
 
 **As built (`delta_keyed_pair`).** A 2026-06-18 attempt to retire this
 channel was **reverted**: disabling it changed *zero* of the 42 golden
@@ -758,10 +766,32 @@ safe). Clustering proposes; evaluation defines:
 - **Select.** Choose the emitted rule set as a greedy weighted
   set-cover of the changeset's **changed regions** (the site-DB
   regions of §3.1), using true extensions: a candidate's value is the
-  set of still-uncovered regions its effects resolve; rank by the
-  existing covering order (support desc, asymmetric-shape first,
-  concrete-edit count, concreteness, hole fraction, text); stop when
-  no candidate adds coverage at `min_support` or above. Subsumption is
+  set of still-uncovered regions its effects resolve. Ties are broken
+  by an explicit **preference matrix** (`cs_select`: `anchoredness`,
+  `delta_token_count`, `metavar_count`), in this order:
+  1. *marginal coverage* — explaining more always wins;
+  2. *clean* — reconstructs its sites with no residual;
+  3. *file count* — a family spanning more files (not raw fires: under
+     lexical matching a bare token rule fires at every occurrence,
+     inflating fires with hits inside regions other rules explain,
+     yet reaches no more files than the anchored statement of the
+     same change);
+  4. *anchoredness* — the match side carries ≥ 2 word tokens
+     (metavars count); a single-token edit is a grep, preferred only
+     when nothing anchored ties it. Context frames earn no extra
+     credit: `{ … }` around an edit states nothing the edit line
+     doesn't;
+  5. *fewer differing `-`/`+` tokens* — a fused co-occurrence
+     (`priority="default" ⤳ variant="secondary"`) couples axes that
+     finer rules state separately;
+  6. *fires* — a hole whose sites vary fires more and earns its
+     generality (`priority=_H0` over per-value concretions);
+  7. *fewer metavars* — at equal fires a hole is unwitnessed and the
+     concrete form wins (`Notification<User>` over `_H0<User>`);
+  then the anchored-stream keys, shorter text, text. This matrix
+  replaced the implicit filtering that strict node-type comparison
+  used to provide (bare and frameless fragments simply never fired);
+  stop when no candidate adds coverage at `min_support` or above. Subsumption is
   inherent rather than a separate pass: a candidate whose resolved
   regions are already covered adds nothing and is never selected.
   Greedy, not optimal — consistent with §2.3's "practical rather than

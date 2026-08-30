@@ -76,10 +76,16 @@ diffract is an OCaml library and CLI for parsing source files with tree-sitter a
 4. `tree.ml` converts FFI nodes to pure OCaml representation once during parsing
 
 **Matching Flow:** a pattern's preamble (`@@` sections) is parsed, its body is
-tokenized into a `(text, node_type)` leaf stream, and `stmatch` walks the
-source tree (via a `Cursor.S`) matching those tokens — comparing leaves on
-both text and node type. Metavars are sigil-free (a leaf is a metavar iff its
-text equals a declared name). See `docs/universal-tokenizer.md`.
+tokenized into a leaf stream (text, observed node type, string-interiority),
+and `stmatch` walks the source tree (via a `Cursor.S`) matching those tokens
+**lexically**: text must agree; a node-type disagreement is tolerated iff both
+sides agree on whether the leaf sits inside a string literal. A pattern body
+is a fragment whose re-parse assigns syntactic roles unreliably, so roles are
+not compared — but code never matches string contents (`Tree.string_delimited`,
+quote/heredoc detection, no per-language tables). Field mode is the exception
+and keeps strict node-type comparison, since its per-candidate source-context
+re-tokenization already assigns correct roles. Metavars are sigil-free (a leaf
+is a metavar iff its text equals a declared name). See `docs/universal-tokenizer.md`.
 
 ## Adding a New Language
 
