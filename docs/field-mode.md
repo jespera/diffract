@@ -210,7 +210,10 @@ no allowlist of skippable keywords is needed.
 A field pattern with a concrete name — `getUsers() { $b }` — hits the
 same node-type aliasing as concrete object keys. Tokenized on its own,
 `getUsers` parses as an `identifier`; the source method's name is a
-`property_identifier`; the `(text, node_type)` comparison misses and the
+`property_identifier`; field mode's strict `(text, node_type)` comparison
+(kept deliberately — strict/partial modes compare lexically, see
+`docs/universal-tokenizer.md` §2.1, but field mode's contextual tokens make
+strictness both correct and cheap) misses and the
 pattern finds nothing. Unlike the `foreach` concrete-key case (docs
 [transforms.md §10]), a field pattern has no surrounding container to
 borrow context from — it *is* the top-level construct.

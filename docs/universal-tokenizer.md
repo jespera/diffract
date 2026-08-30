@@ -299,8 +299,15 @@ anything.
 
 **(b) Collapsed tokens create matching ambiguity.** When two
 distinct source constructs produce the same leaf sequence, a
-pattern matches both indistinguishably if the matcher only compares leaf text. 
-However, if the matcher compares **both leaf text and leaf node type** (which the sequence-to-tree matcher natively does), this ambiguity is resolved in most cases.
+pattern matches both indistinguishably if the matcher only compares
+leaf text. The matcher resolves the one case that matters — code
+vs. string content — through the string-interiority bit of its
+lexical comparison (§2.1): the bit comes from the lexer-level fact
+(quote / heredoc delimiters), which every parse gets right, rather
+than from node-type names. Same-text-different-*role* collapses
+(an identifier used as a type vs. as a value) are deliberately NOT
+distinguished by leaf comparison any more; disambiguate those with
+pattern context (anchor the token in the construct you mean).
 
 Concrete cases:
 
@@ -313,11 +320,13 @@ leaves like `[val, s, =, "hello ", name]`.
 Consequence (a): patterns can't target the `$` interpolation
 prefix or the quote characters — they're not leaves.
 
-Consequence (b) (Resolved by type-checking): 
-- The leaf token `hello` from a string's static content has type `string_content`.
-- The leaf token `hello` from an identifier reference has type `simple_identifier`.
-By comparing both **type and text** at the leaf level, the matcher distinguishes them:
-- `foo(hello)` (where `hello` is parsed as `simple_identifier`) will **not** match `foo("hello")` (where `"hello"` is parsed as `string_content`).
+Consequence (b) (resolved by string-interiority):
+- The leaf token `hello` from a string's static content sits under a
+  quote-delimited ancestor — string-interior.
+- The leaf token `hello` from an identifier reference does not.
+The lexical comparison keeps them apart without consulting the node
+types (`string_content` vs `simple_identifier`):
+- `foo(hello)` will **not** match `foo("hello")`.
 - `foo("hello")` will correctly match only the string literal.
 
 **Scala.** The `tree-sitter-scala` grammar omits static string
