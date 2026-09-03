@@ -1,10 +1,8 @@
-# rule R1  support=3  language=typescript
+# rule R1  support=2  language=typescript
 @@
 match: strict
-metavar _H0: single
-metavar _H1: single
 @@
-  @_H0(
+  Component(
   ...
   {
   ...
@@ -12,8 +10,12 @@ metavar _H1: single
   }
   ...
   )
-  export _H1
 # sites R1
 alpha.component.ts
 beta.component.ts
-fmt.pipe.ts
+
+# residual
+--- a/fmt.pipe.ts
++++ b/fmt.pipe.ts
+@@ -2,0 +3,1 @@
++  standalone: false,
