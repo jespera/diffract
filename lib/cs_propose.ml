@@ -187,148 +187,17 @@ let lookahead_one_sided (d : Tree_diff.diff) : (side * Tree.src Tree.t) list =
   | Tree_diff.Replaced | Tree_diff.Unchanged -> ());
   List.rev !out
 
-(* ── Delta-keyed pair variant (§3.2) ─────────────────────────────── *)
-
-(** Scope-holed variant of a change pair: the pair's preserved children (equal
-    structural hash on both sides) become shared holes — the same metavar bound
-    on before and after — while the changed children stay concrete. This keys
-    clustering on the delta itself instead of on whatever surrounding shape the
-    dendrogram's merge order happens to anti-unify first, pooling one delta's
-    support across heterogeneous anchors. It also evades the rendered-pattern
-    re-parse mismatch: a scope name kept concrete re-parses with a
-    neutral-context node type ([simple_identifier] where the source position has
-    [type_identifier]) and the gate then finds zero fires; a hole is
-    node-type-agnostic, and the delta's own leaves keep their grammatical role.
-    See design §3.2 "Diagnosis". Load-bearing on the real soak corpora — it
-    shapes the type-parameter rename family. The [ts_typearg_rename_delta]
-    golden fixture guards it: disabling this channel makes that case fall back
-    to a coarse whole-block rewrite and the test fails.
-
-    Returns [None] when the variant would be useless: a leaf-shaped node
-    (mirrors [of_src]'s leaf rules), no preserved child (the variant equals the
-    concrete pair), no changed child, or an incoherent result the dendrogram cut
-    would reject anyway. *)
-let delta_keyed_pair (cp : Tree_diff.change_pair) : edit_pat option =
-  let b = cp.before_node and a = cp.after_node in
-  let pnode_shaped source (n : Tree.src Tree.t) =
-    n.children <> []
-    && (not (has_silent_concrete_delimiters ~source ~node:n))
-    && not (has_quote_delim_children ~source ~node:n)
-  in
-  if
-    not
-      (pnode_shaped cp.before_source b
-      && pnode_shaped cp.after_source a
-      && b.node_type = a.node_type)
-  then None
-  else begin
-    let kept (n : Tree.src Tree.t) =
-      List.filter
-        (fun (c : Tree.src Tree.child) -> not c.node.is_extra)
-        n.children
-    in
-    let bks = kept b and aks = kept a in
-    let aks_arr = Array.of_list aks in
-    let used = Array.make (Array.length aks_arr) false in
-    (* Greedy in-order hash matching: a before-child is preserved iff an
-       unconsumed after-child has the same structural hash. Only NAMED
-       preserved children become holes — an anonymous token (operator,
-       punctuation) is structure, not content, and holing it produces
-       nonsense patterns like [holder _H0 null]; matched anonymous
-       children stay concrete (their text is identical anyway). *)
-    let next_hole = ref 0 in
-    let b_assign =
-      List.map
-        (fun (c : Tree.src Tree.child) ->
-          let m = ref None in
-          Array.iteri
-            (fun i (ac : Tree.src Tree.child) ->
-              if !m = None && (not used.(i)) && ac.node.hash = c.node.hash then begin
-                used.(i) <- true;
-                m := Some i
-              end)
-            aks_arr;
-          match !m with
-          | Some i when c.node.is_named ->
-              let h = !next_hole in
-              incr next_hole;
-              (c, `Holed (i, h))
-          | Some _ -> (c, `Matched)
-          | None -> (c, `Delta))
-        bks
-    in
-    let n_holes =
-      List.length
-        (List.filter
-           (fun (_, m) -> match m with `Holed _ -> true | _ -> false)
-           b_assign)
-    in
-    let n_matched_b =
-      List.length
-        (List.filter
-           (fun (_, m) -> match m with `Delta -> false | _ -> true)
-           b_assign)
-    in
-    let n_delta_b = List.length bks - n_matched_b in
-    let n_delta_a =
-      List.length aks
-      - Array.fold_left (fun n u -> if u then n + 1 else n) 0 used
-    in
-    if n_holes = 0 || (n_delta_b = 0 && n_delta_a = 0) then None
-    else begin
-      let hole_of_a = Array.make (Array.length aks_arr) None in
-      List.iter
-        (fun ((_ : Tree.src Tree.child), m) ->
-          match m with `Holed (i, h) -> hole_of_a.(i) <- Some h | _ -> ())
-        b_assign;
-      let keep (n : Tree.src Tree.t) = not n.is_extra in
-      let before =
-        PNode
-          {
-            node_type = b.node_type;
-            is_named = b.is_named;
-            children =
-              List.map
-                (fun ((c : Tree.src Tree.child), m) ->
-                  {
-                    field_name = c.field_name;
-                    child =
-                      (match m with
-                      | `Holed (_, h) -> Hole h
-                      | `Matched | `Delta -> of_src cp.before_source c.node);
-                  })
-                b_assign;
-            template = build_template ~source:cp.before_source ~node:b ~keep ();
-          }
-      in
-      let after =
-        PNode
-          {
-            node_type = a.node_type;
-            is_named = a.is_named;
-            children =
-              List.mapi
-                (fun i (c : Tree.src Tree.child) ->
-                  {
-                    field_name = c.field_name;
-                    child =
-                      (match hole_of_a.(i) with
-                      | Some h -> Hole h
-                      | None -> of_src cp.after_source c.node);
-                  })
-                aks;
-            template = build_template ~source:cp.after_source ~node:a ~keep ();
-          }
-      in
-      let ep = { before; after } in
-      if
-        has_concrete ep.before && has_concrete_edit ep
-        && no_orphan_after_holes ep && no_junk_passthrough ep
-        && hole_frac ep < Cs_config.default.max_hole_fraction
-      then Some ep
-      else None
-    end
-  end
+(* ── Delta-keyed pair variant — RETIRED ──────────────────────────
+   [delta_keyed_pair] (§3.2 scope-holed pairs) is retired: its two roles
+   are both absorbed. The re-parse-evasion role (holes as node-type
+   camouflage) died with lexical leaf matching — evidence-exact patterns
+   now fire as written. The cross-anchor pooling role is carried by
+   [delta_keyed_deep]'s innermost level, whose pools, twins, and the
+   insertion witness-diversity split reproduce (and improve on) the old
+   channel's shapes. Measured at retirement: 557/557 tests, gen3 and all
+   seven harness corpora plus both holdouts byte-identical with the
+   channel on or off. The [ts_typearg_rename_delta] fixture remains as
+   the family's guard, now served by the deep channel. *)
 
 (* ── Anchored variant (§3.2 lattice descent) ─────────────────────── *)
 
@@ -595,7 +464,8 @@ let ellipsize_level (bn : Tree.src Tree.t) (an : Tree.src Tree.t)
       | _ -> None
     end
 
-(** Deep (chain-recursive) delta-keyed variant. [delta_keyed_pair] holes a
+(** Deep (chain-recursive) delta-keyed variant. The retired flat
+    [delta_keyed_pair] holed a
     pair's preserved children but keeps every changed child fully concrete —
     at the delta's own level that IS the delta, but at an ancestor level the
     changed child is a whole subtree containing per-site variation, so the
@@ -671,7 +541,7 @@ let delta_keyed_deep (cp : Tree_diff.change_pair) :
       let bks = kept b and aks = kept a in
       let aks_arr = Array.of_list aks in
       let used = Array.make (Array.length aks_arr) false in
-      (* Greedy in-order hash matching, as in [delta_keyed_pair]. *)
+      (* Greedy in-order hash matching (the retired flat variant's rule). *)
       let b_assign =
         List.map
           (fun (c : Tree.src Tree.child) ->
@@ -696,7 +566,7 @@ let delta_keyed_deep (cp : Tree_diff.change_pair) :
       let delta_a = List.filteri (fun i _ -> not used.(i)) aks in
       (* Recurse only through a one-child-per-side chain: with several changed
          children the level is where deltas fuse, and each stays concrete
-         (delta_keyed_pair parity). *)
+         (flat-variant parity). *)
       let recursed =
         match (delta_b, delta_a) with
         | [ db ], [ da ] -> Some (db, go (depth + 1) db.node da.node)
@@ -1388,18 +1258,6 @@ let collect_initial_clusters ?on_file ~ctx (cs : changeset) :
                   }
                 in
                 initial := { pattern = ep; instances = [ inst ] } :: !initial;
-                (* §3.2 delta-keyed variant: same site, scope-holed
-                   pattern, collected on its own channel. *)
-                let dep = delta_keyed_pair cp in
-                (match dep with
-                | Some dep ->
-                    delta :=
-                      {
-                        pattern = dep;
-                        instances = [ { inst with ipat = dep } ];
-                      }
-                      :: !delta
-                | None -> ());
                 (* Deep (chain-recursive) variant: pools at ancestor
                    context levels too. Instances carry the HOLE-FILLED
                    skeleton as [ipat] (same shape as the pooling key,
@@ -1407,15 +1265,13 @@ let collect_initial_clusters ?on_file ~ctx (cs : changeset) :
                    so the pool's re-specialized twin collapses exactly
                    the holes the pool never varies on while keeping the
                    skeleton aligned. The holed pattern is the pooling
-                   key and the fallback where sites do vary. Skipped
-                   when equal to the plain variant (same site would
-                   pool twice). *)
+                   key and the fallback where sites do vary. *)
                 (match delta_keyed_deep cp with
-                | Some (ddep, dfill) when Some ddep <> dep ->
+                | Some (ddep, dfill) ->
                     deep :=
                       { pattern = ddep; instances = [ { inst with ipat = dfill } ] }
                       :: !deep
-                | _ -> ());
+                | None -> ());
                 (* §3.2 anchored variants: preserved siblings literal,
                    changed-chain interior holed, keyed by the delta —
                    one per path choice at branching levels. Insertion-form

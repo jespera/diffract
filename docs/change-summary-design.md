@@ -151,14 +151,11 @@ form a DAG: `cs_types` ← `cs_pattern` ← {`cs_propose`, `cs_cluster`,
 
 The proposer offers five candidate channels (design §3.1–§3.2):
 multi-level extraction, cross-side content-extraction pairs (§4.3),
-delta-keyed scope-holed pairs (§3.2), anchored lattice-descent
-variants (§3.2), and AU-intersection mining (§3.2b — shared sub-edits
-recovered from the dendrogram merges the coherence cut rejects). (A
-2026-06-18 attempt to retire the delta-keyed channel
-was reverted: it changed *no* golden fixture, but on the real soak corpora
-it materially shapes the type-parameter rename family — a reminder that
-channel-retirement must be measured on the real corpora, not the fixtures
-alone. See §3.2's note.)
+deep delta chains (§3.2 — the scope-holed idea generalized along the
+context chain; the flat delta-keyed channel it grew from is retired,
+see §3.2's note), anchored lattice-descent variants (§3.2), and
+AU-intersection mining (§3.2b — shared sub-edits recovered from the
+dendrogram merges the coherence cut rejects).
 
 > **Reading guide.** §1–§5 describe the design as it now stands. §6
 > (Milestones) is a *historical changelog* of how it was built —
@@ -681,7 +678,16 @@ agnostic holes.
 > rule (see the selection notes in §3.3 for what replaced the implicit
 > filtering the re-parse mismatch used to provide).
 
-**As built (`delta_keyed_pair`).** A 2026-06-18 attempt to retire this
+**As built (`delta_keyed_pair`) — RETIRED 2026-09-03.** The flat
+scope-holed channel is deleted: its re-parse-evasion role died with
+lexical matching, and its cross-anchor pooling role is carried by the
+deep chain channel's innermost level (with hole-filled-ipat twins and
+the insertion witness-diversity split reproducing its shapes). Measured
+at retirement: the full suite, gen3, all seven harness corpora and both
+holdouts byte-identical with the channel on or off. The
+`ts_typearg_rename_delta` fixture remains as the family's guard, served
+by the deep channel. The history below is kept for the retirement
+discipline it taught. A 2026-06-18 attempt to retire this
 channel was **reverted**: disabling it changed *zero* of the 42 golden
 cases (its fixture `kotlin_delta_pooled_drop` is also covered by the
 anchored channel), so it looked dormant — but on the real `gen3` soak
