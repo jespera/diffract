@@ -652,6 +652,17 @@ let delta_keyed_deep (cp : Tree_diff.change_pair) :
   let next_hole = ref 0 in
   let fills : (int, pat_node * pat_node) Hashtbl.t = Hashtbl.create 8 in
   let generalized = ref false in
+  (* Insertion chains never generalize their context: a pure insertion has
+     no match-side delta — its before side is ALL context, so firing is
+     shape-triggered, and holing the shape's anchors (a decorator name, a
+     head) makes the rule fire on every same-shaped construct. Observed:
+     the deep [@_H0( ... + standalone: false ... )] rule was gate-clean on
+     a corpus whose decorators all take the flag, then regressed the
+     spartacus holdout 61→43 exact by inserting into @NgModule/@Injectable.
+     Rewrites and deletions carry their delta as an anchor and may hole
+     freely; insertions keep preserved named children concrete (matching
+     the insert-anchoring channel's deliberate concrete heads). *)
+  let saw_insertion = ref false in
   let keep (n : Tree.src Tree.t) = not n.is_extra in
   let rec go depth (b : Tree.src Tree.t) (a : Tree.src Tree.t) :
       pat_node * pat_node =
@@ -694,6 +705,7 @@ let delta_keyed_deep (cp : Tree_diff.change_pair) :
         List.filter (fun (_, m) -> m = `Delta) b_assign |> List.map fst
       in
       let delta_a = List.filteri (fun i _ -> not used.(i)) aks in
+      if delta_b = [] && delta_a <> [] then saw_insertion := true;
       (* Recurse only through a one-child-per-side chain: with several changed
          children the level is where deltas fuse, and each stays concrete
          (delta_keyed_pair parity). *)
@@ -805,7 +817,8 @@ let delta_keyed_deep (cp : Tree_diff.change_pair) :
                         child =
                           before_child (c, m) (fun c' m' ->
                               match m' with
-                              | `Pres i when not bracketish ->
+                              | `Pres i
+                                when (not bracketish) && not !saw_insertion ->
                                   let h = !next_hole in
                                   incr next_hole;
                                   generalized := true;
