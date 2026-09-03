@@ -232,9 +232,17 @@ let arbitrate_fusion_inputs ~eval_at ~all_files
        [has_anchoring_context]), then shorter pattern text *)
     List.map (fun c -> (c, resolved_of c)) two_sided_clusters
     |> List.sort (fun (a, ra) (b, rb) ->
+        (* NB: no metavar-count here, unlike the selection key — arbitration
+           has no fires measure to guard it, and without that guard
+           fewest-metavars picks the bare token form over the holed general
+           rule whose holes are witnessed by varying sites (the
+           overfire-bait's [priority=_H0]). Anchoredness and delta cover the
+           bare-vs-holed split; concrete-vs-holed at equal anchoring falls
+           to pattern length (the metavar declaration makes the holed form
+           longer). *)
         let anch c =
           let t = render_pattern_body c.pattern in
-          (-anchoredness t, delta_token_count t, metavar_count t)
+          (-anchoredness t, delta_token_count t)
         in
         compare
           (-List.length ra, anch a, String.length (render_pattern_body a.pattern))
@@ -497,9 +505,13 @@ let propose_delta_pooled ?(label = "delta-keyed") (env : tier_env)
         | [] | [ _ ] -> [ c ]
         | i :: rest ->
             let twin =
-              List.fold_left (fun acc j -> anti_unify_edits acc j.ipat) i.ipat
-                rest
+              (* rigid: Piece C would re-collapse the skeleton's own
+                 ellipsis frames and wipe the edit they surround *)
+              List.fold_left
+                (fun acc j -> anti_unify_edits_rigid acc j.ipat)
+                i.ipat rest
             in
+
             if twin = c.pattern then [ c ]
             else if
               has_concrete twin.before && has_concrete_edit twin
@@ -1314,7 +1326,11 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
         (base_two_sided, delta, deep, intersection, anchored))
   in
   let two_sided_clusters =
-    base_two_sided @ delta_clusters @ intersection_clusters
+    (* Deep chain pools join round 1 directly: their historical round-2
+       deferral predates the selection preference matrix, which now
+       arbitrates exactly the ties (clunkier context forms vs cleaner
+       incumbents at equal coverage) the deferral was protecting. *)
+    base_two_sided @ delta_clusters @ deep_clusters @ intersection_clusters
   in
   let candidates =
     Cs_trace.timed "propose: one-sided extract" (fun () ->
@@ -1413,12 +1429,11 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
         (List.filter (fun sc -> not (is_exempt sc)) evaluated_general)
         Cs_config.default.min_support);
   let anchored_cands = live_anchored_candidates env ~anchored ~covered reg in
-  let deep_cands = live_deep_candidates env ~deep_clusters ~covered reg in
   let evaluated_anchored =
     Cs_trace.timed "evaluate: anchored" (fun () ->
         List.filter_map
           (eval_candidate env ~anchored ~field_cand_files)
-          (anchored_cands @ deep_cands))
+          anchored_cands)
   in
   (* Round 2: the anchored realisations and the deep chain variants, plus
      any general candidate that was exempt (a textual coincidence), over

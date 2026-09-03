@@ -761,7 +761,7 @@ let mk_anti_unify ?(allow_ellipsis = true) hole_for =
             in
             if
               has_adjacent_holes node
-              || multi_child && contains_ellipsis node
+              || allow_ellipsis && multi_child && contains_ellipsis node
                  && not (has_concrete node)
             then Hole (hole_for p1 p2)
             else node
@@ -855,6 +855,21 @@ let anti_unify_edits (e1 : edit_pat) (e2 : edit_pat) : edit_pat =
 
 (** Anti-unify two single [pat_node]s (used for one-sided candidate clustering
     in M1.6a). Uses its own hole counter — no cross-side sharing. *)
+(** Like {!anti_unify_edits} with the ellipsis machinery disabled: existing
+    [Ellipsis] positions are preserved (they still only match each other),
+    but no bracketed list is ever collapsed to an interior wildcard. For
+    folding over same-skeleton inputs — re-specializing a deep pool's
+    hole-filled ipats — where Piece C's re-collapse would wipe the concrete
+    edit framed by the skeleton's own ellipses ([{ ... - Legacy , ... }]
+    folding to a bare [{ ... }]). *)
+let anti_unify_edits_rigid (e1 : edit_pat) (e2 : edit_pat) : edit_pat =
+  let hole_for = make_hole_for () in
+  let before =
+    mk_anti_unify ~allow_ellipsis:false hole_for e1.before e2.before
+  in
+  let after = mk_anti_unify ~allow_ellipsis:false hole_for e1.after e2.after in
+  { before; after }
+
 let anti_unify_pat (p1 : pat_node) (p2 : pat_node) : pat_node =
   let go = mk_anti_unify (make_hole_for ()) in
   go p1 p2
