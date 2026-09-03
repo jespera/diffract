@@ -1,8 +1,9 @@
 # rule R1  support=2  language=typescript
 @@
 match: strict
+metavar _H1: single
 @@
-  Component(
+  @Component(
   ...
   {
   ...
@@ -10,6 +11,7 @@ match: strict
   }
   ...
   )
+  export _H1
 # sites R1
 alpha.component.ts
 beta.component.ts
