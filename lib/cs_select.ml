@@ -498,6 +498,137 @@ let propose_delta_pooled ?(label = "delta-keyed") (env : tier_env)
      concreteness breaks the §3.2 re-parse the twin dies at the gate and the
      holed key survives; where both fire, application-order specificity
      prefers the concrete-richer twin. *)
+  (* ── Insertion-pool splitting (witness diversity) ──────────────
+     A pure insertion has no match-side delta: its before side is all
+     context, so firing is shape-triggered, and a context hole makes the
+     rule fire on every same-shaped construct — a generalization risk the
+     derivation gate cannot see (it certifies only corpus sites; the
+     holdout is where it bites: the deep decorator-generic
+     [@_H0( ... + standalone: false ... )] rule regressed the spartacus
+     holdout 61→43 by inserting into @NgModule/@Injectable). The
+     derivation-side discriminator is WITNESS DIVERSITY: a hole whose
+     bound values are all distinct across the pool earned its generality
+     (finagle's per-def names); one whose values repeat is an enumeration
+     wearing a hole (Component/Directive/Pipe, 3 values over 63 sites).
+     For pure-insertion pools, split on any hole with 1 < distinct <
+     instances: one sub-pool per witnessed value with the hole made
+     concrete, support carried per value; all-distinct holes survive.
+     Rewrites and deletions are untouched — their delta anchors them. *)
+  let pure_insertion pattern_text =
+    let lines = String.split_on_char '\n' pattern_text in
+    let ats = ref 0 in
+    let minus = ref false and plus = ref false in
+    List.iter
+      (fun l ->
+        if String.trim l = "@@" then incr ats
+        else if !ats >= 2 && !ats mod 2 = 0 && String.length l > 0 then
+          if l.[0] = '-' then minus := true
+          else if l.[0] = '+' then plus := true)
+      lines;
+    !plus && not !minus
+  in
+  (* Parallel walk of the pooling key against one instance's hole-filled
+     ipat (same skeleton by construction): the concrete subpattern under
+     each key hole. [None] on any desync — that pool is left unsplit. *)
+  let hole_witnesses (key : edit_pat) (ipat : edit_pat) :
+      (int * pat_node) list option =
+    let acc = ref [] in
+    let exception Desync in
+    let rec go k f =
+      match (k, f) with
+      | Hole h, _ -> acc := (h, f) :: !acc
+      | Ellipsis, Ellipsis -> ()
+      | Leaf _, Leaf _ -> ()
+      | PNode a, PNode b when List.length a.children = List.length b.children
+        ->
+          List.iter2 (fun (x : pat_child) (y : pat_child) -> go x.child y.child)
+            a.children b.children
+      | _ -> raise Desync
+    in
+    match
+      go key.before ipat.before;
+      go key.after ipat.after
+    with
+    | () -> Some !acc
+    | exception Desync -> None
+  in
+  let rec subst_hole h node = function
+    | Hole h' when h' = h -> node
+    | (Hole _ | Ellipsis | Leaf _) as p -> p
+    | PNode n ->
+        PNode
+          {
+            n with
+            children =
+              List.map
+                (fun c -> { c with child = subst_hole h node c.child })
+                n.children;
+          }
+  in
+  let rec split_pool (c : cluster) : cluster list =
+    if List.length c.instances < 2 then [ c ]
+    else
+      let wits =
+        List.map (fun (i : instance) -> hole_witnesses c.pattern i.ipat)
+          c.instances
+      in
+      if List.exists (fun w -> w = None) wits then [ c ]
+      else
+        let wits = List.map Option.get wits in
+        let holes =
+          List.sort_uniq compare (List.concat_map (List.map fst) wits)
+        in
+        let n = List.length c.instances in
+        let splittable =
+          List.find_opt
+            (fun h ->
+              let vals =
+                List.filter_map
+                  (fun w ->
+                    Option.map render_pat_node (List.assoc_opt h w))
+                  wits
+              in
+              let d = List.length (List.sort_uniq compare vals) in
+              List.length vals = n && d > 1 && d < n)
+            holes
+        in
+        match splittable with
+        | None -> [ c ]
+        | Some h ->
+            let groups : (string, (instance * pat_node) list ref) Hashtbl.t =
+              Hashtbl.create 4
+            in
+            let order = ref [] in
+            List.iter2
+              (fun (i : instance) w ->
+                let node = List.assoc h w in
+                let key = render_pat_node node in
+                match Hashtbl.find_opt groups key with
+                | Some l -> l := (i, node) :: !l
+                | None ->
+                    Hashtbl.add groups key (ref [ (i, node) ]);
+                    order := key :: !order)
+              c.instances wits;
+            List.rev !order
+            |> List.concat_map (fun k ->
+                let members = List.rev !(Hashtbl.find groups k) in
+                let node = snd (List.hd members) in
+                let pattern =
+                  {
+                    before = subst_hole h node c.pattern.before;
+                    after = subst_hole h node c.pattern.after;
+                  }
+                in
+                split_pool
+                  { pattern; instances = List.map fst members })
+  in
+  let split_insertion_pools pools =
+    List.concat_map
+      (fun (c : cluster) ->
+        if pure_insertion (render_pattern_body c.pattern) then split_pool c
+        else [ c ])
+      pools
+  in
   let with_twins (pools : cluster list) : cluster list =
     List.concat_map
       (fun (c : cluster) ->
@@ -522,7 +653,7 @@ let propose_delta_pooled ?(label = "delta-keyed") (env : tier_env)
       pools
   in
   let delta_clusters =
-    pre_group_identical delta_raw |> with_twins
+    pre_group_identical delta_raw |> split_insertion_pools |> with_twins
     |> List.filter (fun c ->
         let enough = List.length c.instances >= Cs_config.default.min_support in
         if (not enough) && Cs_trace.on () then
