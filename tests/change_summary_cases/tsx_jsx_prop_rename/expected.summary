@@ -5,8 +5,8 @@ metavar _H0: single
 @@
   <Foo
   ...
-- oldName={_H0}
-+ newName={_H0}
+- oldName=_H0
++ newName=_H0
   ...
   />
 # sites R1

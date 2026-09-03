@@ -634,13 +634,23 @@ let ellipsize_level (bn : Tree.src Tree.t) (an : Tree.src Tree.t)
 
     Returns [None] when nothing was generalized anywhere (the variant would
     equal the concrete pair). *)
-let delta_keyed_deep (cp : Tree_diff.change_pair) : edit_pat option =
+(** Returns [(holed, filled)]: [holed] is the pooling key and the emitted
+    candidate; [filled] is the same skeleton with each hole replaced by the
+    instance's own concrete subpattern — carried as the instance [ipat] so a
+    pool's re-specialized twin ([with_twins]'s anti-unification fold over
+    ipats) shares the skeleton and collapses exactly the holes the pool's
+    instances never vary on (preference-matrix row 6: unwitnessed holes lose
+    to the witnessed literal). [Ellipsis] positions stay [Ellipsis] in both —
+    they absorb arity variation the fold must not re-expand. *)
+let delta_keyed_deep (cp : Tree_diff.change_pair) :
+    (edit_pat * edit_pat) option =
   let pnode_shaped source (n : Tree.src Tree.t) =
     n.children <> []
     && (not (has_silent_concrete_delimiters ~source ~node:n))
     && not (has_quote_delim_children ~source ~node:n)
   in
   let next_hole = ref 0 in
+  let fills : (int, pat_node * pat_node) Hashtbl.t = Hashtbl.create 8 in
   let generalized = ref false in
   let keep (n : Tree.src Tree.t) = not n.is_extra in
   let rec go depth (b : Tree.src Tree.t) (a : Tree.src Tree.t) :
@@ -800,6 +810,10 @@ let delta_keyed_deep (cp : Tree_diff.change_pair) : edit_pat option =
                                   incr next_hole;
                                   generalized := true;
                                   hole_of_a.(i) <- Some h;
+                                  Hashtbl.replace fills h
+                                    ( of_src cp.before_source c'.node,
+                                      of_src cp.after_source
+                                        aks_arr.(i).node );
                                   Hole h
                               | _ -> of_src cp.before_source c'.node);
                       })
@@ -837,7 +851,27 @@ let delta_keyed_deep (cp : Tree_diff.change_pair) : edit_pat option =
   if
     !generalized && has_concrete ep.before && has_concrete_edit ep
     && no_orphan_after_holes ep && no_junk_passthrough ep
-  then Some ep
+  then begin
+    let rec fill side = function
+      | Hole h -> (
+          match Hashtbl.find_opt fills h with
+          | Some (fb, fa) -> ( match side with `B -> fb | `A -> fa)
+          | None -> Hole h)
+      | Ellipsis -> Ellipsis
+      | Leaf _ as l -> l
+      | PNode n ->
+          PNode
+            {
+              n with
+              children =
+                List.map
+                  (fun c -> { c with child = fill side c.child })
+                  n.children;
+            }
+    in
+    let filled = { before = fill `B ep.before; after = fill `A ep.after } in
+    Some (ep, filled)
+  end
   else None
 
 (* The 4th component marks an insertion-form variant (the chain ended in an
@@ -1367,15 +1401,20 @@ let collect_initial_clusters ?on_file ~ctx (cs : changeset) :
                       :: !delta
                 | None -> ());
                 (* Deep (chain-recursive) variant: pools at ancestor
-                   context levels too. Instances keep their CONCRETE
-                   pattern as [ipat], so a pool can later re-specialize
-                   to its cross-site evidence (holes only where sites
-                   differ) — the holed pattern is the pooling key and
-                   the re-parse-robust fallback. Skipped when equal to
-                   the plain variant (same site would pool twice). *)
+                   context levels too. Instances carry the HOLE-FILLED
+                   skeleton as [ipat] (same shape as the pooling key,
+                   holes replaced by this site's concrete subpatterns),
+                   so the pool's re-specialized twin collapses exactly
+                   the holes the pool never varies on while keeping the
+                   skeleton aligned. The holed pattern is the pooling
+                   key and the fallback where sites do vary. Skipped
+                   when equal to the plain variant (same site would
+                   pool twice). *)
                 (match delta_keyed_deep cp with
-                | Some ddep when Some ddep <> dep ->
-                    deep := { pattern = ddep; instances = [ inst ] } :: !deep
+                | Some (ddep, dfill) when Some ddep <> dep ->
+                    deep :=
+                      { pattern = ddep; instances = [ { inst with ipat = dfill } ] }
+                      :: !deep
                 | _ -> ());
                 (* §3.2 anchored variants: preserved siblings literal,
                    changed-chain interior holed, keyed by the delta —
