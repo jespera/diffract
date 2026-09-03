@@ -60,7 +60,7 @@ diffract is an OCaml library and CLI for parsing source files with tree-sitter a
   - `cs_config.ml` - tuning constants (one documented home; internal, no CLI)
   - `cs_trace.ml` - diagnostics gated on the `CS_TRACE` env var
   - `cs_pattern.ml` - tree→`pat_node`, rendering, anti-unification, coherence predicates
-  - `cs_propose.ml` - change-pair extraction + candidate channels (multi-level, content-extraction, delta-keyed, anchored lattice-descent)
+  - `cs_propose.ml` - change-pair extraction + candidate channels (multi-level, content-extraction, deep delta chains, anchored lattice-descent, AU-intersection mining)
   - `cs_cluster.ml` - anti-unification dendrogram, orphan coarsening, one-sided clustering
   - `cs_evaluate.ml` - the per-site safety gate that *defines* a rule's meaning (§3.3)
   - `cs_fusion.ml` - conjunctive multi-section fusion of co-occurring changes
