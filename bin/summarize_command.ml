@@ -32,22 +32,24 @@ let print_coverage (changeset : Diffract.Change_summary.changeset)
 
 (* ── summarize subcommand ──────────────────────────────────────────── *)
 
+(* Run function `f` and return result. If `verbose`, then we print
+    wall-clock for running function. *)
+let phase verbose name f =
+  if not verbose then f ()
+  else begin
+    Printf.eprintf "[%s] start\n%!" name;
+    let t0 = Unix.gettimeofday () in
+    let result = f () in
+    let dt = Unix.gettimeofday () -. t0 in
+    Printf.eprintf "[%s] done in %.2fs\n%!" name dt;
+    result
+  end
+
 let run before_dir after_dir pairs language include_pattern exclude_patterns
     verbose ignore_formatting output_format =
   let ctx = Diffract.Context.create () in
   let exclude_dirs =
     if exclude_patterns = [] then default_excludes else exclude_patterns
-  in
-  let phase name f =
-    if not verbose then f ()
-    else begin
-      Printf.eprintf "[%s] start\n%!" name;
-      let t0 = Unix.gettimeofday () in
-      let result = f () in
-      let dt = Unix.gettimeofday () -. t0 in
-      Printf.eprintf "[%s] done in %.2fs\n%!" name dt;
-      result
-    end
   in
   let count_files (cs : Diffract.Change_summary.changeset) =
     List.fold_left
@@ -99,7 +101,7 @@ let run before_dir after_dir pairs language include_pattern exclude_patterns
     match load_result with
     | Error msg -> `Error (true, msg)
     | Ok load -> begin
-        let changeset = phase "load" load in
+        let changeset = phase verbose "load" load in
         if verbose then begin
           let m, a, d = count_files changeset in
           Printf.eprintf "[load] %d modified, %d added, %d deleted\n%!" m a d;
@@ -114,7 +116,7 @@ let run before_dir after_dir pairs language include_pattern exclude_patterns
           else None
         in
         let summary =
-          phase "summarize" (fun () ->
+          phase verbose "summarize" (fun () ->
               Diffract.Change_summary.summarize ?progress ~ignore_formatting
                 ~ctx changeset)
         in
@@ -125,7 +127,7 @@ let run before_dir after_dir pairs language include_pattern exclude_patterns
           print_coverage changeset summary
         end;
         let output =
-          phase "format" (fun () ->
+          phase verbose "format" (fun () ->
               match output_format with
               | `Json -> Diffract.Change_summary.format_summary_json summary
               | `Text -> Diffract.Change_summary.format_summary summary
