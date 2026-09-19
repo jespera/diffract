@@ -1028,8 +1028,8 @@ let required_literals ~ctx ~language ~pattern_text =
   let ir, _foreaches = compile_to_ir ~ctx ~language p in
   ir_tokens ir
   |> List.filter_map (function
-      | Stmatch.Concrete { text; _ } when word_like text -> Some text
-      | _ -> None)
+    | Stmatch.Concrete { text; _ } when word_like text -> Some text
+    | _ -> None)
   |> List.sort_uniq (fun a b ->
       (* Longest first: the longest needle is the best rarity proxy, and
          [source_may_match] short-circuits on the first absent one. *)
@@ -1044,7 +1044,7 @@ let required_literals ~ctx ~language ~pattern_text =
 let contains_string ~needle hay =
   let n = String.length needle and m = String.length hay in
   n = 0
-  || (n <= m
+  || n <= m
      &&
      let c0 = String.unsafe_get needle 0 in
      let limit = m - n in
@@ -1057,7 +1057,7 @@ let contains_string ~needle hay =
        i <= limit
        && ((String.unsafe_get hay i = c0 && eq_from i 1) || at (i + 1))
      in
-     at 0)
+     at 0
 
 let source_may_match ~literals source =
   List.for_all (fun needle -> contains_string ~needle source) literals

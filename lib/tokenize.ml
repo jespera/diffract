@@ -162,9 +162,7 @@ let walk_leaves ~single_metavars ~sequence_metavars ~ellipsis_map
               :: !tokens
           end
       | children ->
-          let in_string =
-            in_string || Tree.string_delimited ~source node
-          in
+          let in_string = in_string || Tree.string_delimited ~source node in
           List.iter
             (fun (c : Tree.pat Tree.child) -> walk ~in_string c.node)
             children

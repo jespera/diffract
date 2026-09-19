@@ -116,9 +116,9 @@ module Make (C : Cursor.S) = struct
      order (seed bindings come first since they originated from earlier
      pattern positions). *)
   let drive ~mode ?(initial_bindings = []) ?(ignore_node_type = false)
-      ?(lexical = true)
-      ?(descend = false) ?(spans : (int * int) array option = None)
-      (pattern : pattern_token list) (initial_cursor : C.t) : drive_result =
+      ?(lexical = true) ?(descend = false)
+      ?(spans : (int * int) array option = None) (pattern : pattern_token list)
+      (initial_cursor : C.t) : drive_result =
     let pattern = Array.of_list pattern in
     let n = Array.length pattern in
     (* [spans], when supplied, records the source byte range each token
@@ -417,8 +417,7 @@ module Make (C : Cursor.S) = struct
     | _ -> None
 
   let match_prefix ?(initial_bindings = []) ?(ignore_node_type = false)
-      ?(lexical = true)
-      ?(descend = false) ?(spans = None) pattern cursor =
+      ?(lexical = true) ?(descend = false) ?(spans = None) pattern cursor =
     match pattern with
     | [] ->
         (* Empty pattern can't be a valid prefix-match of a non-empty
@@ -432,8 +431,7 @@ module Make (C : Cursor.S) = struct
     | _ -> (
         match
           drive ~mode:Drive_match_prefix ~initial_bindings ~ignore_node_type
-            ~lexical
-            ~descend ~spans pattern cursor
+            ~lexical ~descend ~spans pattern cursor
         with
         | Drive_source_exhausted (remaining, c, b) -> Some (remaining, c, b)
         | Drive_pattern_exhausted (c, b) ->
@@ -702,8 +700,7 @@ module Make (C : Cursor.S) = struct
               let matched =
                 match
                   match_prefix ~initial_bindings:bindings ~ignore_node_type
-                    ~lexical:false ~spans:(Some local) remaining
-                    (C.clone child)
+                    ~lexical:false ~spans:(Some local) remaining (C.clone child)
                 with
                 | Some (remaining', _, bindings') -> (
                     let consumed =

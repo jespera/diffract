@@ -80,8 +80,9 @@ let scan_directory_apply ~ctx ~language ~pattern_text ~include_pattern
         errors := (file_path, msg) :: !errors)
     files;
   if verbose && literals <> [] then
-    Printf.eprintf "[apply] prefilter: skipped %d of %d files (literals: %s)\n%!"
-      !skipped total_files
+    Printf.eprintf
+      "[apply] prefilter: skipped %d of %d files (literals: %s)\n%!" !skipped
+      total_files
       (String.concat ", " literals);
   Buffer.output_buffer stdout output;
   Printf.printf "Transformed %d file(s) (scanned %d files)\n" !files_changed
@@ -109,8 +110,8 @@ let scan_directory_apply ~ctx ~language ~pattern_text ~include_pattern
   end;
   ignore total_edits
 
-let run pattern_path target language include_pattern exclude_patterns
-    in_place debug_tokens verbose =
+let run pattern_path target language include_pattern exclude_patterns in_place
+    debug_tokens verbose =
   let ctx = Diffract.Context.create () in
   let exclude_dirs =
     if exclude_patterns = [] then default_excludes else exclude_patterns

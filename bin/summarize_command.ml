@@ -8,8 +8,7 @@ let print_coverage (changeset : Diffract.Change_summary.changeset)
     List.fold_left
       (fun acc fc ->
         match fc with
-        | Diffract.Change_summary.Modified { path; _ } ->
-            SS.add path acc
+        | Diffract.Change_summary.Modified { path; _ } -> SS.add path acc
         | _ -> acc)
       SS.empty changeset.files
   in
@@ -23,20 +22,18 @@ let print_coverage (changeset : Diffract.Change_summary.changeset)
   let total = SS.cardinal modified_paths in
   let cov = SS.cardinal (SS.inter modified_paths covered_paths) in
   Printf.eprintf
-    "[summary] file coverage: %d/%d modified files have at least one \
-     rule firing\n\
+    "[summary] file coverage: %d/%d modified files have at least one rule firing\n\
      %!"
     cov total;
   if not (SS.is_empty uncovered) then begin
-    Printf.eprintf "[summary] uncovered files (%d):\n%!"
-      (SS.cardinal uncovered);
+    Printf.eprintf "[summary] uncovered files (%d):\n%!" (SS.cardinal uncovered);
     SS.iter (fun p -> Printf.eprintf "  %s\n%!" p) uncovered
   end
 
 (* ── summarize subcommand ──────────────────────────────────────────── *)
 
-let run before_dir after_dir pairs language include_pattern
-    exclude_patterns verbose ignore_formatting output_format =
+let run before_dir after_dir pairs language include_pattern exclude_patterns
+    verbose ignore_formatting output_format =
   let ctx = Diffract.Context.create () in
   let exclude_dirs =
     if exclude_patterns = [] then default_excludes else exclude_patterns
@@ -206,6 +203,5 @@ let cmd =
     (Cmd.info "summarize" ~doc)
     Term.(
       ret
-        (const run $ before_dir $ after_dir $ pairs $ language
-       $ include_pattern $ exclude_patterns $ verbose_flag $ ignore_formatting
-       $ output_format))
+        (const run $ before_dir $ after_dir $ pairs $ language $ include_pattern
+       $ exclude_patterns $ verbose_flag $ ignore_formatting $ output_format))

@@ -2453,15 +2453,13 @@ let test_required_literals_jsx_partial () =
 
 let test_required_literals_plus_line_excluded () =
   Alcotest.(check (list string))
-    "match side only: - line kept, + line excluded"
-    [ "oldName" ]
+    "match side only: - line kept, + line excluded" [ "oldName" ]
     (literals ~language:"typescript"
        "@@\nmatch: strict\nmetavar $x: single\n@@\n- oldName($x)\n+ newName($x)")
 
 let test_required_literals_multi_section_union () =
   Alcotest.(check (list string))
-    "conjunctive sections both contribute"
-    [ "wrapper"; "inner" ]
+    "conjunctive sections both contribute" [ "wrapper"; "inner" ]
     (literals ~language:"typescript"
        "@@\n\
         match: strict\n\
@@ -2504,8 +2502,7 @@ let test_source_may_match () =
   let literals = [ "HedebyTable"; "getRowId" ] in
   Alcotest.(check bool)
     "both needles present -> may match" true
-    (Matcher.source_may_match ~literals
-       "<HedebyTable getRowId={(r) => r.id} />");
+    (Matcher.source_may_match ~literals "<HedebyTable getRowId={(r) => r.id} />");
   Alcotest.(check bool)
     "needle at the very end of source found" true
     (Matcher.source_may_match ~literals:[ "getRowId" ] "const f = x.getRowId");

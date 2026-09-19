@@ -171,28 +171,28 @@ val text_only_find_in_tree :
 
     The literals are the word-like [Concrete] tokens (length ≥ 2, containing a
     letter, digit, or underscore) of the compiled match IR — exactly the leaves
-    the engine demands whole-leaf text equality for. Soundness follows from
-    that exactness: an equal leaf is a verbatim substring of the source.
-    Metavars, ellipsis, and [+ ]-line content never produce such tokens, and
-    [foreach] sections are transform directives outside the match IR, so none
-    of them contribute (their literals are {e not} required). [on $VAR]
-    sections do contribute: they must match inside a bound subtree, which is
-    itself source text. Field mode's source-context re-tokenization is covered
-    because its standalone-token probe (text-only alignment) is itself a
-    necessary condition. The word-like restriction only drops punctuation
-    needles, which occur in virtually every file and reject nothing; it is not
-    needed for soundness.
+    the engine demands whole-leaf text equality for. Soundness follows from that
+    exactness: an equal leaf is a verbatim substring of the source. Metavars,
+    ellipsis, and [+ ]-line content never produce such tokens, and [foreach]
+    sections are transform directives outside the match IR, so none of them
+    contribute (their literals are {e not} required). [on $VAR] sections do
+    contribute: they must match inside a bound subtree, which is itself source
+    text. Field mode's source-context re-tokenization is covered because its
+    standalone-token probe (text-only alignment) is itself a necessary
+    condition. The word-like restriction only drops punctuation needles, which
+    occur in virtually every file and reject nothing; it is not needed for
+    soundness.
 
-    Returns [[]] — no prefilter possible, every file must be searched — when
-    the pattern has no such token. Raises like {!find} on malformed patterns. *)
+    Returns [[]] — no prefilter possible, every file must be searched — when the
+    pattern has no such token. Raises like {!find} on malformed patterns. *)
 val required_literals :
   ctx:Context.t -> language:string -> pattern_text:string -> string list
 
-(** [source_may_match ~literals source] is [false] only when [source] lacks
-    one of [literals] (as produced by {!required_literals}) — i.e. when no
-    match is possible in it. Non-allocating substring scans; literals are
-    checked in order, so the caller's list order decides how fast a
-    non-matching file is rejected. *)
+(** [source_may_match ~literals source] is [false] only when [source] lacks one
+    of [literals] (as produced by {!required_literals}) — i.e. when no match is
+    possible in it. Non-allocating substring scans; literals are checked in
+    order, so the caller's list order decides how fast a non-matching file is
+    rejected. *)
 val source_may_match : literals:string list -> string -> bool
 
 (** [find ~ctx ~language ~pattern_text ~source_text] parses the pattern, runs

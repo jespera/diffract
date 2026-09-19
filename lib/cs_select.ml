@@ -245,8 +245,12 @@ let arbitrate_fusion_inputs ~eval_at ~all_files
           (-anchoredness t, delta_token_count t)
         in
         compare
-          (-List.length ra, anch a, String.length (render_pattern_body a.pattern))
-          (-List.length rb, anch b, String.length (render_pattern_body b.pattern)))
+          ( -List.length ra,
+            anch a,
+            String.length (render_pattern_body a.pattern) )
+          ( -List.length rb,
+            anch b,
+            String.length (render_pattern_body b.pattern) ))
   in
   let claimed : (string * int, unit) Hashtbl.t = Hashtbl.create 32 in
   List.filter_map
@@ -539,9 +543,9 @@ let propose_delta_pooled ?(label = "delta-keyed") (env : tier_env)
       | Hole h, _ -> acc := (h, f) :: !acc
       | Ellipsis, Ellipsis -> ()
       | Leaf _, Leaf _ -> ()
-      | PNode a, PNode b when List.length a.children = List.length b.children
-        ->
-          List.iter2 (fun (x : pat_child) (y : pat_child) -> go x.child y.child)
+      | PNode a, PNode b when List.length a.children = List.length b.children ->
+          List.iter2
+            (fun (x : pat_child) (y : pat_child) -> go x.child y.child)
             a.children b.children
       | _ -> raise Desync
     in
@@ -569,7 +573,8 @@ let propose_delta_pooled ?(label = "delta-keyed") (env : tier_env)
     if List.length c.instances < 2 then [ c ]
     else
       let wits =
-        List.map (fun (i : instance) -> hole_witnesses c.pattern i.ipat)
+        List.map
+          (fun (i : instance) -> hole_witnesses c.pattern i.ipat)
           c.instances
       in
       if List.exists (fun w -> w = None) wits then [ c ]
@@ -584,8 +589,7 @@ let propose_delta_pooled ?(label = "delta-keyed") (env : tier_env)
             (fun h ->
               let vals =
                 List.filter_map
-                  (fun w ->
-                    Option.map render_pat_node (List.assoc_opt h w))
+                  (fun w -> Option.map render_pat_node (List.assoc_opt h w))
                   wits
               in
               let d = List.length (List.sort_uniq compare vals) in
@@ -619,8 +623,7 @@ let propose_delta_pooled ?(label = "delta-keyed") (env : tier_env)
                     after = subst_hole h node c.pattern.after;
                   }
                 in
-                split_pool
-                  { pattern; instances = List.map fst members })
+                split_pool { pattern; instances = List.map fst members })
   in
   let split_insertion_pools pools =
     List.concat_map
@@ -646,14 +649,14 @@ let propose_delta_pooled ?(label = "delta-keyed") (env : tier_env)
             if twin = c.pattern then [ c ]
             else if
               has_concrete twin.before && has_concrete_edit twin
-              && no_orphan_after_holes twin
-              && no_junk_passthrough twin
+              && no_orphan_after_holes twin && no_junk_passthrough twin
             then [ c; { c with pattern = twin } ]
             else [ c ])
       pools
   in
   let delta_clusters =
-    pre_group_identical delta_raw |> split_insertion_pools |> with_twins
+    pre_group_identical delta_raw
+    |> split_insertion_pools |> with_twins
     |> List.filter (fun c ->
         let enough = List.length c.instances >= Cs_config.default.min_support in
         if (not enough) && Cs_trace.on () then
@@ -667,9 +670,8 @@ let propose_delta_pooled ?(label = "delta-keyed") (env : tier_env)
           Some { c with instances = safe }
         else begin
           if Cs_trace.on () then
-            Printf.eprintf
-              "%s: pool gate-shed (%d -> %d safe):\n%s\n---\n%!" label
-              (List.length c.instances) (List.length safe)
+            Printf.eprintf "%s: pool gate-shed (%d -> %d safe):\n%s\n---\n%!"
+              label (List.length c.instances) (List.length safe)
               (render_pattern_body c.pattern);
           None
         end)
@@ -683,8 +685,8 @@ let propose_delta_pooled ?(label = "delta-keyed") (env : tier_env)
 (** PROPOSE: AU-intersection candidates — shared sub-edits mined from the
     dendrogram merges the coherence cut rejected. A rejected merge's pattern is
     the aligned intersection of every instance beneath it; a concrete
-    before/after divergence inside it is a delta all of them share, buried
-    under the per-file holes that sank the merge. {!Cs_pattern.extract_components}
+    before/after divergence inside it is a delta all of them share, buried under
+    the per-file holes that sank the merge. {!Cs_pattern.extract_components}
     pulls those out at every enclosing context level; here each component
     becomes a cluster carrying the rejected node's instances (its evidence —
     every one of them exhibits the component, by anti-unification), identical
@@ -1306,8 +1308,7 @@ let region_covered (env : tier_env) ~covered file ds de =
   | Some si ->
       let idx = ref (-1) in
       List.iteri
-        (fun i (rs, re, _) ->
-          if !idx < 0 && rs <= ds && de <= re then idx := i)
+        (fun i (rs, re, _) -> if !idx < 0 && rs <= ds && de <= re then idx := i)
         si.si_regions;
       if !idx < 0 then
         List.iteri
@@ -1390,7 +1391,8 @@ let live_deep_candidates (env : tier_env) ~(deep_clusters : cluster list)
   in
   if Cs_trace.on () then
     Cs_trace.trace "deep: %d pooled+safe, %d live (gated lazily)\n%!"
-      (List.length deep_clusters) (List.length live);
+      (List.length deep_clusters)
+      (List.length live);
   List.filter_map
     (fun (c : cluster) ->
       let language = lang_of c in
@@ -1416,8 +1418,11 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
     Cs_trace.timed "propose: two-sided extract" (fun () ->
         collect_initial_clusters ?on_file:(on_file_for "two-sided") ~ctx cs)
   in
-  let base_two_sided, delta_clusters, deep_clusters, intersection_clusters, anchored
-      =
+  let ( base_two_sided,
+        delta_clusters,
+        deep_clusters,
+        intersection_clusters,
+        anchored ) =
     Cs_trace.timed "propose: two-sided cluster" (fun () ->
         let initial =
           Cs_trace.timed "  pre-group" (fun () -> pre_group_identical raw)
@@ -1427,8 +1432,7 @@ let tier_rules ~on_file_for ~ctx (cs : changeset) : rule list =
         let base_two_sided =
           Cs_trace.timed "  two-sided clusters" (fun () ->
               propose_two_sided_clusters ~safe_instances:(safe_instances env)
-                ~on_reject:(fun pat insts ->
-                  mined := (pat, insts) :: !mined)
+                ~on_reject:(fun pat insts -> mined := (pat, insts) :: !mined)
                 initial)
         in
         let delta =

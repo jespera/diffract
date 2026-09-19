@@ -15,9 +15,9 @@ type t = {
   mutable stack : frame list;
   in_string_base : bool;
       (** string-interiority of the context this cursor was scoped from:
-          sub-cursors ([narrow], [named_children], [all_children]) drop
-          their ancestor frames, so a cursor created inside a string
-          literal carries the bit here. OR-ed into {!in_string}. *)
+          sub-cursors ([narrow], [named_children], [all_children]) drop their
+          ancestor frames, so a cursor created inside a string literal carries
+          the bit here. OR-ed into {!in_string}. *)
 }
 
 (* Filter [Tree.child list] down to the nodes the matcher should see.
@@ -33,6 +33,7 @@ let filter_children (children : Tree.src Tree.child list) : Tree.src Tree.t list
 
 let of_node ~source node =
   { source; stack = [ { curr = node; right = [] } ]; in_string_base = false }
+
 let of_tree (tree : Tree.src Tree.tree) = of_node ~source:tree.source tree.root
 
 let clone c =
@@ -131,7 +132,8 @@ let named_children c =
   List.filter_map
     (fun (child : Tree.src Tree.child) ->
       if child.node.is_named && not child.node.is_extra then
-        Some { (of_node ~source:c.source child.node) with in_string_base = base }
+        Some
+          { (of_node ~source:c.source child.node) with in_string_base = base }
       else None)
     n.children
 
@@ -142,7 +144,8 @@ let all_children c =
     (fun (child : Tree.src Tree.child) ->
       if child.node.is_extra then None
       else
-        Some { (of_node ~source:c.source child.node) with in_string_base = base })
+        Some
+          { (of_node ~source:c.source child.node) with in_string_base = base })
     n.children
 
 (* Collect every non-extra leaf reachable under [node] in pre-order. For the

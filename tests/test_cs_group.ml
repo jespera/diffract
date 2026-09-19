@@ -34,28 +34,30 @@ let signature_tests =
   [
     (* The grouping property: same edit, different surrounding code. *)
     same_edit "same edit in different context"
-      "val a = \"akka.cluster.AutoDowning\"" "val a = \"org.apache.pekko.cluster.AutoDowning\""
-      "if (x == \"akka.cluster.Other\")" "if (x == \"org.apache.pekko.cluster.Other\")";
+      "val a = \"akka.cluster.AutoDowning\""
+      "val a = \"org.apache.pekko.cluster.AutoDowning\""
+      "if (x == \"akka.cluster.Other\")"
+      "if (x == \"org.apache.pekko.cluster.Other\")";
     (* ...and the converse, or the digest would merge unrelated changes. *)
     differs "different edits stay apart" "import akka.actor.X"
-      "import pekko.actor.X" "import akka.actor.X" "import org.apache.pekko.actor.X";
+      "import pekko.actor.X" "import akka.actor.X"
+      "import org.apache.pekko.actor.X";
     check_desc "replacement" "a.akka.b" "a.pekko.b" "akka -> pekko";
     check_desc "pure insertion" "" "import Foo" "(insert) import Foo";
     check_desc "pure deletion" "extends Bar" "" "(delete) extends Bar";
     (* A lone separator between two changed runs must not split one rename
        into "akka -> org" plus "insert apache/pekko/" — the defect that made
        the first pekko render unreadable. *)
-    check_desc "separator bridges a split rename"
-      "src/akka/cluster/X.scala" "src/org/apache/pekko/cluster/X.scala"
-      "akka/ -> org/apache/pekko/";
+    check_desc "separator bridges a split rename" "src/akka/cluster/X.scala"
+      "src/org/apache/pekko/cluster/X.scala" "akka/ -> org/apache/pekko/";
     (* A kept *word* is real context and must still end the segment. *)
     Alcotest.test_case "kept word ends a segment" `Quick (fun () ->
         Alcotest.(check int)
           "two separate edits on one line" 2
           (List.length (sig_of "a X b Y c" "a P b Q c")));
     (* Reflow alongside a real change groups with the unreflowed form. *)
-    same_edit "whitespace-only runs ignored" "foo(a,  b)" "bar(a,  b)" "foo(a, b)"
-      "bar(a, b)";
+    same_edit "whitespace-only runs ignored" "foo(a,  b)" "bar(a,  b)"
+      "foo(a, b)" "bar(a, b)";
     Alcotest.test_case "identical text has no signature" `Quick (fun () ->
         Alcotest.(check bool) "empty" true (sig_of "same" "same" = []));
     (* Identifier-internal renames are reported literally, once per
@@ -106,16 +108,17 @@ let signature_tests =
 let residual ?moved file diff : Cs_types.residual =
   { res_file = file; res_moved_to = moved; res_rules = []; res_diff = diff }
 
-let hunk_diff file body =
-  Printf.sprintf "--- a/%s\n+++ b/%s\n%s" file file body
+let hunk_diff file body = Printf.sprintf "--- a/%s\n+++ b/%s\n%s" file file body
 
 (* Two files whose single hunk is the same edit, plus one that differs. *)
 let sample =
   [
     residual "a.scala"
-      (hunk_diff "a.scala" "@@ -1,1 +1,1 @@\n-val x = akka.A\n+val x = pekko.A\n");
+      (hunk_diff "a.scala"
+         "@@ -1,1 +1,1 @@\n-val x = akka.A\n+val x = pekko.A\n");
     residual "b.scala"
-      (hunk_diff "b.scala" "@@ -3,1 +3,1 @@\n-val y = akka.B\n+val y = pekko.B\n");
+      (hunk_diff "b.scala"
+         "@@ -3,1 +3,1 @@\n-val y = akka.B\n+val y = pekko.B\n");
     residual "c.scala"
       (hunk_diff "c.scala" "@@ -9,1 +9,1 @@\n-val z = 1\n+val z = 2\n");
   ]
@@ -138,8 +141,8 @@ let digest_tests =
         Alcotest.(check int)
           "grouped + ungrouped = total" d.dg_total
           (d.dg_grouped + List.length rest);
-        Alcotest.(check int) "only the odd one out is printed" 1
-          (List.length rest));
+        Alcotest.(check int)
+          "only the odd one out is printed" 1 (List.length rest));
     Alcotest.test_case "no renames when nothing moved" `Quick (fun () ->
         let d = Cs_group.digest sample in
         Alcotest.(check bool) "none" true (d.dg_renames = None));
@@ -152,7 +155,9 @@ let digest_tests =
             residual ~moved:"new/a.scala" "old/a.scala"
               (hunk_diff "old/a.scala" "@@ -1,1 +1,1 @@\n-akka\n+pekko\n");
             residual ~moved:"new/b.scala" "old/b.scala"
-              "similarity index 100%\nrename from old/b.scala\nrename to new/b.scala\n";
+              "similarity index 100%\n\
+               rename from old/b.scala\n\
+               rename to new/b.scala\n";
           ]
         in
         let d = Cs_group.digest moved in
@@ -161,8 +166,8 @@ let digest_tests =
         | Some (files, edits) ->
             Alcotest.(check int) "both files counted" 2 files;
             Alcotest.(check int) "one shared path edit" 1 (List.length edits);
-            Alcotest.(check int) "with both occurrences" 2
-              (List.hd edits).re_count);
+            Alcotest.(check int)
+              "with both occurrences" 2 (List.hd edits).re_count);
   ]
 
 let tests = signature_tests @ digest_tests

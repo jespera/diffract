@@ -7,9 +7,9 @@
 
     Not to be confused with {!Leaf_metric}, which also computes an LCS but
     reports only the {e distance} (via Myers' O(ND), cheap for near-identical
-    streams). This one reconstructs the {e script}, so it pays the full
-    O(n·m) dynamic-programming table. Callers align short sequences —
-    a file's lines, a line's words — never whole corpora. *)
+    streams). This one reconstructs the {e script}, so it pays the full O(n·m)
+    dynamic-programming table. Callers align short sequences — a file's lines, a
+    line's words — never whole corpora. *)
 
 type 'a op = Keep of 'a | Remove of 'a | Add of 'a
 

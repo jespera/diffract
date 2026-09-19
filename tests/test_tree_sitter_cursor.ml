@@ -17,6 +17,7 @@ let parse_tsx source = Tree.parse ~ctx ~language:"tsx" source
 (* Convenience constructors for pattern tokens. *)
 let con text node_type : Stmatch.pattern_token =
   Concrete { text; node_type; in_string = false }
+
 let sub : Stmatch.pattern_token = Subtree { name = None }
 
 (* ========================================================================= *)

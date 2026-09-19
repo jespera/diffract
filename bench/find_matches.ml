@@ -44,7 +44,8 @@ let gen_source n =
 (* Pattern A: distinctive Concrete first. Anchor search would target `foo`. *)
 let pattern_distinctive =
   [
-    Stmatch.Concrete { text = "foo"; node_type = "identifier"; in_string = false };
+    Stmatch.Concrete
+      { text = "foo"; node_type = "identifier"; in_string = false };
     Stmatch.Concrete { text = "("; node_type = "("; in_string = false };
     Stmatch.Subtree { name = Some "x" };
     Stmatch.Concrete { text = ")"; node_type = ")"; in_string = false };
@@ -65,7 +66,8 @@ let pattern_wildcard_first =
    distribution of foo's, bar appears 5x as often. *)
 let pattern_common =
   [
-    Stmatch.Concrete { text = "bar"; node_type = "identifier"; in_string = false };
+    Stmatch.Concrete
+      { text = "bar"; node_type = "identifier"; in_string = false };
     Stmatch.Concrete { text = "("; node_type = "("; in_string = false };
     Stmatch.Subtree { name = Some "x" };
     Stmatch.Concrete { text = ")"; node_type = ")"; in_string = false };
@@ -77,7 +79,8 @@ let pattern_common =
    Siblings absorption is at one structural level (it works). *)
 let pattern_nonlinear =
   [
-    Stmatch.Concrete { text = "pair"; node_type = "identifier"; in_string = false };
+    Stmatch.Concrete
+      { text = "pair"; node_type = "identifier"; in_string = false };
     Stmatch.Concrete { text = "("; node_type = "("; in_string = false };
     Stmatch.Subtree { name = Some "x" };
     Stmatch.Concrete { text = ","; node_type = ","; in_string = false };
@@ -92,7 +95,8 @@ let pattern_nonlinear =
    tokens before failing. *)
 let pattern_long =
   [
-    Stmatch.Concrete { text = "baz"; node_type = "identifier"; in_string = false };
+    Stmatch.Concrete
+      { text = "baz"; node_type = "identifier"; in_string = false };
     Stmatch.Concrete { text = "("; node_type = "("; in_string = false };
     Stmatch.Subtree { name = Some "x" };
     Stmatch.Concrete { text = ","; node_type = ","; in_string = false };

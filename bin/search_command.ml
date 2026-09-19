@@ -159,8 +159,8 @@ let scan_directory_search ~ctx ~language ~pattern_text ~include_pattern
         Printf.eprintf "[search] (%d/%d) %s\n%!" (i + 1) total_files file_path;
       match In_channel.with_open_text file_path In_channel.input_all with
       | exception Sys_error msg -> errors := (file_path, msg) :: !errors
-      | source_text when
-          not (Diffract.Matcher.source_may_match ~literals source_text) ->
+      | source_text
+        when not (Diffract.Matcher.source_may_match ~literals source_text) ->
           incr skipped
       | source_text -> (
           match search_source ~ctx ~language ~pattern_text source_text with
@@ -217,8 +217,9 @@ let scan_directory_search ~ctx ~language ~pattern_text ~include_pattern
            | exception Sys_error _ -> []
            (* Text-only matches need the same literal tokens as text, so the
               prefilter applies to this pass too. *)
-           | source_text when
-               not (Diffract.Matcher.source_may_match ~literals source_text) ->
+           | source_text
+             when not (Diffract.Matcher.source_may_match ~literals source_text)
+             ->
                []
            | source_text ->
                let tree = Diffract.Tree.parse ~ctx ~language source_text in

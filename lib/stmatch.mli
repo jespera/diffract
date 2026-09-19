@@ -4,9 +4,9 @@
     via a {!Cursor.S}. Concrete tokens match leaves lexically: on text, always;
     node type disagreement is tolerated iff both sides agree on string-
     interiority (differing syntactic roles are a fragment-parse artifact, but
-    code never matches string contents — see the [Concrete] doc);
-    subtree wildcards bind to one complete subtree with left-spine backtracking;
-    sibling wildcards match zero or more adjacent subtrees.
+    code never matches string contents — see the [Concrete] doc); subtree
+    wildcards bind to one complete subtree with left-spine backtracking; sibling
+    wildcards match zero or more adjacent subtrees.
 
     Wildcards may carry a name. Named wildcards record bindings (single subtree
     for [Subtree], list of subtrees for [Siblings]). If the same name appears
@@ -25,14 +25,14 @@ type pattern_token =
           [node_type] agrees (the common case — bit-for-bit the historical
           strict behaviour) or the leaf's string-interiority agrees with
           [in_string]. The relaxation exists because a pattern body is a
-          fragment: its parse assigns context-dependent roles wrongly
-          ([owner:] standalone is a labeled statement; its [owner] leaf a
+          fragment: its parse assigns context-dependent roles wrongly ([owner:]
+          standalone is a labeled statement; its [owner] leaf a
           [statement_identifier]), and comparing those role names rejects
-          against noise. String-interiority is the part of the classification
-          a lexer gets right regardless of context, and it preserves the one
+          against noise. String-interiority is the part of the classification a
+          lexer gets right regardless of context, and it preserves the one
           distinction that matters: code never matches string contents.
-          [in_string] is computed by the tokenizer from the pattern parse's
-          own ancestry ({!Tree.string_delimited}). *)
+          [in_string] is computed by the tokenizer from the pattern parse's own
+          ancestry ({!Tree.string_delimited}). *)
   | Subtree of { name : string option }
       (** Subtree wildcard. Matches one complete subtree of any shape.
           [name = None] is anonymous (no binding recorded). [name = Some n]

@@ -448,8 +448,8 @@ let rec has_common_anchor = function
     out in [Same]/[Unchanged], with no [Added]/[Removed]/[Replaced] anywhere?
     Such structure is only trustworthy where the enclosing bytes really are
     equal; standing in for a pair that differs (in anonymous tokens the
-    named-children walk can't see — a brace wrap) it would claim a change out
-    of existence. *)
+    named-children walk can't see — a brace wrap) it would claim a change out of
+    existence. *)
 let rec is_vacuous = function
   | Unchanged -> true
   | Replaced -> false
@@ -594,7 +594,9 @@ and derive_child_changes mapping ~before_source ~after_source before_children
                let lb = leaves_of leaves_b before_source before_arr bi in
                let la = leaves_of leaves_a after_source after_arr ai in
                let n = Array.length lb and m = Array.length la in
-               if n = 0 || m = 0 || n > descent_max_leaves || m > descent_max_leaves
+               if
+                 n = 0 || m = 0 || n > descent_max_leaves
+                 || m > descent_max_leaves
                then None
                else
                  (* Require at least one shared leaf token (d ≤ n + m − 2):
@@ -669,16 +671,16 @@ and derive_child_changes mapping ~before_source ~after_source before_children
     change [(b, c)]; peeling [b] symmetrically emits [Removed] context. A
     candidate is admissible iff its context step is on a leaf-metric geodesic
     (the [distance_upto ~bound] hit is exact because the bound is also the
-    triangle-inequality lower bound) and the core shares at least one leaf
-    token with the far side. Among admissible candidates the smallest remaining
+    triangle-inequality lower bound) and the core shares at least one leaf token
+    with the far side. Among admissible candidates the smallest remaining
     distance wins; ties keep the first found (after-side candidates first). *)
 and descend_change mapping ~before_source ~after_source (b : Tree.src Tree.t)
     (a : Tree.src Tree.t) : node_change option =
   let bl = Leaf_metric.leaves ~source:before_source b in
   let al = Leaf_metric.leaves ~source:after_source a in
   let nb = Array.length bl and na = Array.length al in
-  if nb = 0 || na = 0 || nb > descent_max_leaves || na > descent_max_leaves
-  then None
+  if nb = 0 || na = 0 || nb > descent_max_leaves || na > descent_max_leaves then
+    None
   else begin
     let d_ba = Leaf_metric.distance bl al in
     let best :
@@ -699,16 +701,14 @@ and descend_change mapping ~before_source ~after_source (b : Tree.src Tree.t)
       let better =
         match !best with None -> true | Some (d0, _) -> bound < d0
       in
-      if
-        nc > 0 && bound >= 0
-        && bound <= Array.length far + nc - 2
-        && better
+      if nc > 0 && bound >= 0 && bound <= Array.length far + nc - 2 && better
       then
         match Leaf_metric.distance_upto ~bound cl far with
         | Some _ ->
             best :=
               Some
-                (bound, match side with `After -> `After c | `Before -> `Before c)
+                ( bound,
+                  match side with `After -> `After c | `Before -> `Before c )
         | None -> ()
     in
     List.iter (fun c -> consider `After c) a.named_children;

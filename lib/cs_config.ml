@@ -53,12 +53,11 @@ type options = {
           remainder. Deterministic (stable input-order prefix) and trace-logged,
           never silent. *)
   intersection_components_cap : int;
-      (** AU-intersection mining: at most this many coherent components are
-          kept per rejected dendrogram merge ({!Cs_pattern.extract_components}
-          emits every enclosing level of every shared sub-edit, so a large
-          composite can yield many). Identical components pool across rejected
-          nodes before evaluation, so the cap bounds proposal volume, not
-          support. *)
+      (** AU-intersection mining: at most this many coherent components are kept
+          per rejected dendrogram merge ({!Cs_pattern.extract_components} emits
+          every enclosing level of every shared sub-edit, so a large composite
+          can yield many). Identical components pool across rejected nodes
+          before evaluation, so the cap bounds proposal volume, not support. *)
   anchor_sample : int;
       (** declaration anchoring: how many of a two-sided cluster's instances to
           re-anchor under their enclosing declaration when proposing a
