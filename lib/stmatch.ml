@@ -167,16 +167,18 @@ module Make (C : Cursor.S) = struct
             if not can then raise (Source_exhausted_at i)
         | Siblings _ -> ());
         match token with
-        | Subtree { name } ->
+        | Subtree { name } -> (
             let snapshot = !bindings in
             let cur_clone = C.clone !cursor in
             record i (C.byte_range cur_clone);
-            (match name with
-            | None -> ()
-            | Some n -> (
-                match try_add_single !bindings n cur_clone with
-                | Ok b -> bindings := b
-                | Error () -> raise Mismatch));
+            (* Push the descent checkpoint BEFORE checking a non-linear
+               binding. A repeated name whose existing binding is a proper
+               sub-part of the current subtree ([_H0.bar(x)] … [_H0.baz(x)]:
+               the second [_H0] arrives at the whole [Foo.baz] navigation
+               while the first bound the receiver [Foo]) must mismatch here
+               and then descend, exactly as the first occurrence did after
+               [.] failed. Raising before the push would backtrack past this
+               token and never try the children. *)
             checkpoints :=
               {
                 kind = Cp_subtree;
@@ -186,7 +188,13 @@ module Make (C : Cursor.S) = struct
                 saved_cursor = cur_clone;
                 saved_bindings = snapshot;
               }
-              :: !checkpoints
+              :: !checkpoints;
+            match name with
+            | None -> ()
+            | Some n -> (
+                match try_add_single !bindings n cur_clone with
+                | Ok b -> bindings := b
+                | Error () -> raise Mismatch))
         | Siblings { name } -> (
             (* Non-linear path: if a Sequence binding with this name already
                exists, we must absorb exactly the same items deterministically.
