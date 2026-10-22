@@ -493,6 +493,21 @@ let test_nonlinear_with_compound_subtrees () =
           [ nx "x"; nx "x" ]
           (nd [ nd [ id "a"; id "b" ]; nd [ id "a"; id "b" ] ])))
 
+let test_nonlinear_descends_to_bound_subtree () =
+  (* Pattern [x; b; x; c] against nd[nd[a, b]; nd[a, c]] — well, flattened:
+     the second [x] arrives at the compound [nd[a, c]] while [x] is already
+     bound to the leaf [a]. The binding check must fail there and the matcher
+     must DESCEND into the compound to find the equal [a], as the first [x]
+     did after [b] failed to follow [nd[a, b]]. Regression: the mismatch was
+     raised before the descent checkpoint was pushed, so a repeated name
+     could never bind below the subtree it first arrived at. *)
+  Alcotest.(check bool)
+    "repeated name descends to the equal sub-part" true
+    (Option.is_some
+       (bindings_of
+          [ nx "x"; con "b"; nx "x"; con "c" ]
+          (nd [ nd [ id "a"; id "b" ]; nd [ id "a"; id "c" ] ])))
+
 (* ----- Non-linearity for Siblings (sequence equality). ----- *)
 
 let test_nonlinear_siblings_equal_sequences () =
@@ -1297,6 +1312,8 @@ let binding_tests =
       test_nonlinear_siblings_equal_sequences;
     test_case "non-linear siblings fails different sequences" `Quick
       test_nonlinear_siblings_different_sequences_fail;
+    test_case "non-linear name descends to bound sub-part" `Quick
+      test_nonlinear_descends_to_bound_subtree;
     test_case "non-linear siblings fails different lengths" `Quick
       test_nonlinear_siblings_different_lengths_fail;
     test_case "non-linear siblings records one binding" `Quick

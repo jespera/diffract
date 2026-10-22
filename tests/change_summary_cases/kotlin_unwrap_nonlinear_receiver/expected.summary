@@ -1,0 +1,30 @@
+# rule R1  support=3  language=kotlin
+@@
+match: strict
+metavar _H0: single
+metavar _H1: single
+metavar _H2: single
+@@
+  =
+- Listener.sum(
+-     SubscribersListener(subscribers, idFromUUID) { _, _ ->
+-         val message = if (isWorkflowCreation) {
+-             _H0._H1(workflowId)
+-         } else {
+-             _H0._H2(workflowId)
+-         }
+-         broadcast(message)
+-     },
+- )
++ SubscribersListener(subscribers, idFromUUID) { _, _ ->
++     val message = if (isWorkflowCreation) {
++         _H0._H1(workflowId)
++     } else {
++         _H0._H2(workflowId)
++     }
++     broadcast(message)
++ }
+# sites R1
+a.kt
+b.kt
+c.kt
