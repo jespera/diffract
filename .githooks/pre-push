@@ -20,6 +20,13 @@
 
 set -e
 
+# Git exports GIT_DIR, GIT_INDEX_FILE and friends to a hook run from a
+# linked worktree. Inherited by the build below, they would aim every git
+# command in the test suite at THIS repository — including the checkout
+# self-test, which inits and commits to throwaway repos. Clear them; git
+# rediscovers the repository from the hook's working directory.
+unset $(git rev-parse --local-env-vars)
+
 ROOT=$(git rev-parse --show-toplevel)
 ZERO=0000000000000000000000000000000000000000
 GRAMMAR_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/diffract/grammar-archives"
