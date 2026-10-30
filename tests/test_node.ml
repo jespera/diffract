@@ -185,11 +185,49 @@ let test_kotlin_modifier_led_declarations () =
     [ "class_declaration"; "class_declaration" ]
     types
 
+(* Grammar-pin regressions of the same silent kind, fixed upstream in #298
+   and #285 and picked up by the #326 pin. A statement opening with [(] on the line
+   after a call was read as a second argument list for that call, fusing
+   [min(a, b)] with the next line into [min(a, b)(0 until n).forEach { }]. *)
+let test_kotlin_paren_statement_boundary () =
+  let source =
+    "fun f() {\n    val n = min(a, b)\n    (0 until n).forEach { }\n}\n"
+  in
+  let tree = Diffract.parse_tree ~ctx ~language:"kotlin" source in
+  match Tree.find_by_type "property_declaration" tree.Tree.root with
+  | [ decl ] ->
+      Alcotest.(check string)
+        "the declaration ends on its own line" "val n = min(a, b)"
+        (Tree.text tree.Tree.source decl)
+  | decls ->
+      Alcotest.failf "expected one property_declaration, got %d"
+        (List.length decls)
+
+(* A block comment between the imports and a modifier-led declaration was
+   swallowed by the import's automatic semicolon: no node, so its text never
+   reached the leaf stream. *)
+let test_kotlin_comment_after_imports () =
+  let tree =
+    Diffract.parse_tree ~ctx ~language:"kotlin"
+      "import a.b\n\n/**\n * Doc.\n */\nabstract class C\n"
+  in
+  let types =
+    List.map (fun n -> n.Tree.node_type) tree.Tree.root.Tree.named_children
+  in
+  Alcotest.(check (list string))
+    "the comment is a node of its own"
+    [ "import_list"; "multiline_comment"; "class_declaration" ]
+    types
+
 let tests =
   [
     Alcotest.test_case "root node type" `Quick test_root_node_type;
     Alcotest.test_case "kotlin modifier-led declarations" `Quick
       test_kotlin_modifier_led_declarations;
+    Alcotest.test_case "kotlin paren statement boundary" `Quick
+      test_kotlin_paren_statement_boundary;
+    Alcotest.test_case "kotlin comment after imports" `Quick
+      test_kotlin_comment_after_imports;
     Alcotest.test_case "is_missing on recovery nodes" `Quick test_is_missing;
     Alcotest.test_case "find children" `Quick test_find_children;
     Alcotest.test_case "text extraction" `Quick test_text_extraction;
