@@ -10,7 +10,11 @@
 # declaration parsed as an `infix_expression` with `internal`, `open` and
 # `class` as plain identifiers. A *silent* misparse, with no ERROR node for
 # Tree.unparsed_regions to report, so rule derivation would run against a
-# wrong tree and say nothing. Upstream fixed it in #278/#280.
+# wrong tree and say nothing. Upstream fixed it in #278/#280. The pin moved
+# to #326 for more fixes of the same silent kind: a statement opening with
+# `(` on the line after a call was glued onto that call as a second argument
+# list, and a block comment before a modifier-led declaration vanished from
+# the tree (both guarded in tests/test_node.ml).
 #
 # tree-sitter-scala is pinned for XML-literal support. No
 # released tree-sitter-scala parses Scala's XML literals at all (0.24.0, the
