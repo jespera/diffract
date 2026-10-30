@@ -6,6 +6,11 @@
 
 set -euo pipefail
 
+# An inherited GIT_DIR (git exports one to hooks run from a linked worktree)
+# overrides every `git -C` below: the throwaway repos' inits and commits
+# would land in that repository instead.
+unset $(git rev-parse --local-env-vars)
+
 here="$(cd "$(dirname "$0")" && pwd)"
 checkout="$here/diffract-checkout.sh"
 work="$(mktemp -d)"
