@@ -14,7 +14,8 @@
 # to #326 for more fixes of the same silent kind: a statement opening with
 # `(` on the line after a call was glued onto that call as a second argument
 # list, and a block comment before a modifier-led declaration vanished from
-# the tree (both guarded in tests/test_node.ml).
+# the tree (both guarded in tests/test_node.ml). It then moved to #327 for three
+# scanner fixes, among them `where` used as an identifier.
 #
 # tree-sitter-scala is pinned for XML-literal support. No
 # released tree-sitter-scala parses Scala's XML literals at all (0.24.0, the
