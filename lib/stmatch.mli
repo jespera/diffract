@@ -309,14 +309,35 @@ module Make (C : Cursor.S) : sig
       [match_at] attempt during the walk. Named wildcards encountered during a
       match that share a name with a seeded binding must bind to a
       structurally-equal subtree, otherwise the attempt fails. Used by the
-      multi-section driver to enforce cross-section non-linearity. *)
+      multi-section driver to enforce cross-section non-linearity.
+
+      [distinguish] and [accept] are for a caller that treats this pattern as
+      one conjunct of several, where which configuration is taken at a position
+      decides whether the later conjuncts can match. A position can have several
+      configurations (each way a [Siblings] run can split, each level a
+      [Subtree] can bind at):
+      - [distinguish] (overlapping only; default [[]]): names whose bindings
+        make two same-span configurations different matches. Without it a span
+        is reported once, with its first configuration's bindings.
+      - [accept] (non-overlapping only): commit, at each position, the first
+        configuration whose bindings it approves instead of the first outright.
+        If it approves none, nothing is reported there. *)
   val find_matches :
     ?overlapping:bool ->
     ?initial_bindings:binding list ->
     ?ignore_node_type:bool ->
+    ?distinguish:string list ->
+    ?accept:(binding list -> bool) ->
     pattern_token list ->
     C.t ->
     match_result list
+
+  (** [binding_key names bindings] is the part of [bindings] that [names] can
+      observe: each named binding's source byte ranges, in binding order. Two
+      configurations with equal keys are interchangeable for anything that only
+      reads those names. *)
+  val binding_key :
+    string list -> binding list -> (string * (int * int) list) list
 
   (** Lazy variant of {!find_matches}. Pull match results on demand from the
       sequence; stops walking the tree when consumers stop pulling. *)
@@ -324,6 +345,8 @@ module Make (C : Cursor.S) : sig
     ?overlapping:bool ->
     ?initial_bindings:binding list ->
     ?ignore_node_type:bool ->
+    ?distinguish:string list ->
+    ?accept:(binding list -> bool) ->
     pattern_token list ->
     C.t ->
     match_result Seq.t

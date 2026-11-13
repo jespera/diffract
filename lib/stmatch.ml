@@ -148,7 +148,7 @@ module Make (C : Cursor.S) = struct
      order (seed bindings come first since they originated from earlier
      pattern positions). *)
   let drive ~mode ?(initial_bindings = []) ?(ignore_node_type = false)
-      ?(lexical = true) ?(descend = false)
+      ?(lexical = true) ?(descend = false) ?(nth = 0)
       ?(spans : (int * int) array option = None) (pattern : pattern_token list)
       (initial_cursor : C.t) : drive_result =
     let pattern = Array.of_list pattern in
@@ -324,6 +324,10 @@ module Make (C : Cursor.S) = struct
         best_prefix :=
           Some (i, C.clone !cursor, List.rev_map clone_binding !bindings)
     in
+    (* [Drive_match_at] with [nth = k] returns the k-th configuration (0-based)
+       in enumeration order instead of the first: the ones before it are
+       counted here and backtracked past. *)
+    let skipped = ref 0 in
     let rec check_loop () =
       let outcome =
         try
@@ -337,7 +341,11 @@ module Make (C : Cursor.S) = struct
       | `Pattern_done -> (
           match mode with
           | Drive_match_at ->
-              Drive_pattern_exhausted (!cursor, List.rev !bindings)
+              if !skipped < nth then begin
+                incr skipped;
+                backtrack ()
+              end
+              else Drive_pattern_exhausted (!cursor, List.rev !bindings)
           | Drive_match_prefix ->
               (* In [descend] mode a clean prefix endpoint requires the source
                  subtree to be exhausted here too. If source remains (the
@@ -798,8 +806,22 @@ module Make (C : Cursor.S) = struct
   let advance_one cursor =
     C.move_first_child cursor || C.move_next_subtree cursor
 
+  (* The part of a binding list that [names] can observe: each named binding's
+     source byte ranges, in binding order. Two configurations with equal keys
+     are interchangeable for anything that only reads those names. *)
+  let binding_key names bindings =
+    List.filter_map
+      (function
+        | Single { name; cursor } when List.mem name names ->
+            Some (name, [ C.byte_range cursor ])
+        | Sequence { name; cursors } when List.mem name names ->
+            Some (name, List.map C.byte_range cursors)
+        | _ -> None)
+      bindings
+
   let find_matches_iter ?(overlapping = false) ?(initial_bindings = [])
-      ?(ignore_node_type = false) pattern source_cursor =
+      ?(ignore_node_type = false) ?(distinguish = []) ?accept pattern
+      source_cursor =
     (* Walk the tree pre-order. At each position, drive enumerates every
        valid binding configuration; we yield each, with span dedup in
        overlapping mode.
@@ -820,19 +842,37 @@ module Make (C : Cursor.S) = struct
        every drive call. Cross-walk non-linearity is enforced because the
        seed is checked at every [Subtree] / [Siblings] binding point.
 
+       [distinguish] and [accept] serve a caller for whom this pattern is one
+       conjunct of several (a multi-section rule), where WHICH configuration
+       is taken at a position decides whether the later conjuncts can match:
+
+       - [distinguish] (overlapping only): names whose bindings make two
+         same-span configurations different matches. Span de-duplication
+         keys on [(span, binding_key distinguish)], so a configuration that
+         binds those names differently is reported, not dropped. Default
+         [\[\]] — span alone.
+       - [accept] (non-overlapping only): the configuration committed at a
+         position is the first, in enumeration order, whose bindings [accept]
+         approves — not the first outright. If none is approved nothing is
+         reported there, and the walk still resumes past the leftmost
+         configuration, exactly as when a committed match is discarded by the
+         caller afterwards. Absent, the first configuration is committed.
+
        Stop when no more positions remain. *)
     let cursor = ref (C.clone source_cursor) in
     let exhausted = ref false in
-    let seen = ref [] in
+    let seen = Hashtbl.create 16 in
     let pending : match_result list ref = ref [] in
     let rec next () =
       match !pending with
       | r :: rest ->
           pending := rest;
-          let key = (r.start_byte, r.end_byte) in
-          if overlapping && List.mem key !seen then next ()
+          let key =
+            (r.start_byte, r.end_byte, binding_key distinguish r.bindings)
+          in
+          if overlapping && Hashtbl.mem seen key then next ()
           else begin
-            if overlapping then seen := key :: !seen;
+            if overlapping then Hashtbl.replace seen key ();
             Seq.Cons (r, next)
           end
       | [] -> (
@@ -866,27 +906,40 @@ module Make (C : Cursor.S) = struct
                   if not (advance_one !cursor) then exhausted := true
                 end
                 else begin
-                  (* Non-overlapping (transform) path: commit the first
-                     configuration and recover its per-token spans by re-driving
-                     the same leftmost match with span recording — the spans
-                     surgical editing needs to locate `-` regions. *)
-                  let end_cursor_first, bindings_first =
-                    List.hd configurations
+                  (* Non-overlapping (transform) path: commit one
+                     configuration — the first, or the first [accept]
+                     approves — and recover its per-token spans by re-driving
+                     to that same configuration with span recording — the
+                     spans surgical editing needs to locate `-` regions. *)
+                  let chosen =
+                    match accept with
+                    | None -> Some (0, List.hd configurations)
+                    | Some ok ->
+                        let rec first k = function
+                          | [] -> None
+                          | ((_, bindings) as c) :: rest ->
+                              if ok bindings then Some (k, c)
+                              else first (k + 1) rest
+                        in
+                        first 0 configurations
                   in
-                  let _, end_byte = C.byte_range end_cursor_first in
-                  let n = List.length pattern in
-                  let spans = Array.make (max 1 n) (-1, -1) in
-                  (match
-                     drive ~mode:Drive_match_at ~initial_bindings
-                       ~ignore_node_type ~spans:(Some spans) pattern
-                       (C.clone !cursor)
-                   with
-                  | _ -> ());
-                  pending :=
-                    [
-                      { start_byte; end_byte; bindings = bindings_first; spans };
-                    ];
-                  let next_cursor = C.clone end_cursor_first in
+                  let resume_after =
+                    match chosen with
+                    | Some (k, (end_cursor, bindings)) ->
+                        let _, end_byte = C.byte_range end_cursor in
+                        let n = List.length pattern in
+                        let spans = Array.make (max 1 n) (-1, -1) in
+                        (match
+                           drive ~mode:Drive_match_at ~nth:k ~initial_bindings
+                             ~ignore_node_type ~spans:(Some spans) pattern
+                             (C.clone !cursor)
+                         with
+                        | _ -> ());
+                        pending := [ { start_byte; end_byte; bindings; spans } ];
+                        end_cursor
+                    | None -> fst (List.hd configurations)
+                  in
+                  let next_cursor = C.clone resume_after in
                   if C.move_next_subtree next_cursor then cursor := next_cursor
                   else exhausted := true
                 end;
@@ -895,10 +948,11 @@ module Make (C : Cursor.S) = struct
     next
 
   let find_matches ?(overlapping = false) ?(initial_bindings = [])
-      ?(ignore_node_type = false) pattern source_cursor =
+      ?(ignore_node_type = false) ?(distinguish = []) ?accept pattern
+      source_cursor =
     List.of_seq
       (find_matches_iter ~overlapping ~initial_bindings ~ignore_node_type
-         pattern source_cursor)
+         ~distinguish ?accept pattern source_cursor)
 
   let find_partial_matches_iter ?(initial_bindings = []) pattern source_cursor =
     (* Walk the tree pre-order; at each node attempt [match_partial_at] (the

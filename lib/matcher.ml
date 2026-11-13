@@ -723,6 +723,24 @@ let wildcard_names tokens =
       | _ -> None)
     tokens
 
+(* Every metavar name an [ir] reads or binds: wildcard token names, a field
+   section's declared names (its tokens are re-derived per candidate), and
+   the name an [on] scope is narrowed to. *)
+let rec ir_binding_names = function
+  | StrictSeq { tokens; _ } | PartialContainer { tokens; _ } ->
+      token_binding_names tokens
+  | FieldContainer { tokens; singles; sequences; _ } ->
+      token_binding_names tokens @ singles @ sequences
+  | Within (name, sub) -> name :: ir_binding_names sub
+  | All children -> List.concat_map ir_binding_names children
+
+and token_binding_names tokens =
+  List.filter_map
+    (function
+      | Stmatch.Subtree { name } | Stmatch.Siblings { name } -> name
+      | Stmatch.Concrete _ -> None)
+    tokens
+
 (* The match-side tokens carried by every leaf of an [ir]. *)
 let rec ir_tokens = function
   | StrictSeq { tokens; _ }
@@ -934,11 +952,13 @@ let field_tokens_for ~ctx ~language ~source ~match_text ~singles ~sequences
    [bindings] holds the accumulated bindings; subsequent sibling IRs see
    them via [initial_bindings], which is how cross-section non-linearity is
    enforced. *)
-let rec eval_ir ?(overlapping = true) ~ctx ~language ~source ir cursor
-    initial_bindings : (M.match_result list * M.binding list) list =
+let rec eval_ir ?(overlapping = true) ?(distinguish = []) ?accept ~ctx ~language
+    ~source ir cursor initial_bindings :
+    (M.match_result list * M.binding list) list =
   match ir with
   | StrictSeq { tokens; _ } ->
-      M.find_matches ~overlapping ~initial_bindings tokens cursor
+      M.find_matches ~overlapping ~initial_bindings ~distinguish ?accept tokens
+        cursor
       |> List.map (fun (m : M.match_result) -> ([ m ], m.bindings))
   | PartialContainer { tokens; _ } ->
       M.find_partial_matches ~initial_bindings tokens cursor
@@ -968,18 +988,63 @@ let rec eval_ir ?(overlapping = true) ~ctx ~language ~source ir cursor
       | Some bound ->
           (* [narrow] re-roots the bound cursor at its current node so the
              scoped walk can't climb out via [move_next_subtree]. *)
-          eval_ir ~overlapping ~ctx ~language ~source sub
+          eval_ir ~overlapping ~distinguish ?accept ~ctx ~language ~source sub
             (Tree_sitter_cursor.narrow bound)
             initial_bindings)
   | All children ->
-      let extend acc ir_child =
-        List.concat_map
-          (fun (matches, bindings) ->
-            eval_ir ~overlapping ~ctx ~language ~source ir_child cursor bindings
-            |> List.map (fun (ms, bs) -> (matches @ ms, bs)))
-          acc
+      (* Conjunction with backtracking across children. A child can match a
+         position in several configurations (which argument a metavar after
+         [...] binds, say), and which one is taken decides whether the later
+         children can match at all. So each child is told what the rest
+         needs:
+
+         - searching, [distinguish]: the names the later children read. Two
+           same-span configurations that bind them differently are both
+           passed on, where span de-duplication would keep only the first.
+         - transforming, [accept]: commit the first configuration under which
+           the rest still matches — not the first outright, which would make
+           the rule fail whenever only a later one works.
+
+         [rest_of] evaluates the remaining children under one child's
+         bindings. It is memoised on the bindings of the names they read:
+         the answer cannot depend on anything else, and [accept] asks for it
+         once per candidate configuration before the result is used. (A
+         cached composite's trailing bindings are those of the first caller
+         with that key; they agree with any other caller's on every name
+         still to be read, which is all they are used for.) *)
+      let rec go children bindings =
+        match children with
+        | [] -> [ ([], bindings) ]
+        | [ last ] ->
+            eval_ir ~overlapping ~distinguish ?accept ~ctx ~language ~source
+              last cursor bindings
+        | child :: rest ->
+            let names =
+              List.sort_uniq compare
+                (List.concat_map ir_binding_names rest @ distinguish)
+            in
+            let memo = Hashtbl.create 8 in
+            let rest_of bs =
+              let key = M.binding_key names bs in
+              match Hashtbl.find_opt memo key with
+              | Some r -> r
+              | None ->
+                  let r = go rest bs in
+                  Hashtbl.add memo key r;
+                  r
+            in
+            let accept_child bs =
+              match accept with
+              | None -> rest_of bs <> []
+              | Some outer ->
+                  List.exists (fun (_, bs') -> outer bs') (rest_of bs)
+            in
+            eval_ir ~overlapping ~distinguish:names ~accept:accept_child ~ctx
+              ~language ~source child cursor bindings
+            |> List.concat_map (fun (ms, bs) ->
+                List.map (fun (ms', bs') -> (ms @ ms', bs')) (rest_of bs))
       in
-      List.fold_left extend [ ([], initial_bindings) ] children
+      go children initial_bindings
 
 let find_in_tree ~ctx ~language ~pattern_text (tree : Tree.src Tree.tree) =
   let p = parse_pattern pattern_text in

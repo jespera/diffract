@@ -1889,6 +1889,84 @@ let test_multi_section_kind_mismatch () =
       ignore (find ~language:"typescript" ~pattern ~source:"foo(1); bar(2);"))
 
 (* ========================================================================= *)
+(* Conjunction backtracks across sections                                    *)
+(* ========================================================================= *)
+
+(* Section 1 can bind [X] to either argument; only one choice lets section 2
+   match. The rule must fire whichever argument that is — committing to the
+   first configuration ([X = a]) before looking at section 2 made it fail
+   whenever the answer was a later one. *)
+let guard_then_edit =
+  "@@\n\
+   match: strict\n\
+   metavar X: single\n\
+   @@\n\
+  \  f(... X ...)\n\
+   @@\n\
+   match: strict\n\
+   metavar X: single\n\
+   @@\n\
+   - use(X)\n\
+   + used(X)"
+
+let test_conjunction_retries_later_configuration () =
+  Alcotest.(check string)
+    "second argument" "f(a, b); used(b);"
+    (transform ~language:"typescript" ~pattern:guard_then_edit
+       ~source:"f(a, b); use(b);");
+  Alcotest.(check string)
+    "first argument, as before" "f(a, b); used(a);"
+    (transform ~language:"typescript" ~pattern:guard_then_edit
+       ~source:"f(a, b); use(a);")
+
+(* When several configurations would work, a transform commits the first. *)
+let test_conjunction_commits_first_that_works () =
+  Alcotest.(check string)
+    "only the first is rewritten" "f(a, b); used(a); use(b);"
+    (transform ~language:"typescript" ~pattern:guard_then_edit
+       ~source:"f(a, b); use(a); use(b);")
+
+let test_conjunction_no_configuration_works () =
+  let source = "f(a, b); use(c);" in
+  Alcotest.(check string)
+    "unchanged" source
+    (transform ~language:"typescript" ~pattern:guard_then_edit ~source)
+
+(* Search reports every configuration the later section distinguishes, even
+   though they share section 1's span. *)
+let test_conjunction_search_keeps_same_span_configurations () =
+  let count source =
+    List.length (find ~language:"typescript" ~pattern:guard_then_edit ~source)
+  in
+  Alcotest.(check int) "second argument" 1 (count "f(a, b); use(b);");
+  Alcotest.(check int) "both arguments" 2 (count "f(a, b); use(a); use(b);");
+  Alcotest.(check int) "neither" 0 (count "f(a, b); use(c);")
+
+(* The retried section carries the edit: the edit must land on the
+   configuration that was committed, not on the first one. *)
+let test_conjunction_edit_follows_committed_configuration () =
+  let pattern =
+    "@@\n\
+     match: strict\n\
+     metavar X: single\n\
+     @@\n\
+    \  f(...\n\
+     - X\n\
+     + done(X)\n\
+    \  ...)\n\
+     @@\n\
+     match: strict\n\
+     metavar X: single\n\
+     @@\n\
+    \  use(X)"
+  in
+  Alcotest.(check string)
+    "edit lands on the argument section 2 selects"
+    "f(a, done(b), c); use(b); f(done(p), q); use(p); f(m, n);"
+    (transform ~language:"typescript" ~pattern
+       ~source:"f(a, b, c); use(b); f(p, q); use(p); f(m, n);")
+
+(* ========================================================================= *)
 (* Siblings enumeration (drive's Drive_match_at_all behaviour)               *)
 (* ========================================================================= *)
 
@@ -1946,9 +2024,16 @@ let test_siblings_enumeration_drives_multi_section () =
         | [] -> "<empty>")
       results
   in
+  (* [x] is the string-literal argument in every composite — never [a] or
+     [b], which have no "sealed" inside. It may be bound either to the literal
+     or to its content: a metavar can bind a string's content and carry on
+     past the closing quote, and since section 2 reads [x] those are two
+     distinct configurations, both reported. (Span de-duplication used to
+     hide the second. Whether a code-position metavar should bind string
+     content at all is a separate question.) *)
   Alcotest.(check bool)
     "x is bound to the string-literal arg in every composite" true
-    (List.for_all (fun t -> t = "\"sealed\"") xs)
+    (List.for_all (fun t -> t = "\"sealed\"" || t = "sealed") xs)
 
 (* Ellipsis context lines in a grammar-restricted position. The pattern
 
@@ -2763,6 +2848,16 @@ let tests =
       test_declared_absent_data_class;
     test_case "multi-section: on undeclared metavar" `Quick
       test_multi_section_on_var_undeclared;
+    test_case "conjunction: retries a later configuration" `Quick
+      test_conjunction_retries_later_configuration;
+    test_case "conjunction: commits the first that works" `Quick
+      test_conjunction_commits_first_that_works;
+    test_case "conjunction: no configuration works" `Quick
+      test_conjunction_no_configuration_works;
+    test_case "conjunction: search keeps same-span configurations" `Quick
+      test_conjunction_search_keeps_same_span_configurations;
+    test_case "conjunction: edit follows the committed configuration" `Quick
+      test_conjunction_edit_follows_committed_configuration;
     test_case "enumeration: Siblings enumerates arg positions" `Quick
       test_siblings_enumerates_arg_positions;
     test_case "enumeration: drives multi-section on $x" `Quick
