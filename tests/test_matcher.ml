@@ -1801,6 +1801,40 @@ let test_multi_section_shared_metavar_inconsistent () =
     "cross-section non-linearity rejects" 0
     (List.length (find ~language:"typescript" ~pattern ~source:src))
 
+(* A repeated metavar whose occurrences sit at different depths. Kotlin wraps
+   a lone call argument in a [value_argument] node spanning the same bytes,
+   so [x] is wrapped in [f(x)] and bare in [val y = x]; and in [x + 1] the
+   repeated name has to step down into the expression it arrives at. *)
+let kotlin_repeated_metavar_count ?(decls = "") body =
+  let pattern =
+    "@@\nmatch: strict\nmetavar X: single\n" ^ decls ^ "@@\n" ^ body
+  in
+  let source =
+    "fun t() {\n    f(x)\n    h()\n    x + 1\n    g(x)\n    val y = x\n}\n"
+  in
+  List.length (find ~language:"kotlin" ~pattern ~source)
+
+let test_repeated_metavar_wrapped_then_bare () =
+  Alcotest.(check int)
+    "f(X) ... val Y = X" 1
+    (kotlin_repeated_metavar_count ~decls:"metavar Y: single\n"
+       "f(X)\n...\nval Y = X")
+
+let test_repeated_metavar_bare_then_wrapped () =
+  Alcotest.(check int)
+    "X + 1 ... g(X)" 1
+    (kotlin_repeated_metavar_count "X + 1\n...\ng(X)")
+
+let test_repeated_metavar_descends_into_expression () =
+  Alcotest.(check int)
+    "f(X) ... X + 1" 1
+    (kotlin_repeated_metavar_count "f(X)\n...\nX + 1")
+
+let test_repeated_metavar_different_value_rejected () =
+  Alcotest.(check int)
+    "f(X) ... h(X) has no X in h()" 0
+    (kotlin_repeated_metavar_count "f(X)\n...\nh(X)")
+
 (* on $VAR scopes section 2 to the subtree bound by $obj in section 1.
    The source has a `.run()` member call BOTH inside the foo() call and
    alongside it; with scoping, only the inside one is reachable, so the
@@ -2709,6 +2743,14 @@ let tests =
       test_multi_section_shared_metavar_consistent;
     test_case "multi-section: shared metavar (inconsistent fails)" `Quick
       test_multi_section_shared_metavar_inconsistent;
+    test_case "repeated metavar: wrapped then bare" `Quick
+      test_repeated_metavar_wrapped_then_bare;
+    test_case "repeated metavar: bare then wrapped" `Quick
+      test_repeated_metavar_bare_then_wrapped;
+    test_case "repeated metavar: descends into an expression" `Quick
+      test_repeated_metavar_descends_into_expression;
+    test_case "repeated metavar: different value rejected" `Quick
+      test_repeated_metavar_different_value_rejected;
     test_case "multi-section: on $VAR scopes section" `Quick
       test_multi_section_on_var;
     test_case "multi-section: kind mismatch across sections" `Quick

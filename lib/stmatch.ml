@@ -45,14 +45,46 @@ module Make (C : Cursor.S) = struct
       (function Single b when b.name = name -> Some b.cursor | _ -> None)
       bindings
 
+  (* A {e unary wrapper} is a node whose only child covers exactly the same
+     source bytes (Kotlin's [value_argument] around a lone identifier, say).
+     Binding a metavar to the wrapper or to that child is indistinguishable:
+     same text, and the same position afterwards, since the next subtree
+     after an only child is the next subtree after its parent. The matcher
+     therefore treats the two as one binding — [backtrack] never offers the
+     child as a separate alternative, and binding equality ignores the
+     wrappers. Without this each metavar multiplied the configuration count
+     by the depth of the chain it sat on. *)
+  let at_unary_child ~parent_range c =
+    C.byte_range c = parent_range && not (C.move_next_sibling (C.clone c))
+
+  (* Step [c] down while it sits on a unary wrapper. Mutates [c]. *)
+  let rec skip_unary_wrappers c =
+    let parent_range = C.byte_range c in
+    let probe = C.clone c in
+    if C.move_first_child probe && at_unary_child ~parent_range probe then begin
+      ignore (C.move_first_child c);
+      skip_unary_wrappers c
+    end
+
+  (* Equality of two bound subtrees, ignoring unary wrappers on either side
+     (see above): a repeated name may meet its value wrapped at one
+     occurrence and bare at another. *)
+  let binding_equal c1 c2 =
+    C.subtree_equal c1 c2
+    ||
+    let c1 = C.clone c1 and c2 = C.clone c2 in
+    skip_unary_wrappers c1;
+    skip_unary_wrappers c2;
+    C.subtree_equal c1 c2
+
   (* Try to record a Single binding. Returns [Ok new_bindings] if the name is
-     new, or if an existing binding has the same name and structurally-equal
-     subtree (non-linear match). Returns [Error] if a binding exists but
-     differs structurally. *)
+     new, or if an existing binding has the same name and an equal subtree
+     up to unary wrappers (non-linear match, see [binding_equal]). Returns
+     [Error] if a binding exists but differs. *)
   let try_add_single bindings name cursor =
     match find_single_binding bindings name with
     | Some existing ->
-        if C.subtree_equal cursor existing then Ok bindings else Error ()
+        if binding_equal cursor existing then Ok bindings else Error ()
     | None -> Ok (Single { name; cursor } :: bindings)
 
   (* Look up an existing Sequence binding's cursors, if any. *)
@@ -221,7 +253,7 @@ module Make (C : Cursor.S) = struct
                       else C.move_next_sibling !cursor
                     in
                     if not advanced then raise (Source_exhausted_at i);
-                    if not (C.subtree_equal !cursor exp_cursor) then
+                    if not (binding_equal !cursor exp_cursor) then
                       raise Mismatch;
                     incr consumed)
                   expected
@@ -365,7 +397,25 @@ module Make (C : Cursor.S) = struct
           match cp.kind with
           | Cp_subtree ->
               assert (not !first);
-              if C.move_first_child !cursor then begin
+              (* A metavar's descent skips unary wrappers' children: binding
+                 one is the same configuration as binding its parent, which
+                 this checkpoint already tried (see [at_unary_child]). Keep
+                 stepping down to the first child that is a real alternative;
+                 if the chain bottoms out there is none. Not for [Siblings]:
+                 a run started one level down ranges over different
+                 siblings. *)
+              let is_metavar =
+                match pattern.(cp.saved_start) with
+                | Subtree _ -> true
+                | Siblings _ | Concrete _ -> false
+              in
+              let rec descend () =
+                let parent_range = C.byte_range !cursor in
+                C.move_first_child !cursor
+                && ((not (is_metavar && at_unary_child ~parent_range !cursor))
+                   || descend ())
+              in
+              if descend () then begin
                 first := true;
                 check_loop ()
               end
