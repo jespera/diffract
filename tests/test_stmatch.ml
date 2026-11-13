@@ -1331,6 +1331,77 @@ let binding_tests =
   ]
 
 (* ========================================================================= *)
+(* Layer 5: unary wrappers (a node whose only child spans the same bytes)    *)
+(* ========================================================================= *)
+
+(* Binding a metavar to a unary wrapper or to its only child is the same
+   configuration, so a repeated name must accept its value wrapped at one
+   occurrence and bare at the other — in either order. *)
+let test_nonlinear_wrapped_then_bare () =
+  Alcotest.(check bool)
+    "wrapped first, bare second" true
+    (Option.is_some
+       (bindings_of
+          [ nx "x"; con "b"; nx "x"; con "c" ]
+          (nd [ nd [ id "a" ]; id "b"; id "a"; id "c" ])))
+
+let test_nonlinear_bare_then_wrapped () =
+  Alcotest.(check bool)
+    "bare first, wrapped second" true
+    (Option.is_some
+       (bindings_of
+          [ nx "x"; con "b"; nx "x"; con "c" ]
+          (nd [ id "a"; id "b"; nd [ nd [ id "a" ] ]; id "c" ])))
+
+let test_nonlinear_wrapper_still_compares_content () =
+  Alcotest.(check bool)
+    "different content under a wrapper still fails" false
+    (Option.is_some
+       (bindings_of
+          [ nx "x"; con "b"; nx "x"; con "c" ]
+          (nd [ nd [ id "a" ]; id "b"; id "z"; id "c" ])))
+
+(* Regression for the configuration blow-up: [n] metavars, each sitting on a
+   unary wrapper. When the wrapper's child counted as a separate alternative
+   this start position had 2^n configurations, all enumerated and stored
+   before one was used — 16 million here, which does not finish. There is
+   exactly one. *)
+let test_unary_wrappers_do_not_multiply () =
+  let n = 24 in
+  let source = nd (List.init n (fun i -> nd [ id (Printf.sprintf "a%d" i) ])) in
+  let pattern = List.init n (fun i -> nx (Printf.sprintf "x%d" i)) in
+  Alcotest.(check int)
+    "one match" 1
+    (List.length (find_matches_of pattern source))
+
+(* The skip is for metavars only: a sibling run started one level down
+   ranges over different siblings, so [...] must still descend into a unary
+   wrapper's child. Here the only way to match is for the run to start
+   inside the wrapper-of-a-list. *)
+let test_siblings_still_descend_through_unary () =
+  Alcotest.(check bool)
+    "sibling run descends through a unary wrapper" true
+    (Option.is_some
+       (bindings_of
+          [ nseq "P"; con "c" ]
+          (nd [ nd [ nd [ id "a"; id "b"; id "c" ] ] ])))
+
+let unary_wrapper_tests =
+  let open Alcotest in
+  [
+    test_case "unary wrapper: non-linear wrapped then bare" `Quick
+      test_nonlinear_wrapped_then_bare;
+    test_case "unary wrapper: non-linear bare then wrapped" `Quick
+      test_nonlinear_bare_then_wrapped;
+    test_case "unary wrapper: content still compared" `Quick
+      test_nonlinear_wrapper_still_compares_content;
+    test_case "unary wrapper: configurations do not multiply" `Quick
+      test_unary_wrappers_do_not_multiply;
+    test_case "unary wrapper: sibling run still descends" `Quick
+      test_siblings_still_descend_through_unary;
+  ]
+
+(* ========================================================================= *)
 (* Test registration                                                         *)
 (* ========================================================================= *)
 
@@ -1384,4 +1455,4 @@ let tests =
       test_double_sibling_wildcards;
   ]
   @ stsearch_fixture_tests @ binding_tests @ outer_loop_tests
-  @ match_prefix_tests @ match_partial_tests
+  @ match_prefix_tests @ match_partial_tests @ unary_wrapper_tests
