@@ -3,3 +3,11 @@
  (public_name diffract)
  (package diffract)
  (libraries diffract cmdliner unix))
+
+; `dune build --profile static` links a fully static executable. Only
+; meaningful where a static libc exists — the release workflow uses it with a
+; musl OCaml switch for the Linux binary (.github/workflows/release.yml).
+(env
+ (static
+  (link_flags
+   (-ccopt -static))))

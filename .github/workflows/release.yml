@@ -1,0 +1,131 @@
+# Build self-contained `diffract` binaries and attach them to a GitHub Release.
+#
+#   git tag v0.1.0 && git push origin v0.1.0     -> builds + publishes a release
+#   "Run workflow" in the Actions tab            -> builds only (artifacts on
+#                                                   the run page, no release)
+#
+# Both binaries link the grammars and the tree-sitter runtime statically.
+#   linux-x86_64  fully static (musl), runs on any x86_64 Linux
+#   macos-arm64   depends only on macOS system libraries (macOS 11+)
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  # Runtime version the binaries embed (scripts/build-tree-sitter-static.sh).
+  TREE_SITTER_VERSION: "0.26.9"
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            os: ubuntu-latest
+            # musl + static: no glibc-version floor on the user's machine.
+            ocaml-compiler: ocaml-variants.5.4.1+options,ocaml-option-static
+            cc: musl-gcc
+            profile: static
+          - target: macos-arm64
+            os: macos-latest
+            ocaml-compiler: "5.4.1"
+            cc: cc
+            profile: release
+    env:
+      CC: ${{ matrix.cc }}
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install musl toolchain
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools pkg-config
+
+      - name: Install pkg-config
+        if: runner.os == 'macOS'
+        run: command -v pkg-config || brew install pkgconf
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: ${{ matrix.ocaml-compiler }}
+          opam-pin: false
+          dune-cache: false
+
+      # Only what the executable links. diffract.opam also lists test and
+      # formatting dependencies a release build has no use for.
+      - name: Install OCaml dependencies
+        run: opam install --yes dune cmdliner
+
+      - name: Build tree-sitter runtime (static)
+        run: |
+          scripts/build-tree-sitter-static.sh "$TREE_SITTER_VERSION" "$RUNNER_TEMP/tree-sitter"
+          echo "PKG_CONFIG_PATH=$RUNNER_TEMP/tree-sitter/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - name: Build grammars
+        run: grammars/build-grammars.sh
+
+      - name: Build diffract
+        run: opam exec -- dune build --profile ${{ matrix.profile }} bin/main.exe
+
+      - name: Check the binary is self-contained
+        run: |
+          bin=_build/default/bin/main.exe
+          file "$bin"
+          if [ "$RUNNER_OS" = Linux ]; then
+            file "$bin" | grep -q 'statically linked'
+          else
+            otool -L "$bin"
+            ! otool -L "$bin" | tail -n +2 | grep -v '/usr/lib/'
+          fi
+          "$bin" --version
+          printf 'const x = f(1);\n' > smoke.ts
+          "$bin" parse --language typescript smoke.ts
+
+      - name: Package
+        run: |
+          name=diffract-${{ matrix.target }}
+          mkdir "$name"
+          cp _build/default/bin/main.exe "$name/diffract"
+          chmod 755 "$name/diffract"
+          strip "$name/diffract"
+          cp README.md COPYING "$name/"
+          tar czf "$name.tar.gz" "$name"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: diffract-${{ matrix.target }}
+          path: diffract-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha256sum diffract-*.tar.gz > SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            diffract-*.tar.gz SHA256SUMS
