@@ -13,6 +13,26 @@ An OCaml library and CLI tool for parsing source files using [tree-sitter](https
   with per-file residuals for everything the rules don't explain
 - Support for TypeScript, TSX, Kotlin, PHP, Scala (extensible)
 
+## Installing a prebuilt binary
+
+Tagged versions are published on the
+[releases page](https://github.com/jespera/diffract/releases) as
+self-contained binaries — grammars and the tree-sitter runtime are linked in,
+so there is nothing else to install:
+
+- `diffract-linux-x86_64.tar.gz` — fully static, runs on any x86_64 Linux
+- `diffract-macos-arm64.tar.gz` — Apple Silicon, macOS 11+
+
+```bash
+curl -LO https://github.com/jespera/diffract/releases/latest/download/diffract-linux-x86_64.tar.gz
+tar xzf diffract-linux-x86_64.tar.gz
+./diffract-linux-x86_64/diffract --version
+```
+
+The macOS binary is not signed. Downloaded with `curl` as above it runs
+directly; downloaded through a browser it is quarantined, which
+`xattr -d com.apple.quarantine diffract` clears.
+
 ## Building
 
 ### Prerequisites
