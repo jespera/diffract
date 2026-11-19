@@ -3,6 +3,7 @@
 #   git tag v0.1.0 && git push origin v0.1.0     -> builds + publishes a release
 #   "Run workflow" in the Actions tab            -> builds only (artifacts on
 #                                                   the run page, no release)
+#   a pull request touching the release build    -> builds only, likewise
 #
 # Both binaries link the grammars and the tree-sitter runtime statically.
 #   linux-x86_64  fully static (musl), runs on any x86_64 Linux
@@ -14,6 +15,15 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+  # Rehearse the build when the release machinery itself changes.
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/build-tree-sitter-static.sh
+      - grammars/build-grammars.sh
+      - grammars/package.json
+      - bin/dune
+      - lib/dune
 
 env:
   # Runtime version the binaries embed (scripts/build-tree-sitter-static.sh).
