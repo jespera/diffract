@@ -415,17 +415,20 @@ and pools by identity:
 Two shapes are built. A **rewrite** — exactly one changed child on each
 side — keeps the changed child, scope-holed by the usual chain descent,
 between the ellipses. A **deletion** — a contiguous run of before-side
-children with no after-side counterpart — keeps the run concrete on
-`-` lines; the run is the element plus the adjacent separator exactly
-as the tree diff leaves them unmatched, so the separator is deleted
-explicitly and the pattern stays within the language rule that `...`
-only ever sits on context lines:
+children with no after-side counterpart — keeps the run on `-` lines,
+trimmed to its named extent. The tree diff leaves the element unmatched
+together with one adjacent separator, and which one depends on position:
+the separator after the element, or the one before it when the element was
+last. Keeping that separator on a `-` line would bake the position into the
+rule and split one deletion into two patterns, so it is dropped, and the
+matcher takes the adjacent separator from the `...` run beside the `-`
+line when the rule is applied (following, else preceding). The rule is
+then the same wherever in the list the element sat:
 
 ```
   {
   ...
 - DestroyRef
-- ,
   ...
   }
 ```
