@@ -92,9 +92,8 @@ Consequences:
   from the pattern.
 - Whole-construct rewrites (`- foo($x)` / `+ bar($x)`, or `- { … } / + { … }`)
   behave exactly as now — there, the whole match *is* the marked region.
-- `foreach` element removal is revealed as a special case of this model (delete
-  one element's span + clean its separator), so the model is a generalization
-  of something already in the engine, not a parallel mechanism.
+- Element removal is a special case of this model (delete one element's span +
+  clean its separator).
 
 ## 4. What changes for existing patterns
 
@@ -144,13 +143,11 @@ derived for transforming. This replaces `tokens` + `replace_template`.
 runs (with separator cleanup), insert `Added` at its anchor, leave `Context`
 untouched. Whole-construct rewrites are the special case where every token is
 `Removed`/`Added`, so the localized edit covers the whole span — i.e. today's
-behaviour, unchanged. `foreach` (`elem_tokens` + `elem_replace`, already doing
-surgical removal via `removal_span`) should become another consumer of the same
-segment/span edit-builder rather than a parallel path.
+behaviour, unchanged.
 
 The change is contained: the transform-carrying fields of the leaf
 constructors, the body classifier (`match_side`/`replace_side` →  a segment
-parser), and `edits_of_composite`/`foreach_edits`. The matching engine and
+parser), and `edits_of_composite`. The matching engine and
 `Within`/`All` evaluation do not move.
 
 ## 5. Implementation sketch
@@ -191,9 +188,6 @@ tokenize → stmatch → matcher); steps 3–4 reuse the element-removal machine
   removal already has). Decide how aggressively to absorb adjacent whitespace.
 - **`+`-only insertion position.** Where exactly a `+`-only line lands relative
   to context needs a precise rule (before/after the adjacent context token).
-- **Multi-section / `foreach` consistency.** `foreach` is already surgical
-  per-element; ensure the generalized model and `foreach` agree (ideally
-  `foreach` becomes one more caller of the same edit-building code).
 - **Intentional whole-drop.** A user who genuinely wants "replace this object,
   dropping its extras" must now mark the whole object (which is the honest way
   to express it). Confirm nothing relied on the implicit drop.

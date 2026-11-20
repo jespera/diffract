@@ -156,7 +156,7 @@ design.
 The pipeline:
 
 1. **Preamble parse** (`matcher.ml`): split the `@@` sections, read each
-   section's `match:` mode, `metavar` declarations, `on`/`foreach` scope, and
+   section's `match:` mode, `metavar` declarations, `on` scope, and
    `join` directives.
 2. **Tokenize** (`tokenize.ml`): parse the pattern body with the source
    language's grammar and walk its leaves into a `pattern_token` stream —
@@ -170,16 +170,17 @@ The pipeline:
    declaration's children) — with backtracking.
 4. **Drive + transform** (`matcher.ml`): walk the source via
    `Tree_sitter_cursor`, compose multi-section patterns (shared metavars,
-   `on`/`foreach` scoping), and apply the `-`/`+` replacement side
-   (substitution, `foreach`/`join` sequence rendering, element removal). The
+   `on` scoping), and apply the `-`/`+` replacement side
+   (substitution, `join` sequence splicing, element removal). The
    matched span is replaced wholesale (`text_diff.ml` renders the diff for
    `apply`).
 
 Context-sensitive node types (e.g. an object key being `property_identifier`
 vs a standalone `identifier`) are handled by **source-context tokenization**:
 the pattern fragment is re-tokenized spliced into its real surrounding source,
-then its own leaves are extracted by byte span — used for `foreach` concrete
-keys and field-mode concrete names.
+then its own leaves are extracted by byte span — used for field-mode
+concrete names. (Strict and partial modes compare leaves lexically and
+need no such step.)
 
 Example (public API):
 

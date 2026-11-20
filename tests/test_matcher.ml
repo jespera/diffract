@@ -843,11 +843,12 @@ let test_transform_overlap_rejected () =
     "nested transforms raise rather than corrupt" true raised
 
 (* ========================================================================= *)
-(* foreach: in-place per-element transforms (map)                            *)
+(* on over a sequence: rewrite matches inside each element                  *)
 (* ========================================================================= *)
 
-(* on over a sequence metavar is a parse error — must use foreach. *)
-let test_on_over_sequence_rejected () =
+(* `on` takes a sequence metavar as well as a single one: the section is
+   searched inside each element the sequence bound, and nowhere else. *)
+let test_on_over_sequence_scopes () =
   let pattern =
     "@@\n\
      match: strict\n\
@@ -857,42 +858,50 @@ let test_on_over_sequence_rejected () =
      @@\n\
      match: strict\n\
      on $xs\n\
+     metavar $a: single\n\
      @@\n\
-     bar()"
+     bar($a)"
   in
-  let raised =
-    try
-      ignore (find ~language:"typescript" ~pattern ~source:"foo(1);");
-      false
-    with Failure _ -> true
-  in
-  Alcotest.(check bool) "on over sequence rejected" true raised
+  let n source = List.length (find ~language:"typescript" ~pattern ~source) in
+  Alcotest.(check int)
+    "one per element that contains a match" 2
+    (n "foo(bar(1), 2, wrap(bar(3)));");
+  Alcotest.(check int)
+    "outside the sequence is out of scope" 0 (n "foo(1); bar(2);")
 
-(* foreach over a single metavar is a parse error — must use on. *)
-let test_foreach_over_single_rejected () =
+(* The removed directive fails with a pointer to its replacement, rather
+   than being read as a line of pattern preamble. *)
+let test_foreach_directive_rejected () =
   let pattern =
     "@@\n\
      match: strict\n\
-     metavar $x: single\n\
+     metavar $xs: sequence\n\
      @@\n\
-     foo($x)\n\
+     foo($xs)\n\
      @@\n\
      match: strict\n\
-     foreach $x\n\
+     foreach $xs\n\
      @@\n\
      bar()"
   in
-  let raised =
+  let msg =
     try
       ignore (find ~language:"typescript" ~pattern ~source:"foo(1);");
-      false
-    with Failure _ -> true
+      ""
+    with Failure m -> m
   in
-  Alcotest.(check bool) "foreach over single rejected" true raised
+  let has needle =
+    let n = String.length needle in
+    let rec go i =
+      i + n <= String.length msg && (String.sub msg i n = needle || go (i + 1))
+    in
+    go 0
+  in
+  Alcotest.(check bool) "names the replacement" true (has "on $xs")
 
-(* In-place map: rename every property of the object passed to foo(),
-   leaving the container and separators untouched. *)
-let test_foreach_inplace_rename () =
+(* A match nested inside an element is found too: `on` searches inside,
+   where the old per-element form only tested each element as a whole. *)
+let test_on_over_sequence_nested () =
   let pattern =
     "@@\n\
      match: strict\n\
@@ -901,7 +910,96 @@ let test_foreach_inplace_rename () =
      foo({ $PROPS })\n\
      @@\n\
      match: strict\n\
-     foreach $PROPS\n\
+     on $PROPS\n\
+     metavar $V: single\n\
+     @@\n\
+     - color: $V\n\
+     + colour: $V"
+  in
+  Alcotest.(check string)
+    "nested property renamed" {|foo({ size: 1, style: { colour: "red" } });|}
+    (transform ~language:"typescript" ~pattern
+       ~source:{|foo({ size: 1, style: { color: "red" } });|})
+
+(* An element that itself matches shadows what is nested in it: transforms
+   take the outermost match. *)
+let test_on_over_sequence_outermost () =
+  let pattern =
+    "@@\n\
+     match: strict\n\
+     metavar $PROPS: sequence\n\
+     @@\n\
+     foo({ $PROPS })\n\
+     @@\n\
+     match: strict\n\
+     on $PROPS\n\
+     metavar $KEY: single\n\
+     metavar $VAL: single\n\
+     @@\n\
+     - $KEY: $VAL\n\
+     + $KEY: wrap($VAL)"
+  in
+  Alcotest.(check string)
+    "outer pair wrapped once" "foo({a: wrap(1), b: wrap({c: 2})});"
+    (transform ~language:"typescript" ~pattern ~source:"foo({a: 1, b: {c: 2}});")
+
+(* The block-scoped rewrite: delete a local's declaration and reroute its
+   uses in the statements that follow it in the same block, and only there. *)
+let test_on_over_sequence_block_scope () =
+  let pattern =
+    "@@\n\
+     match: strict\n\
+     metavar PRE: sequence\n\
+     metavar POST: sequence\n\
+     metavar E: single\n\
+     @@\n\
+    \  {\n\
+    \  PRE\n\
+     - val admin = E\n\
+    \  POST\n\
+    \  }\n\
+     @@\n\
+     match: strict\n\
+     on POST\n\
+     metavar F: single\n\
+     @@\n\
+     - admin.F\n\
+     + ctx.admin.F"
+  in
+  Alcotest.(check string)
+    "uses after the declaration rerouted; other function untouched"
+    "fun t() {\n\
+    \    val a = 1\n\
+    \    use(ctx.admin.userId)\n\
+    \    run { other(ctx.admin.name) }\n\
+     }\n\
+     fun u() {\n\
+    \    use(admin.userId)\n\
+     }\n"
+    (transform ~language:"kotlin" ~pattern
+       ~source:
+         "fun t() {\n\
+         \    val a = 1\n\
+         \    val admin = lookup()\n\
+         \    use(admin.userId)\n\
+         \    run { other(admin.name) }\n\
+          }\n\
+          fun u() {\n\
+         \    use(admin.userId)\n\
+          }\n")
+
+(* In-place map: rename every property of the object passed to foo(),
+   leaving the container and separators untouched. *)
+let test_on_seq_inplace_rename () =
+  let pattern =
+    "@@\n\
+     match: strict\n\
+     metavar $PROPS: sequence\n\
+     @@\n\
+     foo({ $PROPS })\n\
+     @@\n\
+     match: strict\n\
+     on $PROPS\n\
      metavar $KEY: single\n\
      metavar $VAL: single\n\
      @@\n\
@@ -917,7 +1015,7 @@ let test_foreach_inplace_rename () =
 
 (* The scope matters: properties of an object NOT passed to foo() are
    untouched. *)
-let test_foreach_scoped_to_container () =
+let test_on_seq_scoped_to_container () =
   let pattern =
     "@@\n\
      match: strict\n\
@@ -926,7 +1024,7 @@ let test_foreach_scoped_to_container () =
      foo({ $PROPS })\n\
      @@\n\
      match: strict\n\
-     foreach $PROPS\n\
+     on $PROPS\n\
      metavar $KEY: single\n\
      metavar $VAL: single\n\
      @@\n\
@@ -941,8 +1039,8 @@ let test_foreach_scoped_to_container () =
     "only foo's object rewritten" "foo({a: wrap(1)}); bar({c: 3});" out
 
 (* JSX: per-element edit over a self-closing element's attributes, to
-   confirm foreach isn't object-specific. *)
-let test_foreach_jsx_attributes () =
+   confirm `on` over a sequence isn't object-specific. *)
+let test_on_seq_jsx_attributes () =
   let pattern =
     "@@\n\
      match: strict\n\
@@ -951,7 +1049,7 @@ let test_foreach_jsx_attributes () =
      <Foo $ATTRS />\n\
      @@\n\
      match: strict\n\
-     foreach $ATTRS\n\
+     on $ATTRS\n\
      metavar $N: single\n\
      metavar $V: single\n\
      @@\n\
@@ -966,18 +1064,16 @@ let test_foreach_jsx_attributes () =
     out
 
 (* ========================================================================= *)
-(* foreach with a CONCRETE key (contextual tokenization)                     *)
+(* on over a sequence with a CONCRETE key                                    *)
 (*                                                                           *)
 (* A concrete object key like `color` tokenized standalone parses as a       *)
 (* labeled-statement label (statement_identifier), not the source pair's     *)
-(* property_identifier, so it would miss. compile_foreach re-tokenizes the   *)
-(* element pattern inside its container scaffold (drawn from the outer       *)
-(* section) so the key gets the right node-type. Sibling elements are        *)
-(* preserved (in-place per-element edit).                                    *)
+(* property_identifier. Lexical leaf comparison tolerates that, so the bare  *)
+(* element pattern matches. Sibling elements are preserved.                  *)
 (* ========================================================================= *)
 
 (* TS: rename only the `color` property, preserving `size`. *)
-let test_foreach_concrete_key_object () =
+let test_on_seq_concrete_key_object () =
   let pattern =
     "@@\n\
      match: strict\n\
@@ -986,7 +1082,7 @@ let test_foreach_concrete_key_object () =
      foo({ $PROPS })\n\
      @@\n\
      match: strict\n\
-     foreach $PROPS\n\
+     on $PROPS\n\
      metavar $V: single\n\
      @@\n\
      - color: $V\n\
@@ -1001,7 +1097,7 @@ let test_foreach_concrete_key_object () =
     out
 
 (* TSX: rename only the `a` attribute, preserving `b`. *)
-let test_foreach_concrete_key_jsx () =
+let test_on_seq_concrete_key_jsx () =
   let pattern =
     "@@\n\
      match: strict\n\
@@ -1010,7 +1106,7 @@ let test_foreach_concrete_key_jsx () =
      <Foo $ATTRS />\n\
      @@\n\
      match: strict\n\
-     foreach $ATTRS\n\
+     on $ATTRS\n\
      metavar $X: single\n\
      @@\n\
      - a={$X}\n\
@@ -1024,7 +1120,7 @@ let test_foreach_concrete_key_jsx () =
     out
 
 (* A property the source doesn't have: nothing matches, source unchanged. *)
-let test_foreach_concrete_key_absent () =
+let test_on_seq_concrete_key_absent () =
   let pattern =
     "@@\n\
      match: strict\n\
@@ -1033,7 +1129,7 @@ let test_foreach_concrete_key_absent () =
      foo({ $PROPS })\n\
      @@\n\
      match: strict\n\
-     foreach $PROPS\n\
+     on $PROPS\n\
      metavar $V: single\n\
      @@\n\
      - missing: $V\n\
@@ -1047,7 +1143,7 @@ let test_foreach_concrete_key_absent () =
 (* Cross-language transparency guard: kotlin keys aren't context-sensitive
    (one identifier node-type), so the contextual path must leave them
    working — select one named argument by name and rename it. *)
-let test_foreach_concrete_key_kotlin () =
+let test_on_seq_concrete_key_kotlin () =
   let pattern =
     "@@\n\
      match: strict\n\
@@ -1056,7 +1152,7 @@ let test_foreach_concrete_key_kotlin () =
      f(ARGS)\n\
      @@\n\
      match: strict\n\
-     foreach ARGS\n\
+     on ARGS\n\
      metavar V: single\n\
      @@\n\
      - name = V\n\
@@ -1071,7 +1167,7 @@ let test_foreach_concrete_key_kotlin () =
 (* Fallback guard: an ellipsis in the element pattern disables contextual
    tokenization (offsets would shift); it must degrade gracefully to
    standalone tokenization rather than crash. A wildcard key still works. *)
-let test_foreach_ellipsis_falls_back () =
+let test_on_seq_ellipsis_falls_back () =
   let pattern =
     "@@\n\
      match: strict\n\
@@ -1080,7 +1176,7 @@ let test_foreach_ellipsis_falls_back () =
      foo({ $PROPS })\n\
      @@\n\
      match: strict\n\
-     foreach $PROPS\n\
+     on $PROPS\n\
      metavar $K: single\n\
      @@\n\
      - $K: bar(...)\n\
@@ -1095,95 +1191,12 @@ let test_foreach_ellipsis_falls_back () =
     out
 
 (* ========================================================================= *)
-(* foreach element removal with separator cleanup                            *)
-(*                                                                           *)
-(* A foreach element with an empty replacement (a `-` line, no `+`) is a     *)
-(* removal. The edit swallows an adjacent separator so the list stays        *)
-(* well-formed: the separator *following* the element, or the *preceding*    *)
-(* one if there's none after (last element, no trailing comma). A trailing   *)
-(* comma counts as a following separator. Residual cosmetic whitespace is    *)
-(* left to a formatter.                                                      *)
-(* ========================================================================= *)
-
-let rm_prop key =
-  Printf.sprintf
-    "@@\n\
-     match: strict\n\
-     metavar $PROPS: sequence\n\
-     @@\n\
-     foo({ $PROPS })\n\
-     @@\n\
-     match: strict\n\
-     foreach $PROPS\n\
-     metavar $V: single\n\
-     @@\n\
-     - %s: $V"
-    key
-
-let test_remove_middle_element () =
-  Alcotest.(check string)
-    "middle removed, neighbours intact" "foo({ a: 1, c: 3 });"
-    (transform ~language:"typescript" ~pattern:(rm_prop "b")
-       ~source:"foo({ a: 1, b: 2, c: 3 });")
-
-let test_remove_first_element () =
-  Alcotest.(check string)
-    "first removed (trailing sep consumed)" "foo({ b: 2, c: 3 });"
-    (transform ~language:"typescript" ~pattern:(rm_prop "a")
-       ~source:"foo({ a: 1, b: 2, c: 3 });")
-
-let test_remove_last_element () =
-  Alcotest.(check string)
-    "last removed (leading sep consumed)" "foo({ a: 1, b: 2 });"
-    (transform ~language:"typescript" ~pattern:(rm_prop "c")
-       ~source:"foo({ a: 1, b: 2, c: 3 });")
-
-let test_remove_only_element () =
-  (* No separator to consume; the element goes, leaving an (empty, valid)
-     container. The double space is cosmetic — formatter territory. *)
-  Alcotest.(check string)
-    "only element removed -> empty container" "foo({  });"
-    (transform ~language:"typescript" ~pattern:(rm_prop "a")
-       ~source:"foo({ a: 1 });")
-
-let rm_arg name =
-  Printf.sprintf
-    "@@\n\
-     match: strict\n\
-     metavar ARGS: sequence\n\
-     @@\n\
-     f(ARGS)\n\
-     @@\n\
-     match: strict\n\
-     foreach ARGS\n\
-     metavar V: single\n\
-     @@\n\
-     - %s = V"
-    name
-
-(* Trailing-comma list, remove the only element: the trailing comma is a
-   following separator, so it's consumed too — no dangling `f(,)`. *)
-let test_remove_kotlin_trailing_only () =
-  Alcotest.(check string)
-    "trailing comma consumed with only element" "f()"
-    (transform ~language:"kotlin" ~pattern:(rm_arg "a") ~source:"f(a = 1,)")
-
-(* Trailing-comma list, remove the last element: the trailing comma is
-   consumed, the between-comma survives as the new trailing comma — the
-   Kotlin idiom is preserved (the space before `)` is cosmetic). *)
-let test_remove_kotlin_trailing_last () =
-  Alcotest.(check string)
-    "trailing-comma idiom preserved" "f(a = 1, )"
-    (transform ~language:"kotlin" ~pattern:(rm_arg "b")
-       ~source:"f(a = 1, b = 2,)")
-
-(* ========================================================================= *)
 (* Strict deletion beside a sequence binder: separator cleanup               *)
 (*                                                                           *)
 (* A `-` line between context `...` lines is a removed list element. The     *)
 (* `...` beside it captured the neighbouring siblings, separators included,  *)
 (* so the adjacent separator leaf is absorbed (following, else preceding)    *)
-(* without the author writing it. Same outcomes as the foreach removals.     *)
+(* without the author writing it.                                            *)
 (* ========================================================================= *)
 
 let strict_rm_prop key =
@@ -1279,98 +1292,11 @@ let test_strict_remove_statement_line () =
     ]
 
 (* ========================================================================= *)
-(* Splice: foreach rendered + spliced into a restructured template           *)
-(* ========================================================================= *)
-
-(* The headline case: matchExhaustive(...) collapses to a method chain. The
-   foreach renders each property to a .with(...) fragment; because the outer
-   + references $PROPS, the fragments are concatenated and spliced there,
-   replacing the whole call. *)
-let test_splice_method_chain () =
-  let pattern =
-    "@@\n\
-     match: strict\n\
-     metavar $TAG: single\n\
-     metavar $PROPS: sequence\n\
-     @@\n\
-     - matchExhaustive($TAG, {\n\
-     -   $PROPS\n\
-     - });\n\
-     + match($TAG)$PROPS.exhaustive();\n\
-     @@\n\
-     match: strict\n\
-     foreach $PROPS\n\
-     metavar $KEY: single\n\
-     metavar $VAL: single\n\
-     @@\n\
-     - $KEY: $VAL\n\
-     + .with(\"$KEY\", $VAL)"
-  in
-  let out =
-    transform ~language:"typescript" ~pattern
-      ~source:"matchExhaustive(tag, {one: \"1\", two: \"2\"});"
-  in
-  Alcotest.(check string)
-    "object collapsed to method chain"
-    "match(tag).with(\"one\", \"1\").with(\"two\", \"2\").exhaustive();" out
-
-(* A single-property object splices to a one-link chain. *)
-let test_splice_single_element () =
-  let pattern =
-    "@@\n\
-     match: strict\n\
-     metavar $TAG: single\n\
-     metavar $PROPS: sequence\n\
-     @@\n\
-     - matchExhaustive($TAG, { $PROPS });\n\
-     + match($TAG)$PROPS.exhaustive();\n\
-     @@\n\
-     match: strict\n\
-     foreach $PROPS\n\
-     metavar $KEY: single\n\
-     metavar $VAL: single\n\
-     @@\n\
-     - $KEY: $VAL\n\
-     + .with(\"$KEY\", $VAL)"
-  in
-  let out =
-    transform ~language:"typescript" ~pattern
-      ~source:"matchExhaustive(tag, { only: 9 });"
-  in
-  Alcotest.(check string)
-    "single link chain" "match(tag).with(\"only\", 9).exhaustive();" out
-
-(* When the sequence is spliced, the foreach does NOT also edit in place —
-   the whole construct is replaced once (no overlapping edits). *)
-let test_splice_no_inplace_double_apply () =
-  let pattern =
-    "@@\n\
-     match: strict\n\
-     metavar $PROPS: sequence\n\
-     @@\n\
-     - wrap({ $PROPS });\n\
-     + chain()$PROPS;\n\
-     @@\n\
-     match: strict\n\
-     foreach $PROPS\n\
-     metavar $KEY: single\n\
-     metavar $VAL: single\n\
-     @@\n\
-     - $KEY: $VAL\n\
-     + .set($VAL)"
-  in
-  let out =
-    transform ~language:"typescript" ~pattern ~source:"wrap({a: 1, b: 2});"
-  in
-  Alcotest.(check string)
-    "spliced once, not also in place" "chain().set(1).set(2);" out
-
-(* ========================================================================= *)
 (* join directive + identity splice                                          *)
 (* ========================================================================= *)
 
 (* Identity splice with a join separator: an array becomes a conjunction.
-   No foreach — the elements render as their source text, joined by " && ".
+   The elements render as their source text, joined by " && ".
    The commas in the array binding are dropped via is_named. *)
 let test_join_identity_conjunction () =
   let pattern =
@@ -1387,62 +1313,12 @@ let test_join_identity_conjunction () =
   in
   Alcotest.(check string) "array to conjunction" "const r = a && b && c;" out
 
-(* Precedence escape hatch: a foreach wraps each element in parens before
-   the && join, so an operand like (x || y) is isolated. *)
-let test_join_precedence_parens () =
-  let pattern =
-    "@@\n\
-     match: strict\n\
-     metavar $ELEMS: sequence\n\
-     join $ELEMS by \" && \"\n\
-     @@\n\
-     - [$ELEMS]\n\
-     + $ELEMS\n\
-     @@\n\
-     match: strict\n\
-     foreach $ELEMS\n\
-     metavar $E: single\n\
-     @@\n\
-     - $E\n\
-     + ($E)"
-  in
-  let out =
-    transform ~language:"typescript" ~pattern ~source:"const r = [x || y, z];"
-  in
-  Alcotest.(check string)
-    "operands parenthesized" "const r = (x || y) && (z);" out
-
-(* foreach-splice with a non-empty (comma) join: object properties become a
-   new argument list. Each property renders to its value; join is ", ". *)
-let test_join_foreach_comma () =
-  let pattern =
-    "@@\n\
-     match: strict\n\
-     metavar $PROPS: sequence\n\
-     join $PROPS by \", \"\n\
-     @@\n\
-     - call({ $PROPS })\n\
-     + call2($PROPS)\n\
-     @@\n\
-     match: strict\n\
-     foreach $PROPS\n\
-     metavar $K: single\n\
-     metavar $V: single\n\
-     @@\n\
-     - $K: $V\n\
-     + $V"
-  in
-  let out =
-    transform ~language:"typescript" ~pattern ~source:"call({a: 1, b: 2});"
-  in
-  Alcotest.(check string) "object values to arg list" "call2(1, 2);" out
-
 (* ========================================================================= *)
 (* Expansion ports: the old column-0 expansion lines re-authored in the new  *)
-(* foreach/join surface, validating it covers the same capability. The old   *)
+(* join surface, validating it covers the same capability. The old           *)
 (* `~ $V` (newline) becomes `join $V by "\n"`; `, $V` becomes                 *)
-(* `join $V by ", "`; a following `on $V` transform section becomes a        *)
-(* `foreach $V` section. (Old syntax in test_match.ml's Expansion group.)    *)
+(* `join $V by ", "`. The old per-element transform expansion (a following  *)
+(* `on $V` section rendered into the template) has no successor.            *)
 (* ========================================================================= *)
 
 (* Old: `~ $STMTS` newline expansion of a function body into an array. *)
@@ -1523,31 +1399,6 @@ let test_port_kotlin_verbatim () =
   in
   Alcotest.(check string)
     "kotlin newline expansion" "buildList {\nalpha\nbeta\ngamma\n}" out
-
-(* Old kotlin: transform expansion — execute(steps) to a Pipeline builder,
-   each step wrapped via a foreach. *)
-let test_port_kotlin_transform () =
-  let pattern =
-    "@@\n\
-     match: strict\n\
-     metavar STEPS: sequence\n\
-     @@\n\
-     - execute(STEPS)\n\
-     + Pipeline()STEPS.run()\n\
-     @@\n\
-     match: strict\n\
-     foreach STEPS\n\
-     metavar STEP: single\n\
-     @@\n\
-     - STEP\n\
-     + .addStep(STEP)"
-  in
-  let out =
-    transform ~language:"kotlin" ~pattern ~source:"execute(step1, step2, step3)"
-  in
-  Alcotest.(check string)
-    "kotlin pipeline builder"
-    "Pipeline().addStep(step1).addStep(step2).addStep(step3).run()" out
 
 (* Old kotlin: `, ITEMS` comma join. *)
 let test_port_kotlin_comma () =
@@ -2230,8 +2081,7 @@ let test_multi_section_on_var_undeclared () =
       ignore (find ~language:"typescript" ~pattern ~source:"foo(1); bar(1);"))
 
 (* A partial/field section that replaces the whole matched span warns (it
-   silently drops tolerated/ignored content); foreach edits and strict
-   transforms do not. *)
+   silently drops tolerated/ignored content); strict transforms do not. *)
 let test_pattern_warnings () =
   let warns p = Matcher.pattern_warnings p in
   let nonempty p = warns p <> [] in
@@ -2269,22 +2119,6 @@ let test_pattern_warnings () =
   Alcotest.(check bool)
     "partial match-only guard does not warn" false
     (nonempty "@@\nmatch: partial\nmetavar $V: single\n@@\n{ color: $V }");
-  Alcotest.(check bool)
-    "foreach element edit does not warn" false
-    (nonempty
-       "@@\n\
-        match: strict\n\
-        metavar $PROPS: sequence\n\
-        @@\n\
-        f({ $PROPS })\n\
-        @@\n\
-        match: field\n\
-        foreach $PROPS\n\
-        metavar $K: single\n\
-        metavar $V: single\n\
-        @@\n\
-        - $K: $V\n\
-        + .with($V)");
   (* Surgical sub-part marking (context delimiters preserved) does NOT warn —
      only whole-container marking drops the tolerated extras. *)
   Alcotest.(check bool)
@@ -2643,7 +2477,7 @@ let test_lexical_heredoc_interior_excluded () =
 
 let test_text_only_scoped_to_single_strict () =
   (* The hint is scoped to a single global strict section; a partial pattern
-     (or multi-section / on / foreach) yields no hint locations. *)
+     (or multi-section / on) yields no hint locations. *)
   let src = "const o = {a: 1};" in
   let tree = Tree.parse ~ctx ~language:"typescript" src in
   Alcotest.(check int)
@@ -2655,8 +2489,8 @@ let test_text_only_scoped_to_single_strict () =
 
 (* required_literals — the search prefilter's needle extraction. Every
    word-like Concrete token of the match IR is verbatim-required in a
-   matching source; metavars, ellipsis, [+]-line content and foreach
-   sections must contribute nothing. *)
+   matching source; metavars, ellipsis and [+]-line content must contribute
+   nothing. *)
 let literals ~language pattern =
   Matcher.required_literals ~ctx ~language ~pattern_text:pattern
 
@@ -2691,26 +2525,6 @@ let test_required_literals_multi_section_union () =
         on $body\n\
         @@\n\
         inner()")
-
-let test_required_literals_foreach_excluded () =
-  Alcotest.(check (list string))
-    "foreach section literals not required (per-element, may never fire)"
-    [ "matchExhaustive" ]
-    (literals ~language:"typescript"
-       "@@\n\
-        match: strict\n\
-        metavar $TAG: single\n\
-        metavar $PROPS: sequence\n\
-        @@\n\
-        - matchExhaustive($TAG, { $PROPS });\n\
-        + match($TAG)$PROPS.exhaustive();\n\
-        @@\n\
-        match: strict\n\
-        foreach $PROPS\n\
-        metavar $VAL: single\n\
-        @@\n\
-        - deprecated: $VAL\n\
-        + current: $VAL")
 
 let test_required_literals_none () =
   Alcotest.(check (list string))
@@ -2834,37 +2648,30 @@ let tests =
       test_transform_shared_metavar;
     test_case "transform: nested edits rejected" `Quick
       test_transform_overlap_rejected;
-    test_case "foreach: on over sequence rejected" `Quick
-      test_on_over_sequence_rejected;
-    test_case "foreach: foreach over single rejected" `Quick
-      test_foreach_over_single_rejected;
-    test_case "foreach: in-place rename" `Quick test_foreach_inplace_rename;
-    test_case "foreach: scoped to its container" `Quick
-      test_foreach_scoped_to_container;
-    test_case "foreach: JSX attributes" `Quick test_foreach_jsx_attributes;
-    test_case "foreach: concrete key (object, preserves siblings)" `Quick
-      test_foreach_concrete_key_object;
-    test_case "foreach: concrete key (JSX attribute)" `Quick
-      test_foreach_concrete_key_jsx;
-    test_case "foreach: concrete key absent -> unchanged" `Quick
-      test_foreach_concrete_key_absent;
-    test_case "foreach: concrete key (kotlin transparency)" `Quick
-      test_foreach_concrete_key_kotlin;
-    test_case "foreach: ellipsis element falls back" `Quick
-      test_foreach_ellipsis_falls_back;
-    test_case "remove: middle element" `Quick test_remove_middle_element;
-    test_case "remove: first element" `Quick test_remove_first_element;
-    test_case "remove: last element" `Quick test_remove_last_element;
-    test_case "remove: only element" `Quick test_remove_only_element;
-    test_case "remove: kotlin trailing-comma only" `Quick
-      test_remove_kotlin_trailing_only;
-    test_case "remove: kotlin trailing-comma last" `Quick
-      test_remove_kotlin_trailing_last;
-    test_case "splice: method chain (matchExhaustive)" `Quick
-      test_splice_method_chain;
-    test_case "splice: single element" `Quick test_splice_single_element;
-    test_case "splice: no in-place double-apply" `Quick
-      test_splice_no_inplace_double_apply;
+    test_case "on sequence: scopes to the elements" `Quick
+      test_on_over_sequence_scopes;
+    test_case "on sequence: nested match found" `Quick
+      test_on_over_sequence_nested;
+    test_case "on sequence: outermost match wins" `Quick
+      test_on_over_sequence_outermost;
+    test_case "on sequence: block-scoped rewrite" `Quick
+      test_on_over_sequence_block_scope;
+    test_case "foreach directive rejected" `Quick
+      test_foreach_directive_rejected;
+    test_case "on sequence: in-place rename" `Quick test_on_seq_inplace_rename;
+    test_case "on sequence: scoped to its container" `Quick
+      test_on_seq_scoped_to_container;
+    test_case "on sequence: JSX attributes" `Quick test_on_seq_jsx_attributes;
+    test_case "on sequence: concrete key (object, preserves siblings)" `Quick
+      test_on_seq_concrete_key_object;
+    test_case "on sequence: concrete key (JSX attribute)" `Quick
+      test_on_seq_concrete_key_jsx;
+    test_case "on sequence: concrete key absent -> unchanged" `Quick
+      test_on_seq_concrete_key_absent;
+    test_case "on sequence: concrete key (kotlin transparency)" `Quick
+      test_on_seq_concrete_key_kotlin;
+    test_case "on sequence: ellipsis element falls back" `Quick
+      test_on_seq_ellipsis_falls_back;
     test_case "strict remove: object property" `Quick
       test_strict_remove_property;
     test_case "strict remove: call argument" `Quick test_strict_remove_argument;
@@ -2880,15 +2687,11 @@ let tests =
       test_strict_remove_statement_line;
     test_case "join: identity conjunction [a,b,c] => a && b && c" `Quick
       test_join_identity_conjunction;
-    test_case "join: precedence parens" `Quick test_join_precedence_parens;
-    test_case "join: foreach comma into arg list" `Quick test_join_foreach_comma;
     test_case "port: verbatim newline expansion" `Quick
       test_port_verbatim_newline;
     test_case "port: verbatim comma expansion" `Quick test_port_verbatim_comma;
     test_case "port: empty sequence expansion" `Quick test_port_empty_sequence;
     test_case "port: kotlin verbatim expansion" `Quick test_port_kotlin_verbatim;
-    test_case "port: kotlin transform expansion" `Quick
-      test_port_kotlin_transform;
     test_case "port: kotlin comma join" `Quick test_port_kotlin_comma;
     test_case "fragment pattern (pure)" `Quick test_fragment_pattern_pure;
     test_case "fragment pattern in rule file" `Quick
@@ -2994,8 +2797,6 @@ let tests =
       test_required_literals_plus_line_excluded;
     test_case "required_literals: multi-section union (incl. on $VAR)" `Quick
       test_required_literals_multi_section_union;
-    test_case "required_literals: foreach section excluded" `Quick
-      test_required_literals_foreach_excluded;
     test_case "required_literals: all-metavar pattern -> none" `Quick
       test_required_literals_none;
     test_case "source_may_match: needle presence decides" `Quick

@@ -24,7 +24,7 @@ Test groups (see `tests/test_runner.ml`):
 - **STMatch** — the matching engine (strict / partial / field leaf-level
   matching, backtracking) over hand-built fixtures and real cursors.
 - **Matcher** — end-to-end: preamble parse → tokenize → match/transform across
-  the supported languages (strict, partial, field, multi-section, `foreach`,
+  the supported languages (strict, partial, field, multi-section, `on` scoping,
   splice/join, removal, validation, warnings).
 
 ## Benchmarks

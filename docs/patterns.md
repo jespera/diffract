@@ -232,9 +232,8 @@ Notes:
 
 ## Nested Patterns with `on $VAR`
 
-Use `on $VAR` in a section to match directly against a previously-bound node
-instead of traversing the whole source tree. This restricts where the later
-section can match:
+Use `on $VAR` in a section to search only inside what an earlier section
+bound to `$VAR`, instead of the whole source tree:
 
 ```
 @@
@@ -253,13 +252,13 @@ console.log($msg)
 ```
 
 This finds `console.log` calls only inside class bodies, not at the top level:
-section 1 binds `$body` to the class body node; section 2 uses `on $body` to
-search within that node only.
+section 1 binds `$body` to the class body node; section 2 is searched within
+that node — the node itself or anything nested in it — and nowhere else.
 
-`on $VAR` requires `$VAR` to be a **single** metavar (it scopes the section to
-that one bound subtree). To iterate a **sequence** metavar element-by-element,
-use `foreach $VAR` instead — the section's pattern is matched against, and its
-`-`/`+` transform applied to, each element in turn.
+`$VAR` may be a **single** metavar (one subtree) or a **sequence** metavar, in
+which case the section is searched inside each element the sequence bound. A
+match must lie inside one element; it cannot span two. See
+[Sequences](#sequences-join-and-on) for the transform uses.
 
 ```
 @@
@@ -278,7 +277,7 @@ metavar $X: single
 
 This matches `foo({ someField: 1, other: 2 })`:
 - Section 1 matches `foo($OBJ)`, binding `$OBJ` to `{ someField: 1, other: 2 }`
-- Section 2 uses `on $OBJ` to match directly against that object (not searching within it)
+- Section 2 uses `on $OBJ` to search inside that argument (the object itself, or one nested in it)
 - With `match: partial`, it extracts `$X = 1` while ignoring `other: 2`
 
 **Example output:**
@@ -602,7 +601,7 @@ The remaining footgun is marking the **whole container** in partial/field
 mode (a body with no context line): that replaces it whole and drops the
 tolerated extras / ignored fields, so the matcher warns (`pattern_warnings`).
 To edit a sub-part, mark only that part (context lines, and partial's
-unlisted elements, are preserved), or use `foreach`/`on`.
+unlisted elements, are preserved), or use `on`.
 
 **Write the `+` as bare content.** A `+` line is spliced in place over what the
 `-` matched, so it should carry only the new content — not the structural
@@ -611,21 +610,17 @@ indentation or the element separator the container already supplies. Against
 surrounding indentation and commas are kept by the splice, and restating them
 would double them.
 
-### Sequence rendering: `join` and `foreach`
+### Sequences: `join` and `on`
 
-When a `sequence` metavar is referenced in a `+` template, its elements are
-rendered and substituted in place. Two independent knobs:
+A sequence metavar can be used in a transform in two ways. Either way it must
+be declared `metavar $VAR: sequence` and appear on the match side.
 
-- **`join $VAR by "<sep>"`** (a preamble directive) — the string placed between
-  rendered elements (interpreting `\n`, `\t`, `\\`); default is empty.
-- **`foreach $VAR`** (a following `@@` section) — a per-element transform: the
-  section matches one element and its `-`/`+` lines rewrite it, and the results
-  are joined. Without a `foreach`, elements render as their source text.
+#### `join`: substitute the elements into a `+` template
 
-The sequence metavar must be declared `metavar $VAR: sequence` and appear on the
-match side.
-
-#### Example: identity render with a separator
+When a `sequence` metavar is referenced in a `+` template, its elements'
+source text is substituted there, separated by the string given in a
+`join $VAR by "<sep>"` preamble directive (interpreting `\n`, `\t`, `\\`;
+default is empty). The elements themselves are not changed.
 
 ```
 @@
@@ -639,44 +634,81 @@ join $ELEMS by " && "
 
 `all([x, y, z])` becomes `(x && y && z)`.
 
-#### Example: converting a match expression to a method chain
+#### `on`: rewrite inside the elements
 
-The outer section captures the call and names the sequence of case pairs; a
-`foreach` section describes how to rewrite each pair. The outer template
-references `$CASES`, which is replaced by the joined per-element results (here
-the default empty join).
+An `on $VAR` section, following the section that binds `$VAR`, is searched
+inside each element of the sequence. Each match is rewritten by the section's
+`-`/`+` lines; everything else — other elements, separators, the container —
+is left alone.
 
 ```
 @@
 match: strict
-metavar $TAG: single
-metavar $CASES: sequence
+metavar $PROPS: sequence
 @@
-- matchExhaustive($TAG, { $CASES });
-+ match($TAG)$CASES.exhaustive();
+foo({ $PROPS })
 @@
 match: strict
-foreach $CASES
-metavar $KEY: single
-metavar $VAL: single
+on $PROPS
+metavar $V: single
 @@
-- $KEY: $VAL
-+ .with("$KEY", $VAL)
+- color: $V
++ colour: $V
 ```
 
-Given `matchExhaustive(tag, { A: () => 1, B: () => 2 });` the result is
-`match(tag).with("A", () => 1).with("B", () => 2).exhaustive();`.
+`foo({ color: "red", size: 10 })` becomes `foo({ colour: "red", size: 10 })`.
+The first section only names the elements (it has no `-`/`+` lines); the
+`on $PROPS` section is searched inside them and nowhere else, so a `color`
+property of some other object is not touched. Every match inside the elements
+is rewritten, and everything else is left exactly as written.
 
-A `foreach` element with an empty replacement (a `-` line, no `+`) deletes the
-element and cleans up the adjacent separator — useful for removing a deprecated
-property or unused argument from a list.
+Things to know:
 
-#### Constraints
+- **Inside, not just at the top.** A match nested within an element is found
+  too: with the rule above, `foo({ style: { color: "red" } })` has its nested
+  `color` renamed. An element that itself matches shadows what is nested in
+  it, because a transform takes the outermost match: wrapping every property
+  value of `foo({ a: 1, b: { c: 2 } })` gives
+  `foo({ a: wrap(1), b: wrap({ c: 2 }) })`.
+- **The rule needs a match.** Sections are a conjunction: if the `on` section
+  matches nowhere inside the elements, the whole rule does not fire, including
+  any edits in the first section.
+- **A sequence is either joined or searched, not both.** If `$VAR` is
+  referenced on a `+` line the construct is replaced whole, and an `on $VAR`
+  edit inside it would be a nested rewrite, which is rejected. There is no way
+  to render *rewritten* elements into a new construct.
+- **Deleting an element** is done in the section that matches the list, with
+  a `-` line between context `...` lines (see above); the separator goes with
+  it. A `-`-only `on` section deletes its matches but has no `...` beside
+  them, so it does not clean up separators.
 
-- `join`/`foreach` target `sequence` metavars that also appear on the match
-  side.
-- A `foreach` section is a normal section (its own `match:` mode and metavars);
-  it cannot itself contain a nested `foreach`.
+A sequence need not be list elements. Binding the statements that follow a
+declaration scopes a rewrite to the rest of that block:
+
+```
+@@
+match: strict
+metavar PRE: sequence
+metavar POST: sequence
+metavar E: single
+@@
+  {
+  PRE
+- val admin = E
+  POST
+  }
+@@
+match: strict
+on POST
+metavar F: single
+@@
+- admin.F
++ ctx.admin.F
+```
+
+The declaration is removed and `admin.…` becomes `ctx.admin.…` in the
+statements after it in the same block, including inside nested lambdas, and
+nowhere else in the file.
 
 ### Rules
 
@@ -745,23 +777,20 @@ if transformed <> code then
     (Diffract.Text_diff.generate_diff ~file_path:"source.ts" ~original:code
        ~transformed)
 
-(* Multi-section, foreach, and conjunctive patches all go through the same
+(* Multi-section, `on`-scoped, and conjunctive patches all go through the same
    `transform` — there is no separate entry point. *)
 let patch = {|@@
 match: strict
-metavar $TAG: single
-metavar $CASES: sequence
+metavar $PROPS: sequence
 @@
-- matchExhaustive($TAG, { $CASES });
-+ match($TAG)$CASES.exhaustive();
+foo({ $PROPS })
 @@
 match: strict
-foreach $CASES
-metavar $KEY: single
-metavar $VAL: single
+on $PROPS
+metavar $V: single
 @@
-- $KEY: $VAL
-+ .with("$KEY", $VAL)|} in
+- color: $V
++ colour: $V|} in
 print_string
   (Diffract.Matcher.transform ~ctx ~language:"typescript" ~pattern_text:patch
      ~source_text:code)

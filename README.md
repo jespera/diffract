@@ -161,43 +161,47 @@ Lines prefixed with `- ` are matched and removed; lines with `+ ` are inserted.
 Unprefixed (or space-prefixed) lines are context that appears in both match and replace.
 Metavariables carry values from the match side to the replace side.
 
-### Sequence rendering: `join` and `foreach`
+### Sequences: `join` and `on`
 
-A `sequence` metavar referenced in a `+` template is rendered and substituted
-in place. Two knobs: a `join $VAR by "<sep>"` preamble directive sets the
-separator between elements (default: empty), and a following `foreach $VAR`
-section applies a per-element transform.
-
-For per-element transforms (e.g. converting a match expression to a method
-chain), use a two-section pattern with `foreach`:
+A `sequence` metavar referenced in a `+` template is substituted as its
+elements' source text, joined by the `join $VAR by "<sep>"` preamble directive
+(default: empty):
 
 ```
 @@
 match: strict
-metavar $TAG: single
-metavar $CASES: sequence
+metavar $ELEMS: sequence
+join $ELEMS by " && "
 @@
-- matchExhaustive($TAG, { $CASES });
-+ match($TAG)$CASES.exhaustive();
+- all([$ELEMS])
++ ($ELEMS)
+```
+
+`all([x, y, z])` becomes `(x && y && z)`.
+
+To rewrite inside the elements of a sequence, follow the section that binds it
+with an `on $VAR` section:
+
+```
 @@
 match: strict
-foreach $CASES
-metavar $KEY: single
-metavar $VAL: single
+metavar $PROPS: sequence
 @@
-- $KEY: $VAL
-+ .with("$KEY", $VAL)
+foo({ $PROPS })
+@@
+match: strict
+on $PROPS
+metavar $V: single
+@@
+- color: $V
++ colour: $V
 ```
 
-Applied to:
-```typescript
-matchExhaustive(tag, { A: () => 1, B: () => 2 });
-```
-
-Produces:
-```typescript
-match(tag).with("A", () => 1).with("B", () => 2).exhaustive();
-```
+`foo({ color: "red", size: 10 })` becomes `foo({ colour: "red", size: 10 })`.
+The first section only names the elements (it has no `-`/`+` lines); the
+`on $PROPS` section is searched inside them and nowhere else, so a `color`
+property of some other object is not touched. Every match inside the elements
+is rewritten, and everything else is left exactly as written.
 
 See [Transform documentation](docs/patterns.md#transforms-semantic-patches) for
 partial-mode, field-mode, and sequence transforms.

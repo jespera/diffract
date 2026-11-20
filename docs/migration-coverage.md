@@ -13,7 +13,7 @@ feared — and a verification sweep across the supported languages turned up and
 fixed several real bugs (trailing-newline leak, partial wildcard-key, phantom
 missing-node, metavar-substring substitution). The intentional non-ported
 differences (sigil-free PHP/Kotlin metavars, whole-span partial/field
-replacement, stricter operators, `join`/`foreach` replacing the `~`/`,`
+replacement, stricter operators, `join` replacing the `~`/`,`
 expansion lines) are recorded in §5–§6 below. The old matcher and its tests,
 examples, and benchmarks are now gone.
 
@@ -47,7 +47,7 @@ What this means in practice:
 
 For a sub-part edit that also needs a guard ("only in objects shaped like X"),
 multi-section still works: one section matches/guards the container, a
-`foreach`/`on`-scoped section edits the elements.
+`on`-scoped section edits the elements.
 
 ## 2. Concrete keys out of context — resolved
 
@@ -57,44 +57,31 @@ key like `color`, tokenized on its own, parses as a labeled statement
 (`statement_identifier`), not the source pair's `property_identifier`, and
 the `(text, node_type)` comparison missed.
 
-This is **now fixed** for the case that matters — a `foreach` element
-pattern. `compile_foreach` tokenizes the element pattern *in its container
-context*, splicing it into the binding section's scaffold (`foo({ color:
-$V })`) so the parser assigns the contextual node-type, then extracting the
-element's leaves by byte span. No per-language data enters the code (the
-context is the user's own outer pattern) and no precision is relaxed. See
-[transforms.md §10](transforms.md) for the mechanism, and the `foreach:
-concrete key …` tests in `test_matcher.ml`.
+This is **now fixed**, and not by anything specific to the case: strict
+and partial matching compare leaves *lexically* (text, plus whether the
+leaf sits inside a string literal) and tolerate a node-type disagreement,
+because a pattern body is a fragment whose re-parse assigns roles
+unreliably. A bare `color: $V` therefore matches the property, whether
+written between context `...` lines or in a section scoped with
+`on $PROPS`. See [transforms.md §10](transforms.md), and the
+`on sequence: concrete key …` tests in `test_matcher.ml`.
 
-What this leaves:
-
-- **Wildcard keys** (`$K: $V`) — always worked (the wildcard ignores node
-  type).
-- **Concrete keys in `foreach` elements** — now work (TS object property,
-  TSX attribute), preserving siblings. Kotlin/Scala/PHP were never affected
-  (single identifier node-type).
-- **Bare concrete-key patterns** (a standalone `- color: $V`) — *not*
-  addressed, and correctly so: bare `color: $V` is a labeled statement and
-  `a={$x}` is an assignment, not the in-container element. The bare form
-  honestly means its standalone parse; element-shaped patterns belong in
-  container context, where `foreach` now handles them.
-- **Ellipsis in the element** — falls back to standalone tokenization
-  (offsets would shift), so such a selective rule degrades gracefully
-  rather than misfiring.
+(An earlier fix re-tokenized a `foreach` element pattern inside its
+container; it went away with `foreach`.)
 
 So the audit's highest-value gap is closed, with no architectural cost.
 
 ## 3. Element deletion with separator cleanup — resolved
 
 Removing a list element (deprecated property, unused argument) is **now
-implemented**. A `foreach` element with an empty replacement (a `-` line,
-no `+`) deletes the element, and the engine swallows one adjacent separator
-so the list stays well-formed — the separator *following* the element, or
-the *preceding* one if it is last with no trailing comma. A trailing comma
-is handled by the same rule (`f(a,)` → `f()`, no dangling). See
-[transforms.md §11](transforms.md) for the mechanism, and the `remove: …`
-tests in `test_matcher.ml`. This covers the old `separator_deletion` group
-(11 tests).
+implemented**. A `-` line between context `...` lines deletes the element,
+and the engine swallows one adjacent separator so the list stays
+well-formed — the separator *following* the element, or the *preceding* one
+if it is last with no trailing comma. A trailing comma is handled by the
+same rule (`f(a,)` → `f()`, no dangling). See
+[transforms.md §11](transforms.md) for the mechanism, and the
+`strict remove: …` tests in `test_matcher.ml`. This covers the old
+`separator_deletion` group (11 tests).
 
 ## 4. Field mode — resolved
 
@@ -120,14 +107,16 @@ place). Neither blocks the primary use case.
 
 - **Search and whole-construct transforms**: calls, member calls,
   fragments, ellipsis, partial-search, comments, rename, operand swap,
-  multi-section, `on`/`foreach` scoping. Confirmed by the parity harness.
+  multi-section, `on` scoping. Confirmed by the parity harness.
 - **Operator precision is better**: the old matcher matched `m * n` with a
   `$a + $b` pattern (ignoring the operator); the new matcher correctly
   matches only `+` expressions.
-- **Sequence expansion**: the old column-0 expansion (`~`/`,` prefixes) is
-  fully covered by the new `foreach`/`join` surface — verified by
-  re-authoring the old `expansion` group's patterns as passing tests
-  across TS and Kotlin (the `port:` tests in `test_matcher.ml`).
+- **Verbatim sequence expansion**: the old column-0 expansion (`~`/`,`
+  prefixes) is covered by the `join` directive — verified by re-authoring
+  the old `expansion` group's verbatim patterns as passing tests across TS
+  and Kotlin (the `port:` tests in `test_matcher.ml`). The old
+  *transform* expansion (each element rewritten, then rendered into the
+  replacement) is not carried over; see §7.
 
 ## 6. Not gaps — convention artifacts
 
@@ -138,16 +127,18 @@ place). Neither blocks the primary use case.
   capability is intact — the Kotlin expansion ports (sigil-free metavars)
   pass. These tests need re-authoring in new conventions, not new code.
 
-## 7. Two minor expansion edge behaviors
+## 7. Expansion differences
 
 - **Merging two captured sequences into one join**: old `, $BEFORE $AFTER`
   gathered both sequences into a single comma-join; the new model renders
   each referenced sequence independently (its own `join`). Rare.
-- **Passthrough vs drop of non-matching elements**: an old
-  transform-expansion passed through elements that didn't match the inner
-  pattern; a new splice renders only the matched elements and drops the
-  rest. Relevant to "transform some elements, keep the others in the
-  list"; ties into the open keep/drop question for filtering.
+- **Transform expansion is not ported**: the old matcher could rewrite each
+  element of a captured sequence and render the results into the
+  replacement (`execute(a, b)` → `Pipeline().addStep(a).addStep(b).run()`).
+  The new matcher offered this for a time via a `foreach` directive and
+  dropped it ([transforms.md §7](transforms.md)): elements are rewritten in
+  place with `on`, and a sequence referenced in a `+` template is
+  substituted unchanged.
 
 ## 8. The decision this frames
 
@@ -155,12 +146,12 @@ All three of the audit's gaps are **now closed**:
 
 | Gap | Footprint | Cost | Note |
 | --- | --- | --- | --- |
-| ~~Concrete-key matching (§2)~~ | common surgical edits | — | **done** (contextual tokenization) |
-| ~~Deletion + separator cleanup (§3)~~ | remove-property/arg | — | **done** (foreach empty `+`) |
+| ~~Concrete-key matching (§2)~~ | common surgical edits | — | **done** (lexical leaf comparison) |
+| ~~Deletion + separator cleanup (§3)~~ | remove-property/arg | — | **done** (`-` line beside `...`) |
 | ~~Field mode (§4)~~ | decorated declarations | — | **done** (child alignment; no registry) |
 
 Each closed without the per-language coupling first feared — concrete keys
-via contextual tokenization, deletion via the foreach empty-replacement,
+via lexical leaf comparison, deletion via the `...` run beside the `-` line,
 field mode via child alignment. Retiring the old matcher (the endgame
 "delete old matcher" step) is no longer gated on a capability gap; what
 remains is verification breadth and the mechanical work of porting the old

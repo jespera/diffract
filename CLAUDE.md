@@ -181,24 +181,27 @@ in declaration order); a section without `-`/`+` lines acts as a pure guard
 (must match but produces no edits). `Matcher.find`/`Matcher.transform` handle
 multi-section patterns directly.
 
-### Sequence rendering: `join` and `foreach`
+### Sequences: `join` and `on`
 
-When a `sequence` metavar is referenced inside a `+` replacement template, its
-elements are rendered and substituted in place. Two independent knobs control
-this:
+A `sequence` metavar (declared `metavar $VAR: sequence`, appearing on the match
+side) can be used in two ways. Everything goes through `Matcher.transform`.
 
-- **`join $VAR by "<sep>"`** (a preamble directive): the string placed between
-  rendered elements. `<sep>` interprets `\n`, `\t`, `\\`. The default (no
-  directive) is the empty string, so elements are concatenated.
-- **`foreach $VAR`** (a following `@@` section): a per-element transform. The
-  section matches one element of `$VAR` and its `-`/`+` lines rewrite it; the
-  rewritten elements are then joined. Without a `foreach`, elements render as
-  their source text (identity).
+- **`join $VAR by "<sep>"`** (a preamble directive): when `$VAR` is referenced
+  in a `+` template, its elements' source text is substituted there, separated
+  by `<sep>` (interprets `\n`, `\t`, `\\`; default empty). The elements are not
+  changed.
+- **`on $VAR`** (a following `@@` section): the section is searched inside
+  each element `$VAR` bound, and nowhere else. `on` takes a single metavar the
+  same way (inside that one subtree). A match must lie inside one element; an
+  element that itself matches shadows matches nested in it (transforms take
+  the outermost match). The rule fires only if the `on` section matches
+  somewhere.
 
-The sequence metavar must be declared `metavar $VAR: sequence` and appear on the
-match side. Everything goes through `Matcher.transform`.
+There is no `foreach` (it is rejected with a pointer to `on`), and no way to
+render rewritten elements into a new construct: a sequence referenced on a `+`
+line is always substituted unchanged.
 
-#### Example — identity render with a join separator
+#### Example — `join`
 
 ```
 @@
@@ -212,31 +215,29 @@ join $ELEMS by " && "
 
 `all([x, y, z])` becomes `(x && y && z)`.
 
-#### Example — method chain (`foreach` per-element transform)
+#### Example — `on` over a sequence
 
 ```
 @@
 match: strict
-metavar $TAG: single
 metavar $PROPS: sequence
 @@
-- matchExhaustive($TAG, { $PROPS });
-+ match($TAG)$PROPS.exhaustive();
+foo({ $PROPS })
 @@
 match: strict
-foreach $PROPS
-metavar $KEY: single
-metavar $VAL: single
+on $PROPS
+metavar $V: single
 @@
-- $KEY: $VAL
-+ .with("$KEY", $VAL)
+- color: $V
++ colour: $V
 ```
 
-`matchExhaustive(tag, { a: f, b: g });` becomes
-`match(tag).with("a", f).with("b", g).exhaustive();` — the `foreach` section
-rewrites each property, and `$PROPS` in the outer template is replaced by the
-joined results (default empty join here).
+`foo({ color: "red", size: 10 })` becomes `foo({ colour: "red", size: 10 })`.
+The first section only names the elements (it has no `-`/`+` lines); the
+`on $PROPS` section is searched inside them and nowhere else, so a `color`
+property of some other object is not touched. Every match inside the elements
+is rewritten, and everything else is left exactly as written.
 
-A `foreach` element with an empty replacement (a `-` line, no `+`) deletes the
-element and cleans up the adjacent separator — e.g. removing a deprecated
-property or unused argument from a list.
+Binding the statements after a declaration gives a block-scoped rewrite:
+`{` / `PRE` / `- val x = E` / `POST` / `}` followed by an `on POST` section
+rewrites uses of `x` in the rest of that block only.
