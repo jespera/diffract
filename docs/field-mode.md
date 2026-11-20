@@ -214,8 +214,7 @@ same node-type aliasing as concrete object keys. Tokenized on its own,
 (kept deliberately — strict/partial modes compare lexically, see
 `docs/universal-tokenizer.md` §2.1, but field mode's contextual tokens make
 strictness both correct and cheap) misses and the
-pattern finds nothing. Unlike the `foreach` concrete-key case (docs
-[transforms.md §10]), a field pattern has no surrounding container to
+pattern finds nothing. A field pattern has no surrounding container to
 borrow context from — it *is* the top-level construct.
 
 The fix is to tokenize the pattern **in the context of the source it's
@@ -233,8 +232,8 @@ isolation is not reliably parsable into the same roles. A class body's
 `property_identifier` only by coincidence, and class-only constructs
 would diverge or ERROR. Splicing into the real source puts the pattern in
 its true ancestral context by construction. It degrades to standalone
-tokenization on the same fallbacks as `foreach` (ellipsis, or a splice
-that doesn't parse) — never worse than before.
+tokenization when the pattern has an ellipsis or the splice doesn't
+parse — never worse than before.
 
 Each reparse is whole-source, so two cost controls keep it from being a
 per-node tax:
@@ -255,9 +254,8 @@ search dropped from ~970ms (one reparse per distinct node-type) to ~35ms
 (~2.5× a raw parse) with the probe in place; a metavar-only pattern pays
 no reparse at all.
 
-This is the same `tokenize_span` primitive the `foreach` fix uses; the
-only difference is the context string is built from the source rather
-than from the user's pattern. It is the general "wrap-and-peel" tool that
+This uses the `tokenize_span` primitive, with the context string built
+from the source. It is the general "wrap-and-peel" tool that
 partial-mode composition (if ever built single-section) would reuse.
 
 ## 6. What this covers, and the one structural caveat

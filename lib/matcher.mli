@@ -27,11 +27,10 @@
     {!Stmatch.S.match_field_at}). No per-language data is used.
 
     Multi-[\@\@]-section patterns are handled: sections run in declaration
-    order, share metavar bindings by name, and may be scoped with [on $VAR] /
-    [foreach $VAR] (see {!scope}). Transforms are applied by {!transform}:
-    [-]/[+] bodies, single-metavar substitution, sequence splicing with [join]
-    separators, per-element [foreach] edits, and element removal (an empty
-    replacement) with separator cleanup. *)
+    order, share metavar bindings by name, and may be scoped with [on $VAR] (see
+    {!scope}). Transforms are applied by {!transform}: [-]/[+] bodies,
+    single-metavar substitution, sequence splicing with [join] separators, and
+    element removal with separator cleanup. *)
 
 module M : module type of Stmatch.Make (Tree_sitter_cursor)
 
@@ -40,12 +39,10 @@ type mode = Strict | Partial | Field
 type scope =
   | Global
   | On of string
-  | Foreach of string
       (** A section's scope directive. [Global]: match against the whole source.
-          [On name]: scope to the single subtree bound by [name] in a prior
-          section (run once). [Foreach name]: run once per element of the
-          sequence bound by [name]. [On] requires a single metavar and [Foreach]
-          a sequence; mismatches are parse errors. [name] is taken verbatim
+          [On name]: search only inside what [name] bound in a prior section —
+          the one subtree of a single metavar, or each element of a sequence (a
+          match must lie inside one element). [name] is taken verbatim
           (sigil-free or with [$]). *)
 
 (** One [@@]-delimited section of a pattern file. Multi-section patterns have a
@@ -138,8 +135,8 @@ val debug_tokens :
     match). That drops the very content those modes tolerate/ignore (extra
     container elements; optional declaration fields) — legitimate as a wholesale
     rewrite, but an easy mistake, so it warns rather than fails. A sub-part edit
-    (context lines preserved) or a [foreach]-scoped edit is exempt. Intended for
-    the CLI to print before applying. *)
+    (context lines preserved) is exempt. Intended for the CLI to print before
+    applying. *)
 val pattern_warnings : string -> string list
 
 (** Like {!find}, but against an already-parsed source tree. Useful when the
@@ -173,15 +170,13 @@ val text_only_find_in_tree :
     letter, digit, or underscore) of the compiled match IR — exactly the leaves
     the engine demands whole-leaf text equality for. Soundness follows from that
     exactness: an equal leaf is a verbatim substring of the source. Metavars,
-    ellipsis, and [+ ]-line content never produce such tokens, and [foreach]
-    sections are transform directives outside the match IR, so none of them
-    contribute (their literals are {e not} required). [on $VAR] sections do
-    contribute: they must match inside a bound subtree, which is itself source
-    text. Field mode's source-context re-tokenization is covered because its
-    standalone-token probe (text-only alignment) is itself a necessary
-    condition. The word-like restriction only drops punctuation needles, which
-    occur in virtually every file and reject nothing; it is not needed for
-    soundness.
+    ellipsis, and [+ ]-line content never produce such tokens, so none of them
+    contribute. [on $VAR] sections do contribute: they must match inside a bound
+    subtree, which is itself source text. Field mode's source-context
+    re-tokenization is covered because its standalone-token probe (text-only
+    alignment) is itself a necessary condition. The word-like restriction only
+    drops punctuation needles, which occur in virtually every file and reject
+    nothing; it is not needed for soundness.
 
     Returns [[]] — no prefilter possible, every file must be searched — when the
     pattern has no such token. Raises like {!find} on malformed patterns. *)
@@ -244,12 +239,9 @@ val find_file :
     found in the source text. Either way a removed list element does not leave
     its separator dangling.
 
-    Beyond single-metavar substitution this handles: sequence splicing (a
-    [sequence] metavar referenced in a [+] template is rendered and joined by
-    its [join] separator), per-element [foreach] transforms (an inner section's
-    edit applied to each element of a sequence), and element removal (a
-    [foreach] element with an empty replacement is deleted, and one adjacent
-    separator is consumed so the list stays well-formed). *)
+    Beyond single-metavar substitution this handles sequence splicing: a
+    [sequence] metavar referenced in a [+] template is substituted as its
+    elements' source text, joined by its [join] separator. *)
 val transform :
   ctx:Context.t ->
   language:string ->

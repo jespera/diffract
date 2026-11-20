@@ -5,11 +5,9 @@ module M = Stmatch.Make (Tree_sitter_cursor)
 type mode = Strict | Partial | Field
 
 (* A section's scope directive. [Global] runs against the whole source;
-   [On name] scopes to the single subtree bound by [name] (run once);
-   [Foreach name] runs the section once per element of the sequence bound
-   by [name]. [On] requires a single metavar, [Foreach] a sequence — see
-   {!validate_sections}. *)
-type scope = Global | On of string | Foreach of string
+   [On name] searches only inside what [name] bound in an earlier section —
+   the one subtree of a single metavar, or each element of a sequence. *)
+type scope = Global | On of string
 
 type section = {
   mode : mode;
@@ -90,8 +88,7 @@ let parse_section_preamble ~section_index preamble_lines =
     | _ ->
         failwith
           (Printf.sprintf
-             "Section %d: duplicate scope directive (at most one of 'on' / \
-              'foreach')"
+             "Section %d: duplicate scope directive (at most one 'on')"
              (section_index + 1))
   in
   List.iter
@@ -103,7 +100,14 @@ let parse_section_preamble ~section_index preamble_lines =
       else if String.starts_with ~prefix:"on " line then
         set_scope (On (String.trim (chop "on " line)))
       else if String.starts_with ~prefix:"foreach " line then
-        set_scope (Foreach (String.trim (chop "foreach " line)))
+        let name = String.trim (chop "foreach " line) in
+        failwith
+          (Printf.sprintf
+             "Section %d: 'foreach' is no longer supported. Use 'on %s' to \
+              rewrite matches inside the elements %s bound; to delete one \
+              element, put it on a '-' line between context '...' lines in the \
+              section that matches the list."
+             (section_index + 1) name name)
       else if String.starts_with ~prefix:"join " line then
         let rest = String.trim (chop "join " line) in
         match find_sub " by " rest with
@@ -192,39 +196,25 @@ let validate_sections sections =
       in
       List.iter (fun n -> check n K_single) s.single_metavars;
       List.iter (fun n -> check n K_sequence) s.sequence_metavars;
-      (* A scope directive ([on]/[foreach]) must reference a metavar of the
-         right kind declared in an earlier section. *)
-      let check_scope_ref name expected directive =
+      (* A scope directive ([on]) must reference a metavar declared in an
+         earlier section. *)
+      let check_scope_ref name =
         match Hashtbl.find_opt decls name with
         | None ->
             failwith
               (Printf.sprintf
-                 "Section %d: '%s %s' references %s, which is not declared in \
+                 "Section %d: 'on %s' references %s, which is not declared in \
                   any prior section"
-                 (idx + 1) directive name name)
+                 (idx + 1) name name)
         | Some (_, prior_idx) when prior_idx >= idx ->
             failwith
               (Printf.sprintf
-                 "Section %d: '%s %s' must reference a metavar declared in an \
+                 "Section %d: 'on %s' must reference a metavar declared in an \
                   earlier section"
-                 (idx + 1) directive name)
-        | Some (k, _) when k <> expected ->
-            let want, other =
-              match expected with
-              | K_single -> ("single", "foreach")
-              | K_sequence -> ("sequence", "on")
-            in
-            failwith
-              (Printf.sprintf
-                 "Section %d: '%s %s' requires a %s metavar, but %s is \
-                  declared as %s (use '%s' instead)"
-                 (idx + 1) directive name want name (kind_string k) other)
+                 (idx + 1) name)
         | Some _ -> ()
       in
-      match s.scope with
-      | Global -> ()
-      | On name -> check_scope_ref name K_single "on"
-      | Foreach name -> check_scope_ref name K_sequence "foreach")
+      match s.scope with Global -> () | On name -> check_scope_ref name)
     sections
 
 (* Multi-section pattern parser. A pattern file's structure is:
@@ -377,7 +367,7 @@ let replace_side body : string option =
    body (the [+ ] lines, joined) with [$NAME] placeholders left literal;
    [singles] is the section's single metavar names, used to substitute
    those placeholders with bound source text. Sequence-metavar rendering
-   ([foreach]/[join]) is not part of this leaf yet — that's later transform
+   ([join]) is not part of this leaf yet — that's later transform
    work; today only single-binding substitution is performed. *)
 type replace_template = {
   text : string;
@@ -620,99 +610,8 @@ let compile_section ~ctx ~language section =
             replace;
           }
   in
-  match section.scope with
-  | Global -> leaf
-  | On name -> Within (name, leaf)
-  | Foreach _ ->
-      (* Foreach sections are transform directives, compiled separately via
-         [compile_foreach]; they do not appear in the match IR. *)
-      assert false
+  match section.scope with Global -> leaf | On name -> Within (name, leaf)
 
-(* A per-element transform compiled from a [foreach $VAR] section. During a
-   transform, for each element of the sequence bound to [seq_var] the
-   element is matched against [elem_tokens]; on a match, [elem_replace] is
-   instantiated with the per-element bindings to produce an in-place edit at
-   that element's span. Elements that don't match are left untouched. *)
-type foreach_transform = {
-  seq_var : string;
-  elem_tokens : Stmatch.pattern_token list;
-  elem_replace : replace_template option;
-}
-
-(* Tokenize a foreach's element pattern *in the context of its container*,
-   so context-sensitive leaves get the right node-types. The container comes
-   from the match section that binds [seq_var]: we splice the element pattern
-   into that section's body at the [seq_var] reference (e.g. [foo({ $PROPS })]
-   becomes [foo({ color: $V })]), tokenize the whole thing, and extract the
-   element's own leaves by the byte span where they were spliced. This is
-   what makes a concrete object key parse as [property_identifier] rather
-   than the standalone [statement_identifier].
-
-   Returns [None] (caller falls back to standalone tokenization) when the
-   context can't be established: no binding section found, the [seq_var]
-   reference isn't textually located, ellipsis is involved (byte offsets
-   would shift under ellipsis preprocessing), or extraction yields nothing.
-   The fix is therefore a pure improvement — never worse than standalone. *)
-let contextual_elem_tokens ~ctx ~language ~match_sections section seq_var =
-  let has_ellipsis t = find_sub "..." t <> None in
-  let element = match_side section.body in
-  match
-    List.find_opt (fun s -> List.mem seq_var s.sequence_metavars) match_sections
-  with
-  | None -> None
-  | Some scaffold_section -> (
-      let scaffold = match_side scaffold_section.body in
-      if has_ellipsis scaffold || has_ellipsis element then None
-      else
-        match find_sub seq_var scaffold with
-        | None -> None
-        | Some pos ->
-            let before = String.sub scaffold 0 pos in
-            let after_pos = pos + String.length seq_var in
-            let after =
-              String.sub scaffold after_pos (String.length scaffold - after_pos)
-            in
-            let wrapped = before ^ element ^ after in
-            let lo = String.length before in
-            let hi = lo + String.length element in
-            let toks =
-              Tokenize.tokenize_span ~ctx ~language
-                ~single_metavars:section.single_metavars
-                ~sequence_metavars:section.sequence_metavars ~lo ~hi wrapped
-            in
-            if toks = [] then None else Some toks)
-
-let compile_foreach ~ctx ~language ~match_sections section =
-  let seq_var = match section.scope with Foreach n -> n | _ -> assert false in
-  let elem_tokens =
-    match
-      contextual_elem_tokens ~ctx ~language ~match_sections section seq_var
-    with
-    | Some toks -> toks
-    | None ->
-        Tokenize.tokenize ~ctx ~language
-          ~single_metavars:section.single_metavars
-          ~sequence_metavars:section.sequence_metavars (match_side section.body)
-  in
-  let elem_replace =
-    match replace_side section.body with
-    | None -> None
-    | Some text ->
-        Some
-          {
-            text;
-            singles = section.single_metavars;
-            sequences = section.sequence_metavars;
-          }
-  in
-  { seq_var; elem_tokens; elem_replace }
-
-let is_foreach s = match s.scope with Foreach _ -> true | _ -> false
-
-(* Compile a pattern into the match IR plus the list of per-element foreach
-   transforms. Foreach sections are transform directives (they iterate a
-   sequence bound by a match section), so they are partitioned out of the
-   match IR. *)
 (* The wildcard metavar names ([Subtree]/[Siblings]) present in a token list. *)
 let wildcard_names tokens =
   List.filter_map
@@ -761,13 +660,8 @@ let rec ir_tokens = function
    metavar shared between conjunctive sections — declared in one, used in
    another — is not falsely flagged. Error-tolerant fragments (e.g. [} else {])
    are unaffected: they declare no metavars. *)
-let validate_declared_metavars_present (p : parsed_pattern) ~ir ~foreaches =
-  let appeared =
-    wildcard_names (ir_tokens ir)
-    @ List.concat_map
-        (fun (f : foreach_transform) -> wildcard_names f.elem_tokens)
-        foreaches
-  in
+let validate_declared_metavars_present (p : parsed_pattern) ~ir =
+  let appeared = wildcard_names (ir_tokens ir) in
   List.iter
     (fun (s : section) ->
       List.iter
@@ -840,22 +734,16 @@ let validate_no_ellipsis_in_edits (p : parsed_pattern) =
         (classify_spatch s.body))
     p.sections
 
-let compile_to_ir ~ctx ~language (p : parsed_pattern) :
-    ir * foreach_transform list =
+let compile_to_ir ~ctx ~language (p : parsed_pattern) : ir =
   validate_no_ellipsis_in_edits p;
-  let foreach_sections, match_sections = List.partition is_foreach p.sections in
   let ir =
-    match match_sections with
-    | [] ->
-        failwith "Pattern has no match section (a foreach needs one to bind)"
+    match p.sections with
+    | [] -> failwith "Pattern has no section"
     | [ s ] -> compile_section ~ctx ~language s
     | ss -> All (List.map (compile_section ~ctx ~language) ss)
   in
-  let foreaches =
-    List.map (compile_foreach ~ctx ~language ~match_sections) foreach_sections
-  in
-  validate_declared_metavars_present p ~ir ~foreaches;
-  (ir, foreaches)
+  validate_declared_metavars_present p ~ir;
+  ir
 
 (* Resolve a [Single] binding by name. Returns the bound cursor or [None]
    if the name isn't bound — the latter should be unreachable in practice
@@ -982,15 +870,25 @@ let rec eval_ir ?(overlapping = true) ?(distinguish = []) ?accept ~ctx ~language
           M.find_field_matches_with ~initial_bindings ~tokens_for cursor
       in
       results |> List.map (fun (m : M.match_result) -> ([ m ], m.bindings))
-  | Within (name, sub) -> (
-      match lookup_single name initial_bindings with
-      | None -> []
-      | Some bound ->
-          (* [narrow] re-roots the bound cursor at its current node so the
-             scoped walk can't climb out via [move_next_subtree]. *)
-          eval_ir ~overlapping ~distinguish ?accept ~ctx ~language ~source sub
-            (Tree_sitter_cursor.narrow bound)
-            initial_bindings)
+  | Within (name, sub) ->
+      (* [narrow] re-roots a bound cursor at its current node so the scoped
+         walk can't climb out via [move_next_subtree]. A single metavar is
+         one such subtree; a sequence is several siblings, each searched in
+         turn, so a match must lie inside one element. *)
+      let within bound =
+        eval_ir ~overlapping ~distinguish ?accept ~ctx ~language ~source sub
+          (Tree_sitter_cursor.narrow bound)
+          initial_bindings
+      in
+      let scope =
+        List.find_map
+          (function
+            | M.Single { name = n; cursor } when n = name -> Some [ cursor ]
+            | M.Sequence { name = n; cursors } when n = name -> Some cursors
+            | _ -> None)
+          initial_bindings
+      in
+      List.concat_map within (Option.value ~default:[] scope)
   | All children ->
       (* Conjunction with backtracking across children. A child can match a
          position in several configurations (which argument a metavar after
@@ -1048,8 +946,7 @@ let rec eval_ir ?(overlapping = true) ?(distinguish = []) ?accept ~ctx ~language
 
 let find_in_tree ~ctx ~language ~pattern_text (tree : Tree.src Tree.tree) =
   let p = parse_pattern pattern_text in
-  (* Search ignores foreach sections — they are transform directives. *)
-  let ir, _foreaches = compile_to_ir ~ctx ~language p in
+  let ir = compile_to_ir ~ctx ~language p in
   let root_cursor = Tree_sitter_cursor.of_tree tree in
   eval_ir ~ctx ~language ~source:tree.source ir root_cursor []
   |> List.map (fun (matches, _) -> ({ sections = matches } : composite_match))
@@ -1060,12 +957,12 @@ let find_in_tree ~ctx ~language ~pattern_text (tree : Tree.src Tree.tree) =
    locations whose tokens occur as text but in a different syntactic role (the
    reason strict rejected them, e.g. [React.FC] written as an expression vs.
    used as a type). Returns [[]] for anything but a single global strict
-   section (partial/field/multi-section/[on]/[foreach]): the hint is scoped to
+   section (partial/field/multi-section/[on]): the hint is scoped to
    the case where this context-sensitivity actually bites. *)
 let text_only_find_in_tree ~ctx ~language ~pattern_text
     (tree : Tree.src Tree.tree) =
   let p = parse_pattern pattern_text in
-  let ir, _foreaches = compile_to_ir ~ctx ~language p in
+  let ir = compile_to_ir ~ctx ~language p in
   match ir with
   | StrictSeq { tokens; _ } ->
       let cursor = Tree_sitter_cursor.of_tree tree in
@@ -1090,7 +987,7 @@ let word_like s =
 
 let required_literals ~ctx ~language ~pattern_text =
   let p = parse_pattern pattern_text in
-  let ir, _foreaches = compile_to_ir ~ctx ~language p in
+  let ir = compile_to_ir ~ctx ~language p in
   ir_tokens ir
   |> List.filter_map (function
     | Stmatch.Concrete { text; _ } when word_like text -> Some text
@@ -1151,7 +1048,7 @@ let mode_name = function
    match. That is the honest reading of "replace the whole thing", but an easy
    mistake in modes whose entire point is to tolerate/ignore content, so it
    warns (not errors). A section with context lines (surgical sub-part marking)
-   or a [foreach] scope is exempt. *)
+   is exempt. *)
 let pattern_warnings pattern_text =
   let p = parse_pattern pattern_text in
   (* A body line starting with '+'/'-' but no space after it is treated as
@@ -1187,7 +1084,6 @@ let pattern_warnings pattern_text =
   @ List.filter_map
       (fun (s : section) ->
         let is_transform = replace_side s.body <> None in
-        let is_foreach = match s.scope with Foreach _ -> true | _ -> false in
         (* Whole-container marking: no context line carries content, so nothing
          in the match is preserved. *)
         let marks_whole =
@@ -1196,9 +1092,7 @@ let pattern_warnings pattern_text =
                (function Ctx s -> String.trim s <> "" | _ -> false)
                (classify_spatch s.body))
         in
-        if
-          is_transform && (not is_foreach) && marks_whole
-          && (s.mode = Partial || s.mode = Field)
+        if is_transform && marks_whole && (s.mode = Partial || s.mode = Field)
         then
           let what, dropped =
             match s.mode with
@@ -1212,7 +1106,7 @@ let pattern_warnings pattern_text =
                "warning: this %s-mode section marks the whole matched %s for \
                 replacement, so %s will be dropped. To change part of it while \
                 keeping the rest, mark only that part (context lines are \
-                preserved) or use a `foreach`/`on` section."
+                preserved) or use an `on` section."
                (mode_name s.mode) what dropped)
         else None)
       p.sections
@@ -1231,10 +1125,7 @@ let debug_tokens ~ctx ~language ~pattern_text =
   List.iteri
     (fun i (s : section) ->
       let scope_note =
-        match s.scope with
-        | Global -> ""
-        | On n -> Printf.sprintf ", on %s" n
-        | Foreach n -> Printf.sprintf ", foreach %s" n
+        match s.scope with Global -> "" | On n -> Printf.sprintf ", on %s" n
       in
       Buffer.add_string buf
         (Printf.sprintf "Section %d (match: %s%s):\n" (i + 1) (mode_name s.mode)
@@ -1281,8 +1172,8 @@ let names_longest_first names =
 (* Substitute metavar placeholders in [rt.text]. Single metavars
    ([rt.singles]) are replaced with the source text of their bindings;
    sequence metavars ([rt.sequences]) are replaced with their pre-rendered
-   string from [seq_renderings] (the [foreach]-rendered, joined elements —
-   see {!render_foreach}). The scan is greedy longest-match per position so
+   string from [seq_renderings] (the elements' source text, joined — see
+   {!render_identity}). The scan is greedy longest-match per position so
    [$x] does not corrupt [$xy]. A placeholder with no binding / rendering is
    left literal. *)
 (* An identifier character for the purpose of placeholder-boundary detection.
@@ -1392,7 +1283,7 @@ let line_cleanup source lo hi =
    separator ([,] / [;]) would otherwise dangle ([{ , size }]). Absorb the
    *following* separator and the whitespace after it; failing that the
    *preceding* separator and the whitespace before it — the same rule
-   {!removal_span} uses for [foreach] removal, here driven off the raw source.
+   {!strict_separator_cleanup} applies, here driven off the raw source.
    Falls back to {!line_cleanup} when there is no separator on either side.
 
    This text scan is only applied in partial containers. In strict contexts
@@ -1547,8 +1438,8 @@ let render_insertion source pos repl =
    A [-] hunk that sits next to a sequence binder on a context line — [...]
    or a sequence metavar — is a removed list element: the binder captured
    the run of siblings beside it, separators included. If the edge of that
-   run touching the deletion is a separator leaf (a non-named cursor, the
-   same test {!removal_span} applies to a [foreach] binding), deleting only
+   run touching the deletion is a separator leaf (a non-named cursor),
+   deleting only
    the element would leave it dangling ([f(a, , c)]). Absorb the separator
    that *follows*, or failing that the one that *precedes*, with the
    whitespace beyond it.
@@ -1816,100 +1707,8 @@ let lookup_sequence name bindings =
 let composite_bindings (c : composite_match) =
   List.concat_map (fun (m : M.match_result) -> m.M.bindings) c.sections
 
-(* The byte span to delete when removing element [arr.(i)] from a list. The
-   element's own span isn't enough — leaving its separator behind yields a
-   parse error (`{ , x }`). Rule: also take the separator that *follows* the
-   element; if it has none (it's the last element with no trailing comma),
-   take the *preceding* one. A trailing comma counts as a following
-   separator, so removing the only/last element of a trailing-comma list
-   (`f(a,)`) cleans it up. Whitespace on the far side of the consumed
-   separator is absorbed so the surviving neighbours close up. [arr] is the
-   full sequence binding — named elements interleaved with the separator
-   leaves — so an adjacent separator is just a non-named neighbour. *)
-let removal_span arr i source =
-  let is_ws c = c = ' ' || c = '\t' || c = '\n' || c = '\r' in
-  let n = Array.length arr in
-  let es, ee = Tree_sitter_cursor.byte_range arr.(i) in
-  let is_sep j = j >= 0 && j < n && not (Tree_sitter_cursor.is_named arr.(j)) in
-  if is_sep (i + 1) then begin
-    let _, sep_end = Tree_sitter_cursor.byte_range arr.(i + 1) in
-    let hi = ref sep_end in
-    while !hi < String.length source && is_ws source.[!hi] do
-      incr hi
-    done;
-    (es, !hi)
-  end
-  else if is_sep (i - 1) then begin
-    let sep_start, _ = Tree_sitter_cursor.byte_range arr.(i - 1) in
-    let lo = ref sep_start in
-    while !lo > 0 && is_ws source.[!lo - 1] do
-      decr lo
-    done;
-    (!lo, ee)
-  end
-  else (es, ee)
-
-(* The edits a foreach transform contributes for one composite: match each
-   named element against the per-element pattern, and on a match emit an
-   edit. A non-empty replacement rewrites the element in place; an empty
-   replacement is a *removal* — the edit span extends to swallow an adjacent
-   separator (see {!removal_span}) so the list stays well-formed. Non-named
-   cursors (separator leaves that landed in the binding) are skipped as
-   match candidates but used to locate separators. *)
-let foreach_edits ft (composite : composite_match) source =
-  match lookup_sequence ft.seq_var (composite_bindings composite) with
-  | None -> []
-  | Some cursors ->
-      let arr = Array.of_list cursors in
-      let edits = ref [] in
-      Array.iteri
-        (fun i elem ->
-          if Tree_sitter_cursor.is_named elem then
-            let scoped = Tree_sitter_cursor.narrow elem in
-            match M.match_at ft.elem_tokens scoped with
-            | None -> ()
-            | Some (_, elem_bindings) -> (
-                match ft.elem_replace with
-                | None -> ()
-                | Some rt ->
-                    let replacement =
-                      instantiate_template rt [] elem_bindings source
-                    in
-                    let edit =
-                      if replacement = "" then
-                        let lo, hi = removal_span arr i source in
-                        { start_byte = lo; end_byte = hi; replacement = "" }
-                      else
-                        let s, e = Tree_sitter_cursor.byte_range elem in
-                        { start_byte = s; end_byte = e; replacement }
-                    in
-                    edits := edit :: !edits))
-        arr;
-      List.rev !edits
-
-(* Render a foreach's sequence for splicing into an outer template: match
-   each bound element against the per-element pattern, instantiate the
-   per-element template for the matches, and join with [sep]. Elements that
-   don't match (including separator leaves in the binding) are dropped, so
-   the rendering is exactly the matched elements. *)
-let render_foreach ft bindings source sep =
-  match lookup_sequence ft.seq_var bindings with
-  | None -> ""
-  | Some cursors ->
-      cursors
-      |> List.filter Tree_sitter_cursor.is_named
-      |> List.filter_map (fun elem ->
-          let scoped = Tree_sitter_cursor.narrow elem in
-          match M.match_at ft.elem_tokens scoped with
-          | None -> None
-          | Some (_, elem_bindings) ->
-              Option.map
-                (fun rt -> instantiate_template rt [] elem_bindings source)
-                ft.elem_replace)
-      |> String.concat sep
-
-(* Render a referenced sequence that has no foreach (identity splice): the
-   bound elements' source text, joined with [sep]. Separator leaves in the
+(* Render a sequence referenced in an outer template (a splice): the bound
+   elements' source text, joined with [sep]. Separator leaves in the
    binding are dropped via [is_named], so only the named elements render —
    e.g. [a, b, c] from an array binding that also holds the commas. *)
 let render_identity seq bindings source sep =
@@ -1958,7 +1757,7 @@ let referenced_names names text =
 let compute_edits ~ctx ~language ~pattern_text ~source_text =
   let tree = Tree.parse ~ctx ~language source_text in
   let p = parse_pattern pattern_text in
-  let ir, foreaches = compile_to_ir ~ctx ~language p in
+  let ir = compile_to_ir ~ctx ~language p in
   let cursor = Tree_sitter_cursor.of_tree tree in
   (* Transforms use non-overlapping matching: each source span is rewritten
      once, greedily left-to-right. (Search uses overlapping; see [find].) *)
@@ -1966,22 +1765,17 @@ let compute_edits ~ctx ~language ~pattern_text ~source_text =
     eval_ir ~overlapping:false ~ctx ~language ~source:source_text ir cursor []
   in
   (* A sequence is *spliced* when its name is referenced in some outer
-     template; its rendered elements are substituted there and the whole
-     construct is replaced. A foreach whose sequence is NOT referenced does
-     in-place per-element edits (the map case). Splice rendering uses the
-     [join] separator (default empty), and renders via the sequence's
-     foreach if it has one, or as the elements' source text otherwise
-     (identity splice). All of this is static across composites. *)
+     template: its elements' source text, joined by the [join] separator
+     (default empty), is substituted there. This is static across
+     composites. *)
   let joins_map = List.concat_map (fun s -> s.joins) p.sections in
   let sep_of seq = Option.value ~default:"" (List.assoc_opt seq joins_map) in
-  let foreach_of seq = List.find_opt (fun ft -> ft.seq_var = seq) foreaches in
   let outer_templates = List.filter_map leaf_replace (ir_leaves ir) in
   let all_metavar_names =
     List.concat_map (fun rt -> rt.singles @ rt.sequences) outer_templates
   in
   let all_seq_names =
     List.concat_map (fun rt -> rt.sequences) outer_templates
-    @ List.map (fun ft -> ft.seq_var) foreaches
     |> List.sort_uniq compare
   in
   let referenced_seqs =
@@ -1999,24 +1793,10 @@ let compute_edits ~ctx ~language ~pattern_text ~source_text =
         let seq_renderings =
           List.map
             (fun seq ->
-              let sep = sep_of seq in
-              let rendered =
-                match foreach_of seq with
-                | Some ft -> render_foreach ft binds source_text sep
-                | None -> render_identity seq binds source_text sep
-              in
-              (seq, rendered))
+              (seq, render_identity seq binds source_text (sep_of seq)))
             referenced_seqs
         in
-        let outer = edits_of_composite ir comp seq_renderings source_text in
-        let inplace =
-          List.concat_map
-            (fun ft ->
-              if List.mem ft.seq_var referenced_seqs then []
-              else foreach_edits ft comp source_text)
-            foreaches
-        in
-        outer @ inplace)
+        edits_of_composite ir comp seq_renderings source_text)
       composites
   in
   edits
