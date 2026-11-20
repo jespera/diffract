@@ -237,9 +237,12 @@ val find_file :
     elements, field's ignored optional fields (decorators, modifiers, return
     types), and the source captured by [...] — byte-for-byte. A pattern whose
     [-]/[+] cover the whole match replaces the whole match (the degenerate
-    single-region case). Deletion cleanup is context-aware: strict deletions are
-    line-oriented; partial/field deletions absorb an adjacent list separator so
-    it doesn't dangle.
+    single-region case). Deletion cleanup is context-aware: a strict deletion
+    beside a sequence binder ([...] or a sequence metavar on a context line)
+    absorbs the separator leaf at the edge of that binder's run, and is
+    otherwise line-oriented; partial deletions absorb an adjacent list separator
+    found in the source text. Either way a removed list element does not leave
+    its separator dangling.
 
     Beyond single-metavar substitution this handles: sequence splicing (a
     [sequence] metavar referenced in a [+] template is rendered and joined by

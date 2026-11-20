@@ -1395,10 +1395,11 @@ let line_cleanup source lo hi =
    {!removal_span} uses for [foreach] removal, here driven off the raw source.
    Falls back to {!line_cleanup} when there is no separator on either side.
 
-   This is only applied in container (partial/field) contexts. In strict
-   contexts a [;] is a statement terminator, not a list separator, so absorbing
-   it would eat the previous statement's terminator — strict deletions use
-   {!line_cleanup} alone. *)
+   This text scan is only applied in partial containers. In strict contexts
+   a [;] is a statement terminator, not a list separator, so scanning the
+   source for one would eat the previous statement's terminator — strict
+   deletions find their separator in the match instead
+   ({!strict_separator_cleanup}). *)
 let element_cleanup source lo hi =
   let len = String.length source in
   let is_ws c = c = ' ' || c = '\t' || c = '\n' || c = '\r' in
@@ -1541,9 +1542,102 @@ let render_insertion source pos repl =
       | `Bof ->
           (0, String.concat "" (List.map (fun l -> line_of l ^ "\n") lines)))
 
-let surgical_edits ~list_context hunks (m : M.match_result) seq_renderings
-    source =
-  let delete_cleanup = if list_context then element_cleanup else line_cleanup in
+(* Separator cleanup for a strict-mode deletion, read off the match itself.
+
+   A [-] hunk that sits next to a sequence binder on a context line — [...]
+   or a sequence metavar — is a removed list element: the binder captured
+   the run of siblings beside it, separators included. If the edge of that
+   run touching the deletion is a separator leaf (a non-named cursor, the
+   same test {!removal_span} applies to a [foreach] binding), deleting only
+   the element would leave it dangling ([f(a, , c)]). Absorb the separator
+   that *follows*, or failing that the one that *precedes*, with the
+   whitespace beyond it.
+
+   No separator table and no tree query: brackets are concrete pattern
+   tokens, never part of a binder's run, so they cannot be taken; a
+   statement's own terminator lives inside the statement node, so it is not
+   a sibling leaf and is never seen here.
+
+   Left alone ([None]) when the hunk has no adjacent binder, when the
+   binder's edge is a named element (whitespace-separated lists, statement
+   sequences), or when the deleted tokens already begin or end with that
+   separator's text — the author wrote the separator on the [-] line. *)
+let strict_separator_cleanup ~tokens (h : hunk) (m : M.match_result) source lo
+    hi =
+  let is_ws c = c = ' ' || c = '\t' || c = '\n' || c = '\r' in
+  let len = String.length source in
+  let binder_run = function
+    | None -> None
+    | Some i -> (
+        match List.nth_opt tokens i with
+        | Some (Stmatch.Siblings { name = Some n }) ->
+            List.find_map
+              (function
+                | M.Sequence { name; cursors } when name = n -> Some cursors
+                | _ -> None)
+              m.bindings
+        | _ -> None)
+  in
+  let only_ws a b =
+    let ok = ref (a <= b) in
+    for k = a to b - 1 do
+      if not (is_ws source.[k]) then ok := false
+    done;
+    !ok
+  in
+  let text (s, e) = String.sub source s (e - s) in
+  let edge_text idx =
+    match idx with
+    | Some i when i >= 0 && i < Array.length m.spans && fst m.spans.(i) >= 0 ->
+        Some (text m.spans.(i))
+    | _ -> None
+  in
+  let first_del = match h.del_idxs with [] -> None | i :: _ -> Some i in
+  let last_del =
+    match List.rev h.del_idxs with [] -> None | i :: _ -> Some i
+  in
+  let already_written sep =
+    edge_text first_del = Some sep || edge_text last_del = Some sep
+  in
+  let following =
+    match binder_run h.next_tok with
+    | Some (c :: _) when not (Tree_sitter_cursor.is_named c) ->
+        let s, e = Tree_sitter_cursor.byte_range c in
+        if only_ws hi s && not (already_written (text (s, e))) then begin
+          let e = ref e in
+          while !e < len && is_ws source.[!e] do
+            incr e
+          done;
+          Some (lo, !e)
+        end
+        else None
+    | _ -> None
+  in
+  match following with
+  | Some _ as r -> r
+  | None -> (
+      match Option.map List.rev (binder_run h.prev_tok) with
+      | Some (c :: _) when not (Tree_sitter_cursor.is_named c) ->
+          let s, e = Tree_sitter_cursor.byte_range c in
+          if only_ws e lo && not (already_written (text (s, e))) then begin
+            let s = ref s in
+            while !s > 0 && is_ws source.[!s - 1] do
+              decr s
+            done;
+            Some (!s, hi)
+          end
+          else None
+      | _ -> None)
+
+let surgical_edits ~list_context ~tokens hunks (m : M.match_result)
+    seq_renderings source =
+  let delete_cleanup h source lo hi =
+    if list_context then element_cleanup source lo hi
+    else
+      match strict_separator_cleanup ~tokens h m source lo hi with
+      | Some span -> span
+      | None -> line_cleanup source lo hi
+  in
   let spans = m.spans in
   let span_of i =
     if i >= 0 && i < Array.length spans then spans.(i) else (-1, -1)
@@ -1588,7 +1682,7 @@ let surgical_edits ~list_context hunks (m : M.match_result) seq_renderings
             else hi
           in
           let lo, hi =
-            if repl = "" then delete_cleanup source lo hi else (lo, hi)
+            if repl = "" then delete_cleanup h source lo hi else (lo, hi)
           in
           Some { start_byte = lo; end_byte = hi; replacement = repl }
       | [] when h.del_idxs <> [] ->
@@ -1605,7 +1699,7 @@ let surgical_edits ~list_context hunks (m : M.match_result) seq_renderings
             | _ -> m.end_byte
           in
           let lo, hi =
-            if repl = "" then delete_cleanup source lo hi else (lo, hi)
+            if repl = "" then delete_cleanup h source lo hi else (lo, hi)
           in
           if hi >= lo then
             Some { start_byte = lo; end_byte = hi; replacement = repl }
@@ -1644,12 +1738,17 @@ let edits_of_composite ir (composite : composite_match) seq_renderings source =
            deletion must absorb the dangling separator. Field matches a
            declaration's positional children (not a separated list) and strict a
            positional construct; a [;] there is a statement/declaration
-           terminator, not a list separator, so their deletions are
-           line-oriented (see {!surgical_edits}). *)
+           terminator, not a list separator, so the source-text scan is not
+           used for them (see {!surgical_edits}; a strict deletion beside a
+           sequence binder still cleans up its separator, from the match). *)
         let list_context =
           match leaf with PartialContainer _ -> true | _ -> false
         in
-        surgical_edits ~list_context (leaf_hunks leaf) m seq_renderings source
+        let tokens =
+          match leaf with StrictSeq { tokens; _ } -> tokens | _ -> []
+        in
+        surgical_edits ~list_context ~tokens (leaf_hunks leaf) m seq_renderings
+          source
       else
         match leaf_replace leaf with
         | None -> []

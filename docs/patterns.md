@@ -116,16 +116,24 @@ Notes:
   rejected with an error.
 - To rewrite one element of a list and keep the rest, put the shared `...`
   on context lines and mark only the element; to delete one element, put it
-  (and its separator) on `-` lines between the context `...` lines:
+  on a `-` line between the context `...` lines:
 
   ```
     {
     ...
   - Legacy
-  - ,
     ...
     }
   ```
+
+  The element's separator goes with it — the one that follows, or the one
+  before if it is last — so `{ A, Legacy, B }` becomes `{ A, B }` and
+  `{ A, Legacy }` becomes `{ A }`. This relies on the `...` beside the `-`
+  line: it is the `...` that captured the separator. A neighbour written out
+  as a concrete context token is kept exactly as written, so in
+  `f(a,` / `- gone` / `)` the comma stays (`f(a, )`); put it on the `-` line
+  if it should go. Writing the separator on a `-` line yourself (`- ,`) still
+  works and is never doubled.
 
 ## Multi-statement Patterns
 

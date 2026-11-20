@@ -248,12 +248,23 @@ The pieces, bottom-up:
   context` now keeps the surrounding function instead of rebuilding it).
 
 **Whitespace at edit boundaries.** Deletion cleanup depends on context.
-*Strict* deletions are line-oriented (`line_cleanup`): a whole-line deletion
-absorbs its indentation and trailing newline. *Partial/field* deletions are
-element-oriented (`element_cleanup`): they absorb an adjacent list separator
-(`,`/`;`) so it doesn't dangle (`{ , size }`), or close a whitespace gap, then
-fall back to line cleanup. The split matters because in strict code a `;` is a
-statement terminator (handled by line cleanup), not a list separator.
+*Partial* deletions are element-oriented (`element_cleanup`): they scan the
+source text for an adjacent list separator (`,`/`;`) and absorb it so it
+doesn't dangle (`{ , size }`), or close a whitespace gap, then fall back to
+line cleanup. *Strict* deletions cannot use that scan — in strict code a `;`
+is a statement terminator, and looking backwards for one would eat the
+previous statement's. They read the separator off the match instead
+(`strict_separator_cleanup`): a `-` hunk beside a sequence binder (`...` or a
+sequence metavar on a context line) is a removed list element, and the
+binder's captured run holds the siblings next to it, separators included. If
+the edge of that run touching the deletion is an unnamed leaf, it is absorbed
+— the following one first, else the preceding one — with the whitespace
+beyond it. Brackets are concrete pattern tokens and never part of a run; a
+statement's own terminator is inside the statement node and never a sibling
+leaf. With no binder beside the hunk, or when the `-` lines already begin or
+end with that separator, nothing is absorbed and the deletion is
+line-oriented (`line_cleanup`): a whole-line deletion takes its indentation
+and trailing newline.
 
 A *replacement* is spliced in place over the `-` span, so the **`+` content is
 the bare element/region**: it should omit the structural indentation and the

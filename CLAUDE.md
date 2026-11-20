@@ -161,8 +161,10 @@ mis-tokenizes the pattern.)
   on a `+` line (a match-side binder has nothing to bind in a replacement) and
   as a bare `-`/`+` line. An inline `...` within a `-` line's expression binds
   normally and the captured run is deleted with it. Rewrite one list element by
-  marking only it between context `...` lines; delete one by putting it (and
-  its separator) on `-` lines between them.
+  marking only it between context `...` lines; delete one by putting it on a
+  `-` line between them — the adjacent separator (following, else preceding)
+  is absorbed from the `...` run beside it. A neighbour written as a concrete
+  context token is kept as written, so its separator must go on the `-` line.
 
 Matching modes (required - must specify one):
 - `match: strict` - Exact positional matching (no extra children allowed, ordered). Use for function calls, arrays.

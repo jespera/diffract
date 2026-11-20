@@ -1178,6 +1178,107 @@ let test_remove_kotlin_trailing_last () =
        ~source:"f(a = 1, b = 2,)")
 
 (* ========================================================================= *)
+(* Strict deletion beside a sequence binder: separator cleanup               *)
+(*                                                                           *)
+(* A `-` line between context `...` lines is a removed list element. The     *)
+(* `...` beside it captured the neighbouring siblings, separators included,  *)
+(* so the adjacent separator leaf is absorbed (following, else preceding)    *)
+(* without the author writing it. Same outcomes as the foreach removals.     *)
+(* ========================================================================= *)
+
+let strict_rm_prop key =
+  Printf.sprintf
+    "@@\n\
+     match: strict\n\
+     metavar $V: single\n\
+     @@\n\
+    \  foo({\n\
+    \  ...\n\
+     - %s: $V\n\
+    \  ...\n\
+    \  })"
+    key
+
+let strict_rm_arg = "@@\nmatch: strict\n@@\n  f(\n  ...\n- gone\n  ...\n  )"
+
+let check_rm ~language ~pattern cases =
+  List.iter
+    (fun (source, expected) ->
+      Alcotest.(check string)
+        source expected
+        (transform ~language ~pattern ~source))
+    cases
+
+let test_strict_remove_property () =
+  check_rm ~language:"typescript" ~pattern:(strict_rm_prop "b")
+    [
+      ("foo({ a: 1, b: 2, c: 3 });", "foo({ a: 1, c: 3 });");
+      ("foo({ b: 2, c: 3 });", "foo({ c: 3 });");
+      ("foo({ a: 1, b: 2 });", "foo({ a: 1 });");
+      ("foo({ b: 2 });", "foo({  });");
+    ]
+
+let test_strict_remove_argument () =
+  check_rm ~language:"typescript" ~pattern:strict_rm_arg
+    [
+      ("f(a, gone, c);", "f(a, c);");
+      ("f(gone, c);", "f(c);");
+      ("f(a, gone);", "f(a);");
+      ("f(gone);", "f();");
+      ("f(gone,);", "f();");
+    ]
+
+(* The trailing-comma idiom survives: the between-comma is absorbed, the
+   trailing one stays. *)
+let test_strict_remove_kotlin_trailing () =
+  check_rm ~language:"kotlin" ~pattern:strict_rm_arg
+    [
+      ("val x = f(a, gone, c)", "val x = f(a, c)");
+      ("val x = f(a, gone,)", "val x = f(a, )");
+    ]
+
+(* A separator the author already put on a `-` line is not doubled. *)
+let test_strict_remove_separator_written () =
+  check_rm ~language:"typescript"
+    ~pattern:"@@\nmatch: strict\n@@\n  f(\n  ...\n- ,\n- gone\n  ...\n  )"
+    [ ("f(a, gone, c);", "f(a, c);"); ("f(a, gone);", "f(a);") ]
+
+(* A named sequence metavar is a binder like `...`; a binder on one side is
+   enough. *)
+let test_strict_remove_one_sided_binder () =
+  check_rm ~language:"typescript"
+    ~pattern:
+      "@@\n\
+       match: strict\n\
+       metavar $REST: sequence\n\
+       @@\n\
+      \  f(\n\
+       - gone\n\
+      \  $REST\n\
+      \  )"
+    [ ("f(gone, b, c);", "f(b, c);") ];
+  check_rm ~language:"typescript"
+    ~pattern:"@@\nmatch: strict\n@@\n  f(\n  ...\n- gone\n  )"
+    [ ("f(a, gone);", "f(a);"); ("f(gone);", "f();") ]
+
+(* A concrete context neighbour is kept exactly as written: the pattern says
+   to keep that comma. *)
+let test_strict_remove_concrete_neighbour_kept () =
+  check_rm ~language:"typescript"
+    ~pattern:"@@\nmatch: strict\n@@\n  f(a,\n- gone\n  )"
+    [ ("f(a, gone);", "f(a, );") ]
+
+(* A statement is not a separated element: its terminator is its own, and
+   the deletion stays line-oriented. *)
+let test_strict_remove_statement_line () =
+  check_rm ~language:"typescript"
+    ~pattern:"@@\nmatch: strict\n@@\n  {\n  ...\n- gone();\n  ...\n  }"
+    [
+      ( "function g() {\n  a();\n  gone();\n  c();\n}\n",
+        "function g() {\n  a();\n  c();\n}\n" );
+    ]
+
+(* ========================================================================= *)
 (* Splice: foreach rendered + spliced into a restructured template           *)
 (* ========================================================================= *)
 
@@ -2764,6 +2865,19 @@ let tests =
     test_case "splice: single element" `Quick test_splice_single_element;
     test_case "splice: no in-place double-apply" `Quick
       test_splice_no_inplace_double_apply;
+    test_case "strict remove: object property" `Quick
+      test_strict_remove_property;
+    test_case "strict remove: call argument" `Quick test_strict_remove_argument;
+    test_case "strict remove: kotlin trailing comma" `Quick
+      test_strict_remove_kotlin_trailing;
+    test_case "strict remove: separator already written" `Quick
+      test_strict_remove_separator_written;
+    test_case "strict remove: one-sided binder" `Quick
+      test_strict_remove_one_sided_binder;
+    test_case "strict remove: concrete neighbour kept" `Quick
+      test_strict_remove_concrete_neighbour_kept;
+    test_case "strict remove: statement stays line-oriented" `Quick
+      test_strict_remove_statement_line;
     test_case "join: identity conjunction [a,b,c] => a && b && c" `Quick
       test_join_identity_conjunction;
     test_case "join: precedence parens" `Quick test_join_precedence_parens;
