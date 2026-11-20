@@ -251,9 +251,10 @@ let lookahead_one_sided (d : Tree_diff.diff) : (side * Tree.src Tree.t) list =
 
     A one-sided before-run — a contiguous stretch of unmatched children with
     nothing unmatched on the after side — is a DELETION from the list; the run
-    (the element plus the adjacent separator tree-diff leaves unmatched) renders
-    as [-] lines between the context ellipses, so the separator is deleted
-    explicitly rather than by cleanup magic.
+    (the element plus the adjacent separator tree-diff leaves unmatched),
+    trimmed to its named extent, renders as [-] lines between the context
+    ellipses; the separator is taken by the matcher's strict separator
+    cleanup, so the rule is the same wherever in the list the element sat.
 
     The mirror one-sided case — a contiguous after-side run with nothing
     unmatched on the before side — is an INSERTION into the list. Two
@@ -426,11 +427,23 @@ let ellipsize_level (bn : Tree.src Tree.t) (an : Tree.src Tree.t)
         when contiguous bis
              && List.exists (fun i -> (fst ba.(i)).node.is_named) bis ->
           (* Deletion of a contiguous run — an element plus the adjacent
-             separator tree-diff leaves unmatched. The run stays concrete on
-             [-] lines (so the separator is deleted explicitly, no cleanup
-             magic), the after side is the same list with only the ellipses:
-             [{ ... - DestroyRef - , ... }]. Pure-separator runs are junk,
-             not a deletion — require a named child. *)
+             separator tree-diff leaves unmatched. Which separator that is
+             depends on where the element sat: the one after it, or the one
+             before it when it was last. Keeping it on a [-] line would bake
+             that position into the rule ([- X - ,] vs [- , - X]) and split
+             one deletion into two patterns, so the run is trimmed to its
+             named extent and the matcher takes the adjacent separator from
+             the [...] run beside the [-] line (strict separator cleanup):
+             [{ ... - DestroyRef ... }]. Separators *between* two deleted
+             elements stay. The after side is the same list with only the
+             ellipses. Pure-separator runs are junk, not a deletion —
+             require a named child. *)
+          let named i = (fst ba.(i)).node.is_named in
+          let rec trim_front = function
+            | i :: rest when not (named i) -> trim_front rest
+            | l -> l
+          in
+          let bis = List.rev (trim_front (List.rev (trim_front bis))) in
           Some
             ( mk bn bc.(0) b_heads (List.map (fun i -> bc.(i)) bis) bc.(nb - 1),
               mk an ac.(0) a_heads [] ac.(na - 1),
